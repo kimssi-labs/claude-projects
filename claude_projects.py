@@ -68,6 +68,18 @@ def powershell_exe(which=shutil.which) -> str:
 
 PS_EXE = powershell_exe()
 PS_ARGS = ["-NoExit", "-EncodedCommand"]       # shell stays after claude exits; UTF-16LE b64 dodges quoting
+CMD_EXE, CMD_ARGS = "cmd.exe", ["/k"]          # /k = keep the prompt after claude exits
+# Shell that hosts an opened session. AUTO keeps powershell_exe()'s "7 if installed, else 5.1".
+SHELL_AUTO, SHELL_PWSH, SHELL_WINPS, SHELL_CMD, SHELL_NONE = "auto", "pwsh", "powershell", "cmd", "none"
+SHELL_CHOICES = (
+    (SHELL_AUTO, "Auto", "PowerShell 7 when installed, else Windows PowerShell"),
+    (SHELL_PWSH, "PowerShell 7", "pwsh.exe"),
+    (SHELL_WINPS, "Windows PowerShell", "powershell.exe — always present"),
+    (SHELL_CMD, "Command Prompt", "cmd.exe /k"),
+    (SHELL_NONE, "No shell", "claude directly — the tab closes when it exits"),
+)
+SHELL_EXE = {SHELL_PWSH: "pwsh.exe", SHELL_WINPS: "powershell.exe", SHELL_CMD: CMD_EXE}
+LAUNCH_FILE = Path("config") / "manager-launch.json"     # how sessions are opened
 APP_TITLE = "Claude Projects"                  # console/tab title while the manager runs
 CONSOLE_TITLE_MAX = 1024
 
@@ -118,7 +130,8 @@ DOCK_FIELDS = ("Edge", "Size", "Dock")         # rows of the form, selected with
 DOCK_FIELD_KEYS = ("edge", "percent", "enabled")          # the cfg key each row edits
 DOCK_FIELD_EDGE, DOCK_FIELD_SIZE, DOCK_FIELD_DOCK = 0, 1, 2
 # Settings screen stages. Enter descends, Esc backs out; ↑↓ never means two things at once.
-STAGE_MONITOR, STAGE_FORM, STAGE_EDIT, STAGE_MCP = "monitor", "form", "edit", "mcp"
+STAGE_MONITOR, STAGE_FORM, STAGE_EDIT, STAGE_MCP, STAGE_SHELL = ("monitor", "form", "edit",
+                                                                "mcp", "shell")
 ABM_NEW, ABM_REMOVE, ABM_QUERYPOS, ABM_SETPOS = 0, 1, 2, 3
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
@@ -194,6 +207,7 @@ class Store:
         self.dock_file = home / DOCK_FILE
         self.dock_state_file = home / DOCK_STATE_FILE
         self.status_file = home / STATUS_FILE
+        self.launch_file = home / LAUNCH_FILE
 
     # -- helpers ---------------------------------------------------------------
     @staticmethod
@@ -315,6 +329,27 @@ class Store:
                           (Ansi.GREEN + mode if mode else Ansi.DIM + "off") + Ansi.FG_DEFAULT))
         return items
 
+    def load_launch_cfg(self) -> dict:
+        cfg = self._load_json(self.launch_file, {})
+        shell = cfg.get("shell")
+        return {"shell": shell if shell in SHELL_EXE or shell in (SHELL_AUTO, SHELL_NONE) else SHELL_AUTO}
+
+    def save_launch_cfg(self, cfg: dict) -> None:
+        self.launch_file.parent.mkdir(parents=True, exist_ok=True)
+        self.launch_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def shell_cmd(claude: list[str], shell: str = SHELL_AUTO) -> list[str]:
+        """Wrap the claude invocation in the chosen shell so the tab survives claude exiting.
+        PowerShell takes the command as UTF-16LE base64 (no quoting rules to get wrong); cmd
+        takes a quoted command line; SHELL_NONE runs claude with no shell at all."""
+        if shell == SHELL_NONE:
+            return list(claude)
+        if shell == SHELL_CMD:
+            return [CMD_EXE, *CMD_ARGS, subprocess.list2cmdline(claude)]
+        exe = SHELL_EXE.get(shell) or PS_EXE            # SHELL_AUTO -> whatever is installed
+        return [exe, *PS_ARGS, ps_encode(claude)]
+
     def installed_mcp_servers(self) -> list[str]:
         """Every MCP server this machine knows about: configured in ~/.claude.json, or seen by
         whatever publishes the probe cache."""
@@ -407,7 +442,8 @@ class Store:
 
     @staticmethod
     def launch_cmd(cwd: str, tab_title: str, sid: str | None = None, name: str | None = None,
-                   claude_args: tuple[str, ...] = (), window: str = SESSIONS_WINDOW) -> list[str]:
+                   claude_args: tuple[str, ...] = (), window: str = SESSIONS_WINDOW,
+                   shell: str = SHELL_AUTO) -> list[str]:
         """Command that starts claude in `cwd` (resuming `sid`, forcing the display `name`), hosted
         in a PowerShell shell. With Windows Terminal it becomes a titled tab of `window`; without
         it, the shell is started directly and the caller opens a plain console window instead."""
@@ -416,15 +452,16 @@ class Store:
             claude += [CLAUDE_RESUME_FLAG, sid]
         if name:
             claude += [CLAUDE_NAME_FLAG, name]
-        shell = [PS_EXE, *PS_ARGS, ps_encode(claude)]
+        hosted = Store.shell_cmd(claude, shell)
         if not Store.has_windows_terminal():
-            return shell
+            return hosted
         return [WT_EXE, WT_WINDOW_FLAG, window, WT_NEW_TAB, WT_TITLE_FLAG, tab_title, WT_DIR_FLAG, cwd,
-                *shell]
+                *hosted]
 
     def open_in_new_tab(self, cwd: str, tab_title: str, sid: str | None = None, name: str | None = None,
                         window: str = SESSIONS_WINDOW) -> None:
-        cmd = self.launch_cmd(cwd, tab_title, sid, name, self.claude_args, window)
+        cmd = self.launch_cmd(cwd, tab_title, sid, name, self.claude_args, window,
+                              self.load_launch_cfg()["shell"])
         extra = {} if self.has_windows_terminal() else {"cwd": cwd, "creationflags": CREATE_NEW_CONSOLE}
         subprocess.Popen(cmd, close_fds=True, **extra)
 
@@ -1088,9 +1125,10 @@ class Tui:
     HINT_PROJECTS = "↑↓ move  Enter/→ sessions  T open here  O open new window  F2 alias  Del delete  S settings  F5 refresh  Q quit"
     HINT_SESSIONS = "↑↓ move  Enter resume  T resume here  O resume new window  F2 rename  Del delete  S settings  ←/Esc back  Q quit"
     # Two stages, so no arrow key ever means two things at once.
-    HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  M status line  Esc cancel"
-    HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  Esc back to dock"
-    HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  M status line  Esc back"
+    HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  M status line  L launch  Esc cancel"
+    HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  L launch  Esc back to dock"
+    HINT_SHELL = "↑↓ shell  Space/Enter select  M status line  Esc back to dock"
+    HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  M status line  L launch  Esc back"
     # Per field, because each one uses the axis its own display suggests.
     HINT_DOCK_EDIT = ("←→ edge  Enter apply & save  Esc cancel edit",
                       "↑↓ size  0-9 type %  Enter apply & save  Esc cancel edit",
@@ -1354,15 +1392,31 @@ class Tui:
         cfg["device"] = chosen.device
         stage, field, before_edit, committed = STAGE_MONITOR, DOCK_FIELD_EDGE, None, False
         servers, server_idx = self.store.installed_mcp_servers(), 0
+        shell_idx = next((i for i, c in enumerate(SHELL_CHOICES)
+                          if c[0] == self.store.load_launch_cfg()["shell"]), 0)
         while True:
-            if stage == STAGE_MCP:
+            if stage == STAGE_SHELL:
+                self._render_shell(shell_idx)
+            elif stage == STAGE_MCP:
                 self._render_mcp(servers, server_idx)
             else:
                 self._render_settings(monitors, idx, stage, missing, field)
             k = Key.read()
+            if stage == STAGE_SHELL:
+                if k == Key.ESC:
+                    stage = STAGE_MONITOR
+                elif k in (Key.UP, Key.DOWN):
+                    shell_idx = (shell_idx + (1 if k == Key.DOWN else -1)) % len(SHELL_CHOICES)
+                elif k in (" ", Key.ENTER):
+                    self.store.save_launch_cfg({"shell": SHELL_CHOICES[shell_idx][0]})
+                elif k.lower() == "m":
+                    stage = STAGE_MCP
+                continue
             if stage == STAGE_MCP:
                 if k == Key.ESC:
                     stage = STAGE_MONITOR
+                elif k.lower() == "l":
+                    stage = STAGE_SHELL
                 elif k in (Key.UP, Key.DOWN) and servers:
                     server_idx = (server_idx + (1 if k == Key.DOWN else -1)) % len(servers)
                 elif k in (" ", Key.ENTER) and servers:
@@ -1372,6 +1426,9 @@ class Tui:
                 continue
             if k.lower() == "m" and stage != STAGE_EDIT:
                 stage = STAGE_MCP
+                continue
+            if k.lower() == "l" and stage != STAGE_EDIT:
+                stage = STAGE_SHELL
                 continue
             if k == Key.ESC:
                 if stage == STAGE_EDIT:                  # undo just this field
@@ -1469,6 +1526,33 @@ class Tui:
         else:
             selected.append(name)
         self.store.save_status_cfg({"mcp": [n for n in servers if n in selected]})
+
+    def _render_shell(self, idx: int) -> None:
+        """Launch section: the shell that hosts a session the manager opens. A choice whose
+        executable is missing is still selectable but says so, rather than failing at open time."""
+        cols, lines = shutil.get_terminal_size()
+        w = cols - 1
+        current = self.store.load_launch_cfg()["shell"]
+        buf = [Ansi.CLEAR,
+               Ansi.BOLD + fit(" Settings", 10) + Ansi.RESET
+               + Ansi.DIM + fit("· Launch", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
+               Ansi.EOL + "\n", Ansi.CYAN + "  Session shell" + Ansi.RESET + Ansi.EOL + "\n"]
+        for i, (key, label, note) in enumerate(SHELL_CHOICES):
+            exe = SHELL_EXE.get(key)
+            missing = exe is not None and shutil.which(exe) is None
+            mark = CHECKED if key == current else UNCHECKED
+            row = f"  {'▸' if i == idx else ' '} {mark} {fit(label, 20)}{note}"
+            if missing:
+                row += "  (not found)"
+            style = Ansi.INV if i == idx else (Ansi.YELLOW if missing else
+                                               "" if key == current else Ansi.DIM)
+            buf.append(style + fit(row, w) + Ansi.RESET + Ansi.EOL + "\n")
+        buf += [Ansi.EOL + "\n",
+                Ansi.DIM + fit(f"  Auto resolves to {PS_EXE} on this machine. The shell keeps the tab open"
+                               " after claude exits.", w) + Ansi.RESET + Ansi.EOL + "\n"]
+        buf.append(f"\x1b[{lines};1H" + Ansi.DIM + fit(self.HINT_SHELL, w) + Ansi.RESET + Ansi.EOL)
+        self.out.write("".join(buf))
+        self.out.flush()
 
     def _render_mcp(self, servers: list[str], idx: int) -> None:
         """Status-line section: which MCP servers the 🤖 segment reports on."""
@@ -1736,6 +1820,20 @@ def self_test() -> None:
         assert cmd[:3] == [WT_EXE, "-w", SESSIONS_WINDOW] and cmd[-4:-1] == [PS_EXE, *PS_ARGS]
         assert Store.launch_cmd(cwd, "데모", window=CURRENT_WINDOW)[:4] == [WT_EXE, "-w", "0", "nt"]
         assert Store.launch_cmd(cwd, "데모", window=NEW_WINDOW)[:4] == [WT_EXE, "-w", "new", "nt"]
+        # session shell:each choice wraps the same claude invocation its own way
+        argv = [CLAUDE_EXE, CLAUDE_RESUME_FLAG, sid]
+        assert Store.shell_cmd(argv, SHELL_NONE) == argv
+        assert Store.shell_cmd(argv, SHELL_CMD)[:2] == [CMD_EXE, "/k"]
+        assert sid in Store.shell_cmd(argv, SHELL_CMD)[2]
+        assert Store.shell_cmd(argv, SHELL_WINPS)[0] == "powershell.exe"
+        assert Store.shell_cmd(argv, SHELL_PWSH)[0] == "pwsh.exe"
+        assert Store.shell_cmd(argv, SHELL_AUTO)[0] == PS_EXE
+        assert store.load_launch_cfg()["shell"] == SHELL_AUTO          # default
+        store.save_launch_cfg({"shell": SHELL_CMD})
+        assert store.load_launch_cfg()["shell"] == SHELL_CMD
+        store.save_launch_cfg({"shell": "nonsense"})
+        assert store.load_launch_cfg()["shell"] == SHELL_AUTO          # unknown value ignored
+        assert Store.launch_cmd(cwd, "데모", shell=SHELL_CMD)[-2] == "/k"
         if Store.has_windows_terminal():                      # fallback path: pretend wt is missing
             original = Store.has_windows_terminal
             Store.has_windows_terminal = staticmethod(lambda: False)

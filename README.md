@@ -116,6 +116,21 @@ checked servers are healthy, ✘ when one is failing, and a dim `?` when a check
 verdict in the cache. Uncheck everything and the segment disappears. Choices live in
 `config/manager-status.json`.
 
+**Launch** (`L`) picks the shell that hosts an opened session:
+
+```
+  Session shell
+  ▸ [x] Auto                PowerShell 7 when installed, else Windows PowerShell
+    [ ] PowerShell 7        pwsh.exe
+    [ ] Windows PowerShell  powershell.exe — always present
+    [ ] Command Prompt      cmd.exe /k
+    [ ] No shell            claude directly — the tab closes when it exits
+```
+
+A missing executable is marked `(not found)` rather than failing when a session is opened. The shell
+is what keeps the tab open after `claude` exits — pick *No shell* if you would rather it closed.
+Saved in `config/manager-launch.json`.
+
 ## Options
 
 ```
