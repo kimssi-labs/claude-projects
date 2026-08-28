@@ -131,9 +131,10 @@ size and on/off; `Enter` applies, `Esc` backs out. Every monitor keeps its own e
 (a band that suits a portrait display is wrong on a wide one), so moving the cursor through the list
 shows what each display would go back to; the ones with saved settings are marked `(saved)`.
 
-Windows Terminal has a minimum window size that depends on its font, and a left or right band cannot
-go below it — the size row shows that floor (`20 %  →  307 px  ! terminal floor 580 px`) so a
-percentage that changes nothing is visible as such. A smaller font in the terminal profile lowers it.
+Windows Terminal has a minimum window size that depends on its font, and a band cannot go below it
+on either axis. The first time the terminal refuses, that floor is measured and becomes the lower
+bound of the size setting — the row reads `38 %  →  583 px  min 38 % (terminal floor 580 px)` and
+stepping down stops there. A smaller font in the terminal profile lowers the floor.
 
 **Status line** (`M` from the dock screen) lists the MCP servers this machine has — from
 `~/.claude.json` and from the probe cache — and lets you check the ones the 🤖 segment should report:

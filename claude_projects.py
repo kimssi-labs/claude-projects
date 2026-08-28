@@ -18,7 +18,7 @@ in a throwaway home; run it after any change.
 """
 from __future__ import annotations
 
-__version__ = "1.14.0"        # single source: the exe resource, pyproject and the tag are checked against it
+__version__ = "1.15.0"        # single source: the exe resource, pyproject and the tag are checked against it
 
 import argparse
 import base64
@@ -1020,6 +1020,15 @@ def edge_band(box: tuple[int, int, int, int], edge: str, thick: int) -> tuple[in
     return (right - thick, top, right, bottom)
 
 
+def percent_floor(floor_px: int, span_px: int) -> int:
+    """Smallest percentage worth offering: the one that still clears the terminal's own minimum.
+
+    Rounded UP, because the percentage below it produces a window the terminal silently widens."""
+    if floor_px <= 0 or span_px <= 0:
+        return DOCK_PCT_MIN
+    return max(DOCK_PCT_MIN, min(DOCK_PCT_MAX, -(-floor_px * 100 // span_px)))
+
+
 def floor_note(floor: int, asked: int) -> str:
     """"the terminal will not go below N px", shown only while the setting asks for less."""
     return f"   ! terminal floor {floor} px" if floor and asked and asked < floor else ""
@@ -1210,6 +1219,20 @@ class Dock:
     def target_rect(self) -> tuple[int, int, int, int] | None:
         m = self.monitor()
         return strip_rect(m.rect, self.cfg["edge"], self.cfg["percent"]) if m else None
+
+    def min_percent(self) -> int:
+        """Lower bound for the size setting on the current edge and monitor."""
+        mon = self.monitor()
+        span = band_thickness(mon.rect, self.cfg["edge"]) if mon else 0
+        return percent_floor(self.store.dock_floor(self.cfg["edge"]), span)
+
+    def clamp_percent(self) -> bool:
+        """Raise a saved size that is under the floor; True when it had to move (worth saying)."""
+        low = self.min_percent()
+        if self.cfg["percent"] < low:
+            self.cfg["percent"] = low
+            return True
+        return False
 
     def thickness_px(self) -> int:
         rc = self.target_rect()
@@ -1757,6 +1780,8 @@ class Tui:
         chosen, missing = pick_monitor(monitors, cfg["device"])
         idx = monitors.index(chosen)
         cfg["device"] = chosen.device
+        if self.dock.clamp_percent():          # a saved size under the floor would never be applied
+            self.status = Ansi.YELLOW + f"Size raised to {cfg['percent']} % — the terminal's minimum."
         stage, field, before_edit, committed = STAGE_MONITOR, DOCK_FIELD_EDGE, None, False
         servers, server_idx = self.store.installed_mcp_servers(), 0
         shell_idx = next((i for i, c in enumerate(SHELL_CHOICES)
@@ -1887,7 +1912,9 @@ class Tui:
         if field == DOCK_FIELD_EDGE:
             cfg["edge"] = DOCK_EDGES[(DOCK_EDGES.index(cfg["edge"]) + step) % len(DOCK_EDGES)]
         elif field == DOCK_FIELD_SIZE:
-            cfg["percent"] = max(DOCK_PCT_MIN, min(DOCK_PCT_MAX, cfg["percent"] + step))
+            # The floor the terminal proved it will not go below is the real minimum here: stepping
+            # under it changed the number and nothing else, which is what made this look broken.
+            cfg["percent"] = max(self.dock.min_percent(), min(DOCK_PCT_MAX, cfg["percent"] + step))
         else:
             cfg["enabled"] = step > 0           # ← off, → on: directional, never a blind flip
 
@@ -1949,6 +1976,7 @@ class Tui:
                    missing: str | None, field: int) -> list[tuple[str, str]]:
         cfg, mon = self.dock.cfg, monitors[idx]
         span = band_thickness(mon.rect, cfg["edge"])       # the chosen monitor's own extent
+        low = self.dock.min_percent()                     # what the terminal will accept
         if stage not in (STAGE_MONITOR, STAGE_FORM, STAGE_EDIT):
             return [(Ansi.DIM, f"{mon.device}   {cfg['edge']}   {cfg['percent']} %"
                                f"   {'on' if cfg['enabled'] else 'off'}"
@@ -1971,8 +1999,8 @@ class Tui:
         values = [
             ("  ".join(f"[{e}]" if e == cfg["edge"] else f" {e} " for e in DOCK_EDGES), ""),
             (f"{cfg['percent']} %   →  {self.dock.thickness_px()} px   (of {span} px on {mon.device})"
-             + floor_note(self.store.dock_floor(cfg["edge"]), self.dock.thickness_px()),
-             Ansi.YELLOW if 0 < self.dock.thickness_px() < self.store.dock_floor(cfg["edge"]) else ""),
+             + (f"   min {low} % (terminal floor {self.store.dock_floor(cfg['edge'])} px)"
+                if low > DOCK_PCT_MIN else ""), ""),
             ("on — this edge is reserved" if cfg["enabled"] else "off — no space reserved",
              Ansi.GREEN if cfg["enabled"] else Ansi.DIM),
         ]
@@ -2564,6 +2592,10 @@ def self_test() -> None:
         assert store.dock_floor("left") == 580 and store.dock_floor("right") == 580
         assert store.dock_floor("top") == 0                    # the other axis is untouched
         assert "580" in floor_note(580, 384) and floor_note(580, 768) == ""
+        # ...and it becomes the lower bound of the setting, rounded up, per axis
+        assert percent_floor(0, 1920) == DOCK_PCT_MIN and percent_floor(580, 0) == DOCK_PCT_MIN
+        assert percent_floor(580, 1920) == 31 and percent_floor(580, 1000) == 58
+        assert percent_floor(5000, 1920) == DOCK_PCT_MAX          # never past the top of the range
         assert store.known_dock_devices() >= {r"\\.\DISPLAY1", r"\\.\DISPLAY2"}   # plus any saved earlier in this test
         unknown = store.load_dock(r"\\.\DISPLAY9")                 # never docked there
         assert unknown["edge"] == "top" and unknown["percent"] == 15  # falls back to last used
