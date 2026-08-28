@@ -119,7 +119,9 @@ expanded and framed in colour; the other two collapse to a summary line. `Tab` a
 between them, `Esc` closes the screen.
 
 **Dock** places the manager as a reserved band on a monitor edge — pick the monitor, then the edge,
-size and on/off; `Enter` applies, `Esc` backs out.
+size and on/off; `Enter` applies, `Esc` backs out. Every monitor keeps its own edge, size and on/off
+(a band that suits a portrait display is wrong on a wide one), so moving the cursor through the list
+shows what each display would go back to; the ones with saved settings are marked `(saved)`.
 
 **Status line** (`M` from the dock screen) lists the MCP servers this machine has — from
 `~/.claude.json` and from the probe cache — and lets you check the ones the 🤖 segment should report:
