@@ -80,6 +80,20 @@ SHELL_CHOICES = (
 )
 SHELL_EXE = {SHELL_PWSH: "pwsh.exe", SHELL_WINPS: "powershell.exe", SHELL_CMD: CMD_EXE}
 LAUNCH_FILE = Path("config") / "manager-launch.json"     # how sessions are opened
+# Permission mode a session starts in. Stored by key; the flags are what claude is given.
+PERM_DEFAULT, PERM_BYPASS, PERM_ACCEPT, PERM_PLAN, PERM_AUTO = ("default", "bypass", "accept",
+                                                               "plan", "auto")
+PERMISSION_FLAG = "--permission-mode"
+PERMISSION_CHOICES = (
+    (PERM_DEFAULT, "Ask (default)", "claude decides — the normal prompts", ()),
+    (PERM_BYPASS, "Bypass permissions", "--dangerously-skip-permissions — no prompts at all",
+     ("--dangerously-skip-permissions",)),
+    (PERM_ACCEPT, "Accept edits", "file edits go through, other tools still ask",
+     (PERMISSION_FLAG, "acceptEdits")),
+    (PERM_PLAN, "Plan", "plan first, change nothing until you approve", (PERMISSION_FLAG, "plan")),
+    (PERM_AUTO, "Auto", "claude picks per tool call", (PERMISSION_FLAG, "auto")),
+)
+PERMISSION_ARGS = {key: args for key, _, _, args in PERMISSION_CHOICES}
 APP_TITLE = "Claude Projects"                  # console/tab title while the manager runs
 CONSOLE_TITLE_MAX = 1024
 
@@ -140,9 +154,9 @@ DOCK_FIELD_KEYS = ("edge", "percent", "enabled")          # the cfg key each row
 DOCK_FIELD_EDGE, DOCK_FIELD_SIZE, DOCK_FIELD_DOCK = 0, 1, 2
 # Settings screen stages. Enter descends, Esc backs out; ↑↓ never means two things at once.
 # Tab order of the settings group boxes; the dock box is always entered at its monitor list.
-STAGE_MONITOR, STAGE_FORM, STAGE_EDIT, STAGE_MCP, STAGE_SHELL = ("monitor", "form", "edit",
-                                                                "mcp", "shell")
-SETTINGS_SECTIONS = (STAGE_MONITOR, STAGE_MCP, STAGE_SHELL)
+STAGE_MONITOR, STAGE_FORM, STAGE_EDIT, STAGE_MCP, STAGE_SHELL, STAGE_PERMS = (
+    "monitor", "form", "edit", "mcp", "shell", "perms")
+SETTINGS_SECTIONS = (STAGE_MONITOR, STAGE_MCP, STAGE_SHELL, STAGE_PERMS)
 ABM_NEW, ABM_REMOVE, ABM_QUERYPOS, ABM_SETPOS = 0, 1, 2, 3
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
@@ -351,8 +365,15 @@ class Store:
 
     def load_launch_cfg(self) -> dict:
         cfg = self._load_json(self.launch_file, {})
-        shell = cfg.get("shell")
-        return {"shell": shell if shell in SHELL_EXE or shell in (SHELL_AUTO, SHELL_NONE) else SHELL_AUTO}
+        shell, perm = cfg.get("shell"), cfg.get("permission")
+        return {"shell": shell if shell in SHELL_EXE or shell in (SHELL_AUTO, SHELL_NONE) else SHELL_AUTO,
+                "permission": perm if perm in PERMISSION_ARGS else PERM_DEFAULT}
+
+    def permission_args(self) -> tuple[str, ...]:
+        """Flags for the configured permission mode, skipped when the caller already passed them —
+        `claudex --p` forwards --dangerously-skip-permissions itself."""
+        args = PERMISSION_ARGS[self.load_launch_cfg()["permission"]]
+        return () if any(a in self.claude_args for a in args) else args
 
     def save_launch_cfg(self, cfg: dict) -> None:
         self.launch_file.parent.mkdir(parents=True, exist_ok=True)
@@ -481,7 +502,8 @@ class Store:
 
     def open_in_new_tab(self, cwd: str, tab_title: str, sid: str | None = None, name: str | None = None,
                         window: str = SESSIONS_WINDOW) -> None:
-        cmd = self.launch_cmd(cwd, tab_title, sid, name, self.claude_args, window,
+        cmd = self.launch_cmd(cwd, tab_title, sid, name,
+                              self.claude_args + self.permission_args(), window,
                               self.load_launch_cfg()["shell"])
         extra = {} if self.has_windows_terminal() else {"cwd": cwd, "creationflags": CREATE_NEW_CONSOLE}
         subprocess.Popen(cmd, close_fds=True, **extra)
@@ -1169,6 +1191,7 @@ class Tui:
     HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  Tab next box  Esc cancel"
     HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  Tab next box  Esc close"
     HINT_SHELL = "↑↓ shell  Space/Enter select  Tab next box  Esc close"
+    HINT_PERMS = "↑↓ mode  Space/Enter select  Tab next box  Esc close"
     HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  Tab next box  Esc back"
     # Per field, because each one uses the axis its own display suggests.
     HINT_DOCK_EDIT = ("←→ edge  Enter apply & save  Esc cancel edit",
@@ -1470,14 +1493,26 @@ class Tui:
         servers, server_idx = self.store.installed_mcp_servers(), 0
         shell_idx = next((i for i, c in enumerate(SHELL_CHOICES)
                           if c[0] == self.store.load_launch_cfg()["shell"]), 0)
+        perm_idx = next((i for i, c in enumerate(PERMISSION_CHOICES)
+                         if c[0] == self.store.load_launch_cfg()["permission"]), 0)
         while True:
             self._render_settings(monitors, idx, stage, missing, field,
-                                  servers, server_idx, shell_idx)
+                                  servers, server_idx, shell_idx, perm_idx)
             k = Key.read()
             # Tab is the ONLY way between boxes. While editing a value it would abandon the
             # edit, so it is ignored there.
             if k in (Key.TAB, Key.BACKTAB) and stage != STAGE_EDIT:
                 stage = next_section(stage, 1 if k == Key.TAB else -1)
+                continue
+            if stage == STAGE_PERMS:
+                if k == Key.ESC:
+                    stage = STAGE_MONITOR
+                elif k in (Key.UP, Key.DOWN):
+                    perm_idx = (perm_idx + (1 if k == Key.DOWN else -1)) % len(PERMISSION_CHOICES)
+                elif k in (" ", Key.ENTER):
+                    cfg_launch = self.store.load_launch_cfg()
+                    cfg_launch["permission"] = PERMISSION_CHOICES[perm_idx][0]
+                    self.store.save_launch_cfg(cfg_launch)
                 continue
             if stage == STAGE_SHELL:
                 if k == Key.ESC:
@@ -1685,6 +1720,25 @@ class Tui:
         rows.append((Ansi.DIM, "  unchecked servers are left out; none checked hides the segment"))
         return rows
 
+    def _perm_rows(self, idx: int, focused: bool) -> list[tuple[str, str]]:
+        """Permission mode for every session opened from here. A mode forwarded on the command line
+        (`claudex --p`) wins, and the collapsed line says so rather than showing a setting that is
+        being overridden."""
+        current = self.store.load_launch_cfg()["permission"]
+        forced = self.store.claude_args and not self.store.permission_args()
+        if not focused:
+            label = next(c[1] for c in PERMISSION_CHOICES if c[0] == current)
+            return [(Ansi.DIM, f"Session starts in  {label}"
+                     + ("   (overridden on the command line)" if forced else ""))]
+        rows = []
+        for i, (key, name, note, _) in enumerate(PERMISSION_CHOICES):
+            rows.append((Ansi.INV if i == idx else ("" if key == current else Ansi.DIM),
+                         f"  {'▸' if i == idx else ' '} {CHECKED if key == current else UNCHECKED} "
+                         f"{fit(name, 20)}{note}"))
+        if forced:
+            rows.append((Ansi.YELLOW, "  the command line already set a mode; it wins for this run"))
+        return rows
+
     def _shell_rows(self, idx: int, focused: bool) -> list[tuple[str, str]]:
         current = self.store.load_launch_cfg()["shell"]
         label = next(c[1] for c in SHELL_CHOICES if c[0] == current)
@@ -1704,7 +1758,7 @@ class Tui:
     def _render_settings(self, monitors: list[Monitor], idx: int, stage: str,
                          missing: str | None = None, field: int = 0,
                          servers: list[str] | None = None, server_idx: int = 0,
-                         shell_idx: int = 0) -> None:
+                         shell_idx: int = 0, perm_idx: int = 0) -> None:
         """All three sections at once, each in its own group box: the focused one is expanded and
         cyan-framed, the others collapse to a single dim summary so the screen stays one page."""
         servers = servers if servers is not None else []
@@ -1720,9 +1774,12 @@ class Tui:
                          w, stage == STAGE_MCP)
         buf += self._box("Launch", self._shell_rows(shell_idx, stage == STAGE_SHELL),
                          w, stage == STAGE_SHELL)
+        buf += self._box("Permissions", self._perm_rows(perm_idx, stage == STAGE_PERMS),
+                         w, stage == STAGE_PERMS)
         hint = (self.HINT_DOCK_EDIT[field] if stage == STAGE_EDIT
                 else {STAGE_MONITOR: self.HINT_DOCK_MONITOR, STAGE_FORM: self.HINT_DOCK_FORM,
-                      STAGE_MCP: self.HINT_MCP, STAGE_SHELL: self.HINT_SHELL}[stage])
+                      STAGE_MCP: self.HINT_MCP, STAGE_SHELL: self.HINT_SHELL,
+                      STAGE_PERMS: self.HINT_PERMS}[stage])
         buf.append(f"\x1b[{lines};1H" + Ansi.DIM + fit(hint, w) + Ansi.RESET + Ansi.EOL)
         self.out.write("".join(buf))
         self.out.flush()
@@ -1982,6 +2039,20 @@ def self_test() -> None:
         store.save_launch_cfg({"shell": "nonsense"})
         assert store.load_launch_cfg()["shell"] == SHELL_AUTO          # unknown value ignored
         assert Store.launch_cmd(cwd, "데모", shell=SHELL_CMD)[-2] == "/k"
+        # permission mode: stored by key, turned into flags, never doubled up
+        assert store.load_launch_cfg()["permission"] == PERM_DEFAULT
+        assert store.permission_args() == ()
+        store.save_launch_cfg({"shell": SHELL_AUTO, "permission": PERM_BYPASS})
+        assert store.permission_args() == ("--dangerously-skip-permissions",)
+        assert "--dangerously-skip-permissions" in ps_decode(
+            Store.launch_cmd(cwd, "데모", claude_args=store.permission_args())[-1])
+        store.save_launch_cfg({"permission": PERM_PLAN})
+        assert store.permission_args() == (PERMISSION_FLAG, "plan")
+        forwarded = Store(home, ("--dangerously-skip-permissions",))
+        forwarded.save_launch_cfg({"permission": PERM_BYPASS})
+        assert forwarded.permission_args() == ()          # already on the command line
+        store.save_launch_cfg({"permission": "nonsense"})
+        assert store.load_launch_cfg()["permission"] == PERM_DEFAULT
         if Store.has_windows_terminal():                      # fallback path: pretend wt is missing
             original = Store.has_windows_terminal
             Store.has_windows_terminal = staticmethod(lambda: False)
@@ -2019,8 +2090,9 @@ def self_test() -> None:
         assert Key.decode(0x09, "\t", state=SHIFT_PRESSED) == [Key.BACKTAB]
         assert Key.feed(0x09, "\t", state=SHIFT_PRESSED) == [Key.BACKTAB]
         assert next_section(STAGE_MONITOR, 1) == STAGE_MCP
-        assert next_section(STAGE_SHELL, 1) == STAGE_MONITOR
-        assert next_section(STAGE_MONITOR, -1) == STAGE_SHELL
+        assert next_section(STAGE_SHELL, 1) == STAGE_PERMS
+        assert next_section(STAGE_PERMS, 1) == STAGE_MONITOR      # wraps
+        assert next_section(STAGE_MONITOR, -1) == STAGE_PERMS
         assert next_section(STAGE_EDIT, 1) == STAGE_MCP        # any dock stage = the dock box
         # IME composing: act on the scan code at once, then swallow the commit that follows
         Key._acted = 0

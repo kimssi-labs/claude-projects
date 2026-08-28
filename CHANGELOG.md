@@ -3,6 +3,16 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.8.0
+
+- **Settings · Permissions**: the mode every session opened from the manager starts in — Ask
+  (default), Bypass permissions, Accept edits, Plan, or Auto. Launching the exe directly used to
+  mean plain `claude`; the mode is now a setting rather than something only the `claude --p` wrapper
+  could pass.
+- A mode already given on the command line (`claudex --p`) still wins, and the box says so instead
+  of showing a setting that is being overridden.
+- Saved in `config/manager-launch.json` next to the shell choice.
+
 ## v1.7.0
 
 - The detail box now reports everything the manager knows about the highlighted row, one labelled
