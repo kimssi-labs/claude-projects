@@ -1,3 +1,5 @@
+<img src="assets/icon.png" width="96" align="right" alt="">
+
 # Claude Projects
 
 A keyboard-driven manager for the projects and sessions that [Claude Code](https://claude.com/claude-code)
