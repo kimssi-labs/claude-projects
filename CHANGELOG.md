@@ -3,6 +3,16 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.13.0
+
+- **Narrow windows no longer tear the frame.** List rows had minimum column widths that made them
+  wider than their box below about 45 columns, so every row wrapped and overlapped the borders.
+  Columns are dropped as the window narrows — memory flag, then date, then count, then the path —
+  and the name keeps what is left; a dropped column now renders as nothing instead of a stray `…`.
+- Box titles, framed rows and detail labels are clamped to the width they actually have, and the
+  settings screen never draws more rows than the window is tall.
+- Checked across 165 size combinations from 200×60 down to 12×6: nothing exceeds the frame.
+
 ## v1.12.0
 
 - Everything the manager remembers now lives in one file, `config/manager.json`, with a section per
