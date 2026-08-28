@@ -99,7 +99,7 @@ ponytail mode flag. On a machine without them the line is not drawn at all.
 ## Settings (`S`)
 
 One screen with a group box per section — **Dock**, **Status line**, **Launch**. The focused box is
-expanded and framed in colour; the other two collapse to a summary line. `D`, `M` and `L` move
+expanded and framed in colour; the other two collapse to a summary line. `Tab` and `Shift+Tab` move
 between them, `Esc` closes the screen.
 
 **Dock** places the manager as a reserved band on a monitor edge — pick the monitor, then the edge,

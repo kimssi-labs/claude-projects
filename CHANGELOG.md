@@ -3,6 +3,14 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.4.0
+
+- `Tab` / `Shift+Tab` move between the settings group boxes; the `D` / `M` / `L` letter shortcuts are
+  gone, so no key means two things depending on where you are.
+- The project and session screens are drawn as group boxes too — the list in one, the detail viewer
+  in the other — so every screen in the app now reads the same way.
+- The box title carries where you are (project count and path, or the project's folder).
+
 ## v1.3.0
 
 - Settings is one screen: **Dock**, **Status line** and **Launch** are each drawn in their own group
