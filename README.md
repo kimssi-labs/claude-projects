@@ -151,6 +151,20 @@ A missing executable is marked `(not found)` rather than failing when a session 
 is what keeps the tab open after `claude` exits — pick *No shell* if you would rather it closed.
 Saved in `config/manager-launch.json`.
 
+**Permissions** picks the mode a session starts in:
+
+```
+  Permissions
+    [x] Ask (default)       claude decides — the normal prompts
+  ▸ [ ] Bypass permissions  --dangerously-skip-permissions — no prompts at all
+    [ ] Accept edits        file edits go through, other tools still ask
+    [ ] Plan                plan first, change nothing until you approve
+    [ ] Auto                claude picks per tool call
+```
+
+Whatever is passed on the command line (`--claude-arg=`, or the `claude --p` wrapper) wins over this
+setting, and the box says so when that happens.
+
 ## Options
 
 ```
