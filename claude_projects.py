@@ -96,7 +96,9 @@ OK_MARK, BAD_MARK = "✔", "✘"
 MARK_PAD = " "                                 # ✔/✘ render narrower than the emoji icons: pad to line up
 # Names shown beside each status icon (the statusline had to omit these to fit 80 columns).
 RATE_LABELS = {"five_hour": "5h", "seven_day": "7d"}
-MCP_LABEL, OUTLOOK_LABEL, PONYTAIL_LABEL = "wiki MCP", "Outlook", "ponytail"
+MCP_LABEL, OUTLOOK_LABEL, PONYTAIL_LABEL = "MCP", "Outlook", "ponytail"
+UNKNOWN_MARK = "?"                             # selected server that the probe cache says nothing about
+CHECKED, UNCHECKED = "[x]", "[ ]"
 RULE_CHAR = "─"
 # Opening a session is `wt` + a shell + claude starting up: Popen returns long before any of that
 # is on screen, so the footer spins until the window really exists.
@@ -108,6 +110,7 @@ OPEN_TIMEOUT_S = 12.0
 # does, so every other window's maximize/Snap stops at its border.
 DOCK_FILE = Path("config") / "manager-dock.json"
 DOCK_STATE_FILE = Path("config") / "manager-dock-state.json"   # runtime only: the HWND we docked
+STATUS_FILE = Path("config") / "manager-status.json"           # which MCP servers the status line reports
 DOCK_EDGES = ("left", "top", "right", "bottom")   # index == the ABE_* value Windows expects
 DOCK_DEFAULT_EDGE = "top"
 DOCK_PCT_MIN, DOCK_PCT_MAX, DOCK_PCT_DEFAULT = 5, 60, 20
@@ -115,7 +118,7 @@ DOCK_FIELDS = ("Edge", "Size", "Dock")         # rows of the form, selected with
 DOCK_FIELD_KEYS = ("edge", "percent", "enabled")          # the cfg key each row edits
 DOCK_FIELD_EDGE, DOCK_FIELD_SIZE, DOCK_FIELD_DOCK = 0, 1, 2
 # Settings screen stages. Enter descends, Esc backs out; ↑↓ never means two things at once.
-STAGE_MONITOR, STAGE_FORM, STAGE_EDIT = "monitor", "form", "edit"
+STAGE_MONITOR, STAGE_FORM, STAGE_EDIT, STAGE_MCP = "monitor", "form", "edit", "mcp"
 ABM_NEW, ABM_REMOVE, ABM_QUERYPOS, ABM_SETPOS = 0, 1, 2, 3
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
@@ -190,6 +193,7 @@ class Store:
         self.aliases_file = home / ALIASES_FILE
         self.dock_file = home / DOCK_FILE
         self.dock_state_file = home / DOCK_STATE_FILE
+        self.status_file = home / STATUS_FILE
 
     # -- helpers ---------------------------------------------------------------
     @staticmethod
@@ -284,7 +288,19 @@ class Store:
             if at:
                 text += Ansi.DIM + " ↻ " + time.strftime(fmt, time.localtime(at)) + Ansi.FG_DEFAULT
             items.append((icon, label, text))
-        for icon, label, cache in (("🤖", MCP_LABEL, MCP_CACHE), ("📧", OUTLOOK_LABEL, OUTLOOK_CACHE)):
+        probed = (self._load_json(self.home / MCP_CACHE, {}) or {}).get("servers") or {}
+        chosen = self.load_status_cfg()["mcp"]
+        shown = {n: probed.get(n) for n in chosen} if chosen is not None else dict(probed)
+        if shown:                                   # empty selection (or nothing installed) hides it
+            if any(v is not None and not v.get("ok") for v in shown.values()):
+                mark = Ansi.RED + BAD_MARK         # a known failure outranks a missing verdict
+            elif any(v is None for v in shown.values()):
+                mark = Ansi.DIM + UNKNOWN_MARK     # selected, but the probe cache says nothing
+            else:
+                mark = Ansi.GREEN + OK_MARK
+            label = ", ".join(shown) if chosen is not None else MCP_LABEL
+            items.append(("🤖", label, mark + Ansi.FG_DEFAULT + MARK_PAD))
+        for icon, label, cache in (("📧", OUTLOOK_LABEL, OUTLOOK_CACHE),):
             servers = (self._load_json(self.home / cache, {}) or {}).get("servers") or {}
             if not servers:
                 continue
@@ -298,6 +314,24 @@ class Store:
             items.append(("🧔", PONYTAIL_LABEL,
                           (Ansi.GREEN + mode if mode else Ansi.DIM + "off") + Ansi.FG_DEFAULT))
         return items
+
+    def installed_mcp_servers(self) -> list[str]:
+        """Every MCP server this machine knows about: configured in ~/.claude.json, or seen by
+        whatever publishes the probe cache."""
+        names = set((self._load_json(self.claude_json, {}).get("mcpServers") or {}))
+        names |= set(((self._load_json(self.home / MCP_CACHE, {}) or {}).get("servers") or {}))
+        return sorted(names)
+
+    def load_status_cfg(self) -> dict:
+        """`mcp`: list of server names to report, or None for "every server in the cache" —
+        the default on a machine that has never opened the settings screen."""
+        cfg = self._load_json(self.home / STATUS_FILE, {})
+        chosen = cfg.get("mcp")
+        return {"mcp": [str(n) for n in chosen] if isinstance(chosen, list) else None}
+
+    def save_status_cfg(self, cfg: dict) -> None:
+        self.status_file.parent.mkdir(parents=True, exist_ok=True)
+        self.status_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load_aliases(self) -> dict[str, str]:
         return self._load_json(self.aliases_file, {})
@@ -1054,8 +1088,9 @@ class Tui:
     HINT_PROJECTS = "↑↓ move  Enter/→ sessions  T open here  O open new window  F2 alias  Del delete  S settings  F5 refresh  Q quit"
     HINT_SESSIONS = "↑↓ move  Enter resume  T resume here  O resume new window  F2 rename  Del delete  S settings  ←/Esc back  Q quit"
     # Two stages, so no arrow key ever means two things at once.
-    HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  Esc cancel"
-    HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  Esc back"
+    HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  M status line  Esc cancel"
+    HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  Esc back to dock"
+    HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  M status line  Esc back"
     # Per field, because each one uses the axis its own display suggests.
     HINT_DOCK_EDIT = ("←→ edge  Enter apply & save  Esc cancel edit",
                       "↑↓ size  0-9 type %  Enter apply & save  Esc cancel edit",
@@ -1318,9 +1353,26 @@ class Tui:
         idx = monitors.index(chosen)
         cfg["device"] = chosen.device
         stage, field, before_edit, committed = STAGE_MONITOR, DOCK_FIELD_EDGE, None, False
+        servers, server_idx = self.store.installed_mcp_servers(), 0
         while True:
-            self._render_settings(monitors, idx, stage, missing, field)
+            if stage == STAGE_MCP:
+                self._render_mcp(servers, server_idx)
+            else:
+                self._render_settings(monitors, idx, stage, missing, field)
             k = Key.read()
+            if stage == STAGE_MCP:
+                if k == Key.ESC:
+                    stage = STAGE_MONITOR
+                elif k in (Key.UP, Key.DOWN) and servers:
+                    server_idx = (server_idx + (1 if k == Key.DOWN else -1)) % len(servers)
+                elif k in (" ", Key.ENTER) and servers:
+                    self._toggle_mcp(servers, servers[server_idx])
+                elif k.lower() == "a" and servers:
+                    self.store.save_status_cfg({"mcp": None})    # None = report every server
+                continue
+            if k.lower() == "m" and stage != STAGE_EDIT:
+                stage = STAGE_MCP
+                continue
             if k == Key.ESC:
                 if stage == STAGE_EDIT:                  # undo just this field
                     cfg[DOCK_FIELD_KEYS[field]] = before_edit
@@ -1405,6 +1457,48 @@ class Tui:
             cfg["percent"] = max(DOCK_PCT_MIN, min(DOCK_PCT_MAX, cfg["percent"] + step))
         else:
             cfg["enabled"] = step > 0           # ← off, → on: directional, never a blind flip
+
+    def _toggle_mcp(self, servers: list[str], name: str) -> None:
+        """Show or hide one server. The stored form is an explicit list, so a server installed
+        later stays hidden until it is picked — the default "everything" (None) is only the state
+        of a machine that has never chosen, and `A` puts it back."""
+        chosen = self.store.load_status_cfg()["mcp"]
+        selected = list(servers) if chosen is None else [n for n in chosen if n in servers or True]
+        if name in selected:
+            selected.remove(name)
+        else:
+            selected.append(name)
+        self.store.save_status_cfg({"mcp": [n for n in servers if n in selected]})
+
+    def _render_mcp(self, servers: list[str], idx: int) -> None:
+        """Status-line section: which MCP servers the 🤖 segment reports on."""
+        cols, lines = shutil.get_terminal_size()
+        w = cols - 1
+        chosen = self.store.load_status_cfg()["mcp"]
+        probed = (Store._load_json(self.store.home / MCP_CACHE, {}) or {}).get("servers") or {}
+        buf = [Ansi.CLEAR,
+               Ansi.BOLD + fit(" Settings", 10) + Ansi.RESET
+               + Ansi.DIM + fit("· Status line", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
+               Ansi.EOL + "\n", Ansi.CYAN + "  MCP servers" + Ansi.RESET + Ansi.EOL + "\n"]
+        if not servers:
+            buf.append(Ansi.DIM + fit("    none installed on this machine", w) + Ansi.RESET + Ansi.EOL + "\n")
+        for i, name in enumerate(servers):
+            on = chosen is None or name in chosen
+            probe = probed.get(name)
+            verdict = ("" if probe is None else
+                       f"  {OK_MARK}" if probe.get("ok") else f"  {BAD_MARK}")
+            row = f"  {'▸' if i == idx else ' '} {CHECKED if on else UNCHECKED} {name}{verdict}"
+            style = Ansi.INV if i == idx else ("" if on else Ansi.DIM)
+            buf.append(style + fit(row, w) + Ansi.RESET + Ansi.EOL + "\n")
+        buf += [Ansi.EOL + "\n",
+                Ansi.DIM + fit("  Unchecked servers are left out of the status line; with none checked"
+                               " the 🤖 segment is hidden.", w) + Ansi.RESET + Ansi.EOL + "\n"]
+        if chosen is None:
+            buf.append(Ansi.DIM + fit("  Currently reporting every server found (the default).", w)
+                       + Ansi.RESET + Ansi.EOL + "\n")
+        buf.append(f"\x1b[{lines};1H" + Ansi.DIM + fit(self.HINT_MCP, w) + Ansi.RESET + Ansi.EOL)
+        self.out.write("".join(buf))
+        self.out.flush()
 
     def _render_settings(self, monitors: list[Monitor], idx: int, stage: str,
                          missing: str | None = None, field: int = 0) -> None:
@@ -1691,7 +1785,24 @@ def self_test() -> None:
         (home / PONYTAIL_FLAG).write_text("full\n", encoding="utf-8")
         plain = re.sub(chr(27) + r"\[[0-9;]*m", "", Tui(store).status_line(140))   # wide: names shown
         assert "⏳ 5h " + RATE_BAR_ON * 7 + RATE_BAR_OFF * 3 + " 78%" in plain, plain
-        assert "📅 7d 57%" in plain and "🤖 wiki MCP ✔" in plain, plain
+        assert "📅 7d 57%" in plain and "🤖 MCP ✔" in plain, plain      # no selection = every server
+        # picking servers: the label names them, an unknown one reads "?", and an empty pick hides it
+        (home / MCP_CACHE).write_text(json.dumps(
+            {"servers": {"wiki": {"ok": True}, "chrome": {"ok": False}}}), encoding="utf-8")
+        assert store.installed_mcp_servers() == ["chrome", "wiki"]
+        store.save_status_cfg({"mcp": ["wiki"]})
+        line = lambda: re.sub(chr(27) + r"\[[0-9;]*m", "", Tui(store).status_line(140))
+        assert "🤖 wiki " + OK_MARK in line(), line()
+        store.save_status_cfg({"mcp": ["wiki", "chrome"]})
+        assert "🤖 wiki, chrome " + BAD_MARK in line(), line()
+        store.save_status_cfg({"mcp": ["wiki", "ghost"]})
+        assert "🤖 wiki, ghost " + UNKNOWN_MARK in line(), line()
+        store.save_status_cfg({"mcp": ["chrome", "ghost"]})      # a real failure outranks the unknown
+        assert "🤖 chrome, ghost " + BAD_MARK in line(), line()
+        store.save_status_cfg({"mcp": []})
+        assert "🤖" not in line(), line()
+        store.save_status_cfg({"mcp": None})
+        assert store.load_status_cfg()["mcp"] is None and "🤖 MCP" in line()
         assert "📧 Outlook ✘" in plain and "🧔 ponytail full" in plain, plain
         for width in (120, 80, 40, 12):        # never wider than the terminal, values before names
             line = Tui(store).status_line(width)
