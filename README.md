@@ -80,6 +80,12 @@ opens — `claude --dangerously-skip-permissions --p` opens sessions in that mod
 | `←` `Esc` | — | back to projects |
 | `F5` / `Q` | refresh / quit | refresh / quit |
 
+The box under the list describes the highlighted row in full — for a session: whether its title is a
+name or its first prompt, the id, when it started and was last written, its size, whether it is
+running, its project and its transcript file; for a project: the real folder behind an alias, the
+path, how many sessions (and how many running, and their total size), last use, whether deleting it
+would take a `memory/` folder with it, and the encoded directory name.
+
 Deletions ask first (`Enter` = yes, `Esc` = no) and refuse anything still running. Renaming a session
 writes the same `custom-title.json` Claude Code's own `/rename` writes, so the new name also shows up
 in `/resume`.

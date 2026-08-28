@@ -3,6 +3,17 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.7.0
+
+- The detail box now reports everything the manager knows about the highlighted row, one labelled
+  field per fact: a project shows its alias and real folder, path (called out in red when the folder
+  is gone), session count with how many are running and their total size, last use, whether a
+  `memory/` folder would be deleted with it, and its encoded directory; a session adds whether the
+  title is a name or its first prompt, the prompt itself when a name replaced it, when it started,
+  its state, and which project it belongs to.
+- `--uninstall` no longer prints "removed" when the folder could not be deleted — a manager window
+  still running from it now says so.
+
 ## v1.6.0
 
 - `--install` adds a Start-menu entry (copying the exe to `%LOCALAPPDATA%\Programs\ClaudeProjects`),
