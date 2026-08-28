@@ -18,7 +18,7 @@ in a throwaway home; run it after any change.
 """
 from __future__ import annotations
 
-__version__ = "1.12.0"        # single source: the exe resource, pyproject and the tag are checked against it
+__version__ = "1.13.0"        # single source: the exe resource, pyproject and the tag are checked against it
 
 import argparse
 import base64
@@ -132,6 +132,8 @@ ICON_NAME = "icon.ico"
 LIST_BOX_CHROME = 3                            # top border + column header + bottom border
 DETAIL_BOX_CHROME = 2                          # top + bottom border
 BOX_SIDE_COLS = 4                              # '│ ' + text + ' │'
+BOX_TITLE_CHROME = 6                           # '┌─ ' + title + ' ─┐'
+SETTINGS_TITLE_W = 10                          # the ' Settings' cell on the header row
 DETAIL_LABEL_W = 11                            # label column of the detail viewer (incl. leading space)
 # Status line (moved off the Claude statusline 2026-08-27): same sources, same glyphs.
 RATE_LIMITS_CACHE = Path("cache") / "rate-limits.json"
@@ -758,7 +760,12 @@ def cell_width(s: str) -> int:
 
 @lru_cache(maxsize=8192)
 def fit(s: str, width: int, align_right: bool = False) -> str:
-    """Truncate to `width` cells (with an ellipsis) and pad to exactly `width` cells."""
+    """Truncate to `width` cells (with an ellipsis) and pad to exactly `width` cells.
+
+    A width of zero means "this column was dropped" — it must produce NOTHING. Returning the bare
+    ellipsis there added a cell per dropped column, which is what pushed narrow rows past their box."""
+    if width <= 0:
+        return ""
     if cell_width(s) > width:
         out, w = "", 0
         for c in s:
@@ -796,6 +803,24 @@ def tail_within(s: str, width: int) -> tuple[str, bool]:
             break
         out, w = c + out, w + cw
     return out, True
+
+
+# List columns in the order they are DROPPED as the window narrows: (label, width, right-aligned).
+PROJECT_COLUMNS = (("Sess", 5, True), ("Last used", 12, True), ("Mem", 4, True))
+SESSION_COLUMNS = (("Id", 9, False), ("Modified", 12, True), ("Size", 7, True))
+NAME_MIN_W, NAME_MAX_W, TITLE_MIN_W = 10, 28, 10
+MARK_W = 2                                     # the live mark plus the space after it
+PATH_MIN_W = 12                                # a narrower path column shows nothing useful
+
+
+def columns_that_fit(w: int, columns: tuple, main_min: int) -> list[int]:
+    """Width for each optional column, 0 for the ones that had to go. Dropping is right to left, so
+    a narrow window keeps the name and the count rather than a row of ellipses."""
+    widths = [cw for _, cw, _ in columns]
+    keep = len(widths)
+    while keep and MARK_W + main_min + sum(widths[:keep]) > w:
+        keep -= 1
+    return widths[:keep] + [0] * (len(widths) - keep)
 
 
 def fmt_time(ts: float) -> str:
@@ -1521,7 +1546,7 @@ class Tui:
             buf += self._box_top("Session" if self.project else "Project", "", w)
             buf += [r for label, style, text in detail
                     for r in self._box_row(Ansi.CYAN + label + Ansi.RESET + style
-                                           + fit(text, inner - cell_width(label)), w)]
+                                           + fit(text, max(0, inner - cell_width(label))), w)]
             for _ in range(detail_h - len(detail)):
                 buf += self._box_row("", w)
             buf += self._box_bottom(w)
@@ -1563,9 +1588,11 @@ class Tui:
             return []
         rows: list[tuple[str, str, str]] = []
 
+        label_w = min(DETAIL_LABEL_W, max(0, w // 2))    # a narrow box gives the value the room
         def field(label: str, text: str, style: str = "") -> None:
-            for i, line in enumerate(wrap_cells(text, max(8, w - DETAIL_LABEL_W))):
-                rows.append((fit(" " + label if i == 0 else "", DETAIL_LABEL_W), style, line))
+            room = max(1, w - label_w)
+            for i, line in enumerate(wrap_cells(text, room)):
+                rows.append((fit(" " + label if i == 0 else "", label_w), style, line))
 
         if self.project is None:
             field("Name", item.display, Ansi.BOLD)
@@ -1601,25 +1628,47 @@ class Tui:
         return rows
 
     def project_row(self, p: Project | None, w: int) -> str:
-        fixed = 2 + 5 + 12 + 4 + 2                    # live, sessions, date, mem, spacing
-        name_w = max(12, min(28, (w - fixed) // 3))
-        path_w = max(10, w - fixed - name_w)
+        """One project row, exactly `w` cells wide.
+
+        Docked as a narrow band there is no room for every column, and forcing them made rows wider
+        than their box — the line wrapped and the frame came apart. Columns go from the right (memory
+        flag, then date, then count), then the path, and the name keeps whatever is left."""
+        widths = columns_that_fit(w, PROJECT_COLUMNS, NAME_MIN_W)
+        rest = w - MARK_W - sum(widths)
+        name_w, path_w = (min(NAME_MAX_W, rest - PATH_MIN_W), rest - min(NAME_MAX_W, rest - PATH_MIN_W)) \
+            if rest >= NAME_MIN_W + PATH_MIN_W else (rest, 0)
         if p is None:
-            return fit("  Name", name_w + 2) + fit("Path", path_w) + fit("Sess", 5, True) + fit("Last used", 12, True) + fit("Mem", 4, True) + "  "
+            head = fit("  Name", MARK_W + name_w) + (fit("Path", path_w) if path_w else "")
+            for (label, _, right), cw in zip(PROJECT_COLUMNS, widths):
+                head += fit(label, cw, right)      # dropped columns render as nothing
+            return head
         mark = (Ansi.GREEN + LIVE_MARK + Ansi.FG_DEFAULT if p.live else " ")
-        path = p.cwd or "(unknown path)"
-        path_text = (Ansi.RED if not p.exists else "") + fit(path, path_w) + (Ansi.FG_DEFAULT if not p.exists else "")
-        return (mark + " " + fit(p.display, name_w) + path_text + fit(str(len(p.sessions)), 5, True)
-                + fit(fmt_time(p.last_used), 12, True) + fit("M" if p.has_memory else "", 4, True) + "  ")
+        row = mark + " " + fit(p.display, name_w)
+        if path_w:
+            row += ((Ansi.RED if not p.exists else "") + fit(p.cwd or "(unknown path)", path_w)
+                    + (Ansi.FG_DEFAULT if not p.exists else ""))
+        cells = (str(len(p.sessions)), fmt_time(p.last_used), "M" if p.has_memory else "")
+        for (_, _, right), cw, value in zip(PROJECT_COLUMNS, widths, cells):
+            if cw:
+                row += fit(value, cw, right)
+        return row
 
     def session_row(self, s: Session | None, w: int) -> str:
-        fixed = 2 + 9 + 12 + 7 + 2
-        title_w = max(10, w - fixed)
+        """One session row, exactly `w` cells wide — same column-dropping rule as a project row."""
+        widths = columns_that_fit(w, SESSION_COLUMNS, TITLE_MIN_W)
+        title_w = w - MARK_W - sum(widths)
         if s is None:
-            return fit("  Title", title_w + 2) + fit("Id", 9) + fit("Modified", 12, True) + fit("Size", 7, True) + "  "
+            head = fit("  Title", MARK_W + title_w)
+            for (label, _, right), cw in zip(SESSION_COLUMNS, widths):
+                head += fit(label, cw, right)      # dropped columns render as nothing
+            return head
         mark = (Ansi.GREEN + LIVE_MARK + Ansi.FG_DEFAULT if s.live else " ")
-        return (mark + " " + fit(s.title, title_w) + fit(s.sid[:8], 9) + fit(fmt_time(s.mtime), 12, True)
-                + fit(fmt_size(s.size), 7, True) + "  ")
+        row = mark + " " + fit(s.title, title_w)
+        cells = (s.sid[:8], fmt_time(s.mtime), fmt_size(s.size))
+        for (_, _, right), cw, value in zip(SESSION_COLUMNS, widths, cells):
+            if cw:
+                row += fit(value, cw, right)
+        return row
 
     # -- prompts ---------------------------------------------------------------
     def prompt(self, label: str, initial: str = "") -> str | None:
@@ -1831,9 +1880,12 @@ class Tui:
     # -- group-box frame -------------------------------------------------------
     def _box_top(self, title: str, note: str, w: int) -> list[str]:
         """Top border carrying the box title, plus a dim note (path, forwarded options) after it."""
-        head = f"{BOX_TL}{BOX_H} {title} {BOX_H} " if note else f"{BOX_TL}{BOX_H} {title} "
+        title = fit(title, max(1, w - BOX_TITLE_CHROME)).rstrip()   # a long title cannot push the corner off
+        head = f"{BOX_TL}{BOX_H} {title} "
         rest = w - cell_width(head) - 1
         if note and rest > 12:
+            head += f"{BOX_H} "                  # the separator only exists when a note follows it
+            rest = w - cell_width(head) - 1
             shown = fit(note, rest - 2).rstrip()
             return [Ansi.CYAN + head + Ansi.RESET + Ansi.DIM + shown + Ansi.RESET + Ansi.CYAN
                     + " " + BOX_H * max(0, rest - cell_width(shown) - 1) + BOX_TR + Ansi.RESET
@@ -1843,9 +1895,12 @@ class Tui:
     def _box_row(self, body: str, w: int) -> list[str]:
         """One framed row. `body` carries its own styles, so it is measured with the codes stripped
         and padded here — otherwise a blank or short row collapses the frame to `│  │`."""
-        pad = " " * max(0, w - BOX_SIDE_COLS - cell_width(strip_ansi(body)))
-        return [Ansi.CYAN + BOX_V + Ansi.RESET + " " + body + Ansi.RESET + pad + " "
-                + Ansi.CYAN + BOX_V + Ansi.RESET + Ansi.EOL + "\n"]
+        inner = max(0, w - BOX_SIDE_COLS)
+        visible = cell_width(strip_ansi(body))
+        if visible > inner:                      # too long to frame: fall back to plain, cut text
+            body, visible = fit(strip_ansi(body), inner), inner
+        return [Ansi.CYAN + BOX_V + Ansi.RESET + " " + body + Ansi.RESET + " " * (inner - visible)
+                + " " + Ansi.CYAN + BOX_V + Ansi.RESET + Ansi.EOL + "\n"]
 
     def _box_bottom(self, w: int) -> list[str]:
         return [Ansi.CYAN + BOX_BL + BOX_H * max(0, w - 2) + BOX_BR + Ansi.RESET + Ansi.EOL + "\n"]
@@ -1854,9 +1909,9 @@ class Tui:
     def _box(self, title: str, rows: list[tuple[str, str]], w: int, focused: bool) -> list[str]:
         """One group box. `rows` are (style, plain text) so the frame can pad by display width —
         a row carrying its own colour codes could not be measured reliably."""
-        inner = max(10, w - 4)
+        inner = max(1, w - BOX_SIDE_COLS)
         edge = Ansi.CYAN if focused else Ansi.DIM
-        head = f"{BOX_TL}{BOX_H} {title} "
+        head = f"{BOX_TL}{BOX_H} {fit(title, max(1, w - BOX_TITLE_CHROME)).rstrip()} "
         out = [edge + head + BOX_H * max(0, w - cell_width(head) - 1) + BOX_TR + Ansi.RESET + Ansi.EOL + "\n"]
         for style, text in rows:
             out.append(edge + BOX_V + Ansi.RESET + " " + style + fit(text, inner)
@@ -1967,8 +2022,9 @@ class Tui:
         w = cols - 1
         dock_focus = stage in (STAGE_MONITOR, STAGE_FORM, STAGE_EDIT)
         buf = [Ansi.CLEAR,
-               Ansi.BOLD + fit(" Settings", 10) + Ansi.RESET
-               + Ansi.DIM + fit("· Tab moves between boxes", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
+               Ansi.BOLD + fit(" Settings", min(SETTINGS_TITLE_W, w)) + Ansi.RESET
+               + Ansi.DIM + fit("· Tab moves between boxes", max(0, w - SETTINGS_TITLE_W))
+               + Ansi.RESET + Ansi.EOL + "\n",
                Ansi.EOL + "\n"]
         buf += self._box("Dock", self._dock_rows(monitors, idx, stage, missing, field), w, dock_focus)
         buf += self._box("Status line", self._mcp_rows(servers, server_idx, stage == STAGE_MCP),
@@ -1981,6 +2037,9 @@ class Tui:
                 else {STAGE_MONITOR: self.HINT_DOCK_MONITOR, STAGE_FORM: self.HINT_DOCK_FORM,
                       STAGE_MCP: self.HINT_MCP, STAGE_SHELL: self.HINT_SHELL,
                       STAGE_PERMS: self.HINT_PERMS}[stage])
+        # Four boxes are taller than a docked band: keep the leading rows and the hint, and let the
+        # rest go rather than scrolling the screen and smearing the frames over each other.
+        buf = buf[:max(1, lines - 1)]
         buf.append(f"\x1b[{lines};1H" + Ansi.DIM + fit(hint, w) + Ansi.RESET + Ansi.EOL)
         self.out.write("".join(buf))
         self.out.flush()
@@ -2288,6 +2347,12 @@ def self_test() -> None:
         assert store.scan()[0].display == "Demo"
 
         assert fit("한글제목", 5) == "한글…" and cell_width(fit("abc", 6)) == 6 and fit("ab", 4, True) == "  ab"
+        # rows fit their box at any width; columns drop from the right as it narrows
+        assert columns_that_fit(80, PROJECT_COLUMNS, NAME_MIN_W) == [5, 12, 4]
+        assert columns_that_fit(30, PROJECT_COLUMNS, NAME_MIN_W) == [5, 12, 0]
+        assert columns_that_fit(20, PROJECT_COLUMNS, NAME_MIN_W) == [5, 0, 0]
+        assert columns_that_fit(12, PROJECT_COLUMNS, NAME_MIN_W) == [0, 0, 0]
+        assert fit("x", 0) == "" and fit("x", -3) == ""     # a dropped column renders nothing
         assert wrap_cells("한글abc", 4) == ["한글", "abc"] and wrap_cells("", 5) == [""]
         # the one-row editor keeps the END of the text and never exceeds the room it has
         assert tail_within("abc", 10) == ("abc", False)

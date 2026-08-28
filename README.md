@@ -123,6 +123,9 @@ expanded and framed in colour; the other two collapse to a summary line. `Tab` a
 between them, `Esc` closes the screen. Every choice — and the project and row you were last on —
 is kept in `config/manager.json`.
 
+Docked as a narrow band the list drops columns to fit — memory flag, date, session count, then the
+path — so the frame stays intact at any size.
+
 **Dock** places the manager as a reserved band on a monitor edge — pick the monitor, then the edge,
 size and on/off; `Enter` applies, `Esc` backs out. Every monitor keeps its own edge, size and on/off
 (a band that suits a portrait display is wrong on a wide one), so moving the cursor through the list
