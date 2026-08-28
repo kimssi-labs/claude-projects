@@ -66,7 +66,7 @@ opens — `claude --dangerously-skip-permissions --p` opens sessions in that mod
 | `O` | new session in a new window | resume in a new window |
 | `F2` | set a display alias | rename the session |
 | `Del` | delete the project folder | delete the session |
-| `S` | dock settings (monitor / edge / size) | dock settings |
+| `S` | settings: docking, status line | settings |
 | `←` `Esc` | — | back to projects |
 | `F5` / `Q` | refresh / quit | refresh / quit |
 
@@ -95,6 +95,26 @@ Everything comes from files Claude Code maintains under `~/.claude` (override wi
 The status line is optional: each segment appears only if that source exists on your machine — rate
 limits from `cache/rate-limits.json`, MCP and Outlook health from their status caches, and the
 ponytail mode flag. On a machine without them the line is not drawn at all.
+
+## Settings (`S`)
+
+**Dock** places the manager as a reserved band on a monitor edge — pick the monitor, then the edge,
+size and on/off; `Enter` applies, `Esc` backs out.
+
+**Status line** (`M` from the dock screen) lists the MCP servers this machine has — from
+`~/.claude.json` and from the probe cache — and lets you check the ones the 🤖 segment should report:
+
+```
+  MCP servers
+    [x] chrome-devtools  ✘
+  ▸ [x] github
+    [x] wiki  ✔
+```
+
+`Space`/`Enter` toggles, `A` goes back to reporting every server. The segment shows ✔ when all the
+checked servers are healthy, ✘ when one is failing, and a dim `?` when a checked server has no
+verdict in the cache. Uncheck everything and the segment disappears. Choices live in
+`config/manager-status.json`.
 
 ## Options
 
