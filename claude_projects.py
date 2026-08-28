@@ -18,7 +18,7 @@ in a throwaway home; run it after any change.
 """
 from __future__ import annotations
 
-__version__ = "1.9.0"        # single source: the exe resource, pyproject and the tag are checked against it
+__version__ = "1.10.0"        # single source: the exe resource, pyproject and the tag are checked against it
 
 import argparse
 import base64
@@ -36,6 +36,7 @@ import time
 import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 # ----------------------------------------------------------------------------- constants
@@ -105,6 +106,9 @@ ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 STD_OUTPUT_HANDLE = -11
 STD_INPUT_HANDLE = -10
 KEY_EVENT = 0x0001
+EXISTS_TTL_S = 60.0                            # how long a folder-exists verdict is trusted
+EXISTS_PROBE_TIMEOUT_S = 5.0                   # a dead UNC host can hang a stat this long
+STATUS_TTL_S = 2.0                             # status line re-read at most this often per frame
 IDLE_REFRESH_MS = 15000                        # redraw while idle: rate-limit windows roll, sessions start/stop
 WAIT_TIMEOUT = 0x00000102                      # WaitForSingleObject: nothing to read yet
 SHIFT_PRESSED = 0x0010                         # dwControlKeyState bit: Shift+Tab vs Tab
@@ -153,6 +157,7 @@ DOCK_DEFAULT_EDGE = "top"
 DOCK_PCT_MIN, DOCK_PCT_MAX, DOCK_PCT_DEFAULT = 5, 60, 20
 DOCK_FIELDS = ("Edge", "Size", "Dock")         # rows of the form, selected with ↑↓
 DOCK_FIELD_KEYS = ("edge", "percent", "enabled")          # the cfg key each row edits
+DOCK_MONITORS_KEY = "monitors"                 # per-device settings inside manager-dock.json
 DOCK_FIELD_EDGE, DOCK_FIELD_SIZE, DOCK_FIELD_DOCK = 0, 1, 2
 # Settings screen stages. Enter descends, Esc backs out; ↑↓ never means two things at once.
 # Tab order of the settings group boxes; the dock box is always entered at its monitor list.
@@ -196,6 +201,10 @@ class Project:
     alias: str | None = None
     sessions: list[Session] = field(default_factory=list)
     has_memory: bool = False
+    # Resolved by the scan, never in a frame: `cwd` may be a UNC path whose host is off, and a
+    # stat on that blocks for seconds — once per row per redraw made the whole app stutter.
+    exists: bool = True
+    mtime: float = 0.0
 
     @property
     def name(self) -> str:
@@ -209,7 +218,7 @@ class Project:
 
     @property
     def last_used(self) -> float:
-        return max((s.mtime for s in self.sessions), default=self.enc_dir.stat().st_mtime)
+        return max((s.mtime for s in self.sessions), default=self.mtime)
 
     @property
     def live(self) -> bool:
@@ -223,10 +232,6 @@ class Project:
     def total_size(self) -> int:
         return sum(s.size for s in self.sessions)
 
-    @property
-    def exists(self) -> bool:
-        return bool(self.cwd) and Path(self.cwd).is_dir()
-
 
 # ----------------------------------------------------------------------------- store
 class Store:
@@ -235,6 +240,13 @@ class Store:
     def __init__(self, home: Path = CLAUDE_HOME, claude_args: tuple[str, ...] = ()):
         self.home = home
         self.claude_args = tuple(claude_args)   # forwarded to every claude launched from here (e.g. --dangerously-skip-permissions)
+        # Caches keyed on what would invalidate them. A scan re-parsed a 2.5 MB history.jsonl and
+        # the head of every transcript each time, which is what made an idle tick stutter.
+        self._titles_cache: tuple[tuple[int, float], dict[str, str]] | None = None
+        self._cwd_cache: dict[Path, tuple[float, str | None]] = {}
+        self._status_cache: tuple[float, list[tuple[str, str, str]]] | None = None
+        self._exists_cache: dict[str, tuple[float, bool]] = {}
+        self._probing: set[str] = set()
         self.projects_dir = home / PROJECTS_DIRNAME
         self.live_dir = home / LIVE_SESSIONS_DIRNAME
         self.history_file = home / HISTORY_FILENAME
@@ -300,11 +312,19 @@ class Store:
         return ids
 
     def history_titles(self) -> dict[str, str]:
+        try:
+            st = self.history_file.stat()
+            signature = (st.st_size, st.st_mtime)
+        except OSError:
+            signature = (0, 0.0)
+        if self._titles_cache and self._titles_cache[0] == signature:
+            return self._titles_cache[1]
         titles: dict[str, str] = {}
         for d in self._iter_json_lines(self.history_file):
             sid = d.get("sessionId")
             if sid and sid not in titles and d.get("display"):
                 titles[sid] = d["display"].strip().splitlines()[0]
+        self._titles_cache = (signature, titles)
         return titles
 
     def known_paths_by_enc(self) -> dict[str, str]:
@@ -315,8 +335,12 @@ class Store:
         return out
 
     def status_items(self) -> list[tuple[str, str, str]]:
-        """(icon, label, text) segments for the manager's status line, from the same global
-        caches the Claude statusline used to print: rate limits, MCP, Outlook, ponytail mode."""
+        """(icon, label, text) segments for the manager's status line, from the same global caches
+        the Claude statusline used to print: rate limits, MCP, Outlook, ponytail mode. Held for
+        STATUS_TTL_S — these change on the minute, and a redraw happens on every keystroke."""
+        now = time.monotonic()
+        if self._status_cache and now - self._status_cache[0] < STATUS_TTL_S:
+            return self._status_cache[1]
         items: list[tuple[str, str, str]] = []
         rates = self._load_json(self.home / RATE_LIMITS_CACHE, {})
         for icon, key, fmt, cells in (("⏳", "five_hour", "%H:%M", RATE_BAR_CELLS),
@@ -363,6 +387,7 @@ class Store:
         if mode or any(self.home.glob(PONYTAIL_PLUGIN_GLOB)):        # hidden when not installed
             items.append(("🧔", PONYTAIL_LABEL,
                           (Ansi.GREEN + mode if mode else Ansi.DIM + "off") + Ansi.FG_DEFAULT))
+        self._status_cache = (now, items)
         return items
 
     def load_launch_cfg(self) -> dict:
@@ -393,6 +418,31 @@ class Store:
         exe = SHELL_EXE.get(shell) or PS_EXE            # SHELL_AUTO -> whatever is installed
         return [exe, *PS_ARGS, ps_encode(claude)]
 
+    def folder_exists(self, cwd: str | None) -> bool:
+        """Cached answer to "is this project's folder still there?".
+
+        A miss answers True (assume fine) and probes in the background: `is_dir()` on a UNC path
+        whose host is unreachable blocks for seconds, and this is called for every row."""
+        if not cwd:
+            return False
+        hit = self._exists_cache.get(cwd)
+        now = time.monotonic()
+        if hit and now - hit[0] < EXISTS_TTL_S:
+            return hit[1]
+        if cwd not in self._probing:
+            self._probing.add(cwd)
+            threading.Thread(target=self._probe_folder, args=(cwd,), daemon=True).start()
+        return hit[1] if hit else True
+
+    def _probe_folder(self, cwd: str) -> None:
+        try:
+            verdict = Path(cwd).is_dir()
+        except OSError:
+            verdict = False
+        finally:
+            self._probing.discard(cwd)
+        self._exists_cache[cwd] = (time.monotonic(), verdict)
+
     def installed_mcp_servers(self) -> list[str]:
         """Every MCP server this machine knows about: configured in ~/.claude.json, or seen by
         whatever publishes the probe cache."""
@@ -407,9 +457,14 @@ class Store:
         chosen = cfg.get("mcp")
         return {"mcp": [str(n) for n in chosen] if isinstance(chosen, list) else None}
 
+    def invalidate_status(self) -> None:
+        """Drop the held status line — after a setting changed it, or when a test wants it re-read."""
+        self._status_cache = None
+
     def save_status_cfg(self, cfg: dict) -> None:
         self.status_file.parent.mkdir(parents=True, exist_ok=True)
         self.status_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.invalidate_status()
 
     def load_aliases(self) -> dict[str, str]:
         return self._load_json(self.aliases_file, {})
@@ -418,22 +473,46 @@ class Store:
         self.aliases_file.parent.mkdir(parents=True, exist_ok=True)
         self.aliases_file.write_text(json.dumps(aliases, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def load_dock(self) -> dict:
-        """Dock config, normalized — a hand-edited or stale file must not be able to crash startup."""
-        cfg = self._load_json(self.dock_file, {})
-        cfg = cfg if isinstance(cfg, dict) else {}
+    def load_dock(self, device: str | None = None) -> dict:
+        """Dock config for `device` (default: the last one used), normalized — a hand-edited or
+        stale file must not be able to crash startup.
+
+        Each monitor keeps its own edge, size and on/off under `monitors`, because a band that fits
+        a 1080p portrait display is wrong on a 1440p landscape one; the top level holds the last
+        monitor used, which is also what a file written before per-monitor settings looks like."""
+        raw = self._load_json(self.dock_file, {})
+        raw = raw if isinstance(raw, dict) else {}
+        per_device = raw.get(DOCK_MONITORS_KEY)
+        per_device = per_device if isinstance(per_device, dict) else {}
+        device = device or raw.get("device") or None
+        cfg = {**raw, **(per_device.get(device) or {} if device else {})}
         try:
             pct = int(cfg.get("percent", DOCK_PCT_DEFAULT))
         except (TypeError, ValueError):
             pct = DOCK_PCT_DEFAULT
         return {"enabled": bool(cfg.get("enabled", False)),
-                "device": cfg.get("device") or None,
+                "device": device,
                 "edge": cfg.get("edge") if cfg.get("edge") in DOCK_EDGES else DOCK_DEFAULT_EDGE,
                 "percent": max(DOCK_PCT_MIN, min(DOCK_PCT_MAX, pct))}
 
+    def known_dock_devices(self) -> set[str]:
+        """Monitors that have remembered settings — used to say "restored" instead of guessing."""
+        raw = self._load_json(self.dock_file, {})
+        per_device = raw.get(DOCK_MONITORS_KEY) if isinstance(raw, dict) else None
+        return set(per_device) if isinstance(per_device, dict) else set()
+
     def save_dock(self, cfg: dict) -> None:
+        """Write the settings both under their monitor and at the top level (= last used), so an
+        older build — and the next start, before a monitor is chosen — still reads something sane."""
+        raw = self._load_json(self.dock_file, {})
+        raw = raw if isinstance(raw, dict) else {}
+        per_device = raw.get(DOCK_MONITORS_KEY)
+        per_device = dict(per_device) if isinstance(per_device, dict) else {}
+        if cfg.get("device"):
+            per_device[cfg["device"]] = {k: cfg[k] for k in DOCK_FIELD_KEYS}
+        merged = {**cfg, DOCK_MONITORS_KEY: per_device}
         self.dock_file.parent.mkdir(parents=True, exist_ok=True)
-        self.dock_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.dock_file.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load_docked_hwnd(self) -> int | None:
         """The window a previous run reserved space for. Kept OUT of manager-dock.json so live,
@@ -449,10 +528,22 @@ class Store:
         self.dock_state_file.write_text(json.dumps({"hwnd": hwnd} if hwnd else {}), encoding="utf-8")
 
     def transcript_cwd(self, path: Path) -> str | None:
+        """First `cwd` in the transcript. Cached per file: a session's folder never changes, and
+        re-reading the head of every transcript on every scan cost more than everything else."""
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None
+        hit = self._cwd_cache.get(path)
+        if hit and hit[0] == mtime:
+            return hit[1]
+        cwd = None
         for d in self._iter_json_lines(path, TRANSCRIPT_HEAD_LINES):
             if d.get("cwd"):
-                return d["cwd"]
-        return None
+                cwd = d["cwd"]
+                break
+        self._cwd_cache[path] = (mtime, cwd)
+        return cwd
 
     def custom_title(self, enc_dir: Path, sid: str) -> str | None:
         d = self._load_json(enc_dir / sid / CUSTOM_TITLE_FILENAME, {})
@@ -468,7 +559,9 @@ class Store:
             cwd = next((c for c in (self.transcript_cwd(t) for t in transcripts) if c), known.get(enc_dir.name))
             if cwd:
                 cwd = os.path.normpath(cwd)
-            proj = Project(enc_dir, cwd, aliases.get(cwd or enc_dir.name), has_memory=(enc_dir / MEMORY_DIRNAME).is_dir())
+            proj = Project(enc_dir, cwd, aliases.get(cwd or enc_dir.name),
+                           has_memory=(enc_dir / MEMORY_DIRNAME).is_dir(),
+                           exists=self.folder_exists(cwd), mtime=enc_dir.stat().st_mtime)
             for t in transcripts:
                 sid, st = t.stem, t.stat()
                 custom = self.custom_title(enc_dir, sid)
@@ -617,10 +710,14 @@ def strip_ansi(s: str) -> str:
     return ANSI_RE.sub("", s)
 
 
+@lru_cache(maxsize=8192)
 def cell_width(s: str) -> int:
+    """Display columns `s` occupies. Cached: a frame measures the same paths, titles and labels over
+    and over, and the per-character classification was the biggest slice of a redraw."""
     return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
 
 
+@lru_cache(maxsize=8192)
 def fit(s: str, width: int, align_right: bool = False) -> str:
     """Truncate to `width` cells (with an ellipsis) and pad to exactly `width` cells."""
     if cell_width(s) > width:
@@ -646,6 +743,20 @@ def wrap_cells(s: str, width: int) -> list[str]:
         cur, w = cur + c, w + cw
     lines.append(cur)
     return lines
+
+
+def tail_within(s: str, width: int) -> tuple[str, bool]:
+    """(visible tail of `s`, was anything cut). Used by the one-row editor: the end of the text is
+    what is being typed, so that is the part kept when it no longer fits."""
+    if cell_width(s) <= width:
+        return s, False
+    out, w = "", 0
+    for c in reversed(s):
+        cw = cell_width(c)
+        if w + cw > width - 1:                          # -1 for the ellipsis marker
+            break
+        out, w = c + out, w + cw
+    return out, True
 
 
 def fmt_time(ts: float) -> str:
@@ -743,6 +854,19 @@ class Key:
         elif keys:
             cls._acted = 0                                  # plain ASCII / navigation: nothing pending
         return keys
+
+    @classmethod
+    def input_pending(cls) -> bool:
+        """Is another keystroke already waiting? Holding a key queues events faster than a full
+        redraw, so the loop drains them and draws once instead of once per event."""
+        if cls._pending:
+            return True
+        k32 = ctypes.windll.kernel32
+        count = ctypes.c_ulong()
+        if not k32.GetNumberOfConsoleInputEvents(k32.GetStdHandle(STD_INPUT_HANDLE),
+                                                 ctypes.byref(count)):
+            return False
+        return count.value > 0
 
     @classmethod
     def read(cls, translate: bool = True, timeout_ms: int | None = None) -> str:
@@ -1253,8 +1377,9 @@ class Tui:
                     self.status = Ansi.YELLOW + self.dock.note
             self.refresh()
             while True:
-                self._sync_title()
-                self.render()
+                if not Key.input_pending():          # a frame nobody would see is a frame skipped
+                    self._sync_title()
+                    self.render()
                 # A timed-out read returns "" and simply loops: the next render picks up a
                 # rolled rate-limit window or a session that started or ended meanwhile.
                 k = Key.read(timeout_ms=IDLE_REFRESH_MS)
@@ -1440,13 +1565,21 @@ class Tui:
 
     # -- prompts ---------------------------------------------------------------
     def prompt(self, label: str, initial: str = "") -> str | None:
-        """Inline line editor on the footer row. Returns None on Esc."""
+        """Inline line editor on the footer row. Returns the text, or None on Esc.
+
+        The line is kept to ONE row on purpose. Text that reaches the last column of the bottom row
+        makes the terminal wrap and scroll, and the next keystroke then redrew the prompt under the
+        scrolled copy — backspacing a two-row title left a trail of duplicated lines. Long input
+        scrolls sideways instead: the tail is shown, with a marker for what is off-screen."""
         text = initial
-        lines = shutil.get_terminal_size().lines
         self.out.write(Ansi.CUR_SHOW)
         try:
             while True:
-                self.out.write(f"\x1b[{lines};1H" + Ansi.YELLOW + label + Ansi.RESET + text + Ansi.EOL)
+                cols, lines = shutil.get_terminal_size()
+                room = max(4, cols - 1 - cell_width(label))     # -1 keeps the cursor off the edge
+                shown, clipped = tail_within(text, room)
+                self.out.write(f"\x1b[{lines};1H" + Ansi.YELLOW + label + Ansi.RESET
+                               + (Ansi.DIM + ELLIPSIS + Ansi.RESET if clipped else "") + shown + Ansi.EOL)
                 self.out.flush()
                 k = Key.read(translate=False)          # titles are typed in Korean as-is
                 if k == Key.ENTER:
@@ -1570,7 +1703,13 @@ class Tui:
             if stage == STAGE_MONITOR:
                 if k in (Key.UP, Key.DOWN):
                     idx = (idx + (1 if k == Key.DOWN else -1)) % len(monitors)
-                    cfg["device"] = monitors[idx].device
+                    # Each monitor carries its own edge/size/on-off; show them as the cursor lands,
+                    # so what the box reads is what applying would do.
+                    device = monitors[idx].device
+                    remembered = self.store.load_dock(device)
+                    remembered["device"] = device
+                    cfg.clear()
+                    cfg.update(remembered)
             elif stage == STAGE_FORM:
                 if k in (Key.UP, Key.DOWN):
                     field = (field + (1 if k == Key.DOWN else -1)) % len(DOCK_FIELDS)
@@ -1674,6 +1813,7 @@ class Tui:
         if stage not in (STAGE_MONITOR, STAGE_FORM, STAGE_EDIT):
             return [(Ansi.DIM, f"{mon.device}   {cfg['edge']}   {cfg['percent']} %"
                                f"   {'on' if cfg['enabled'] else 'off'}")]
+        known = self.store.known_dock_devices()
         rows: list[tuple[str, str]] = [(Ansi.CYAN, "Monitor")]
         if missing:
             rows.append((Ansi.YELLOW, f"  {missing}  (saved, not connected)"))
@@ -1683,8 +1823,9 @@ class Tui:
                      else (Ansi.BOLD if selected else Ansi.DIM))
             # ▸ is the cursor, [x] is the choice — same grammar as the other two boxes, so a
             # non-focused list still shows what is chosen without looking like it has focus.
+            note = "   (saved)" if m.device in known else ""
             rows.append((style, f"  {'▸' if selected and focused else ' '} "
-                                f"{CHECKED if selected else UNCHECKED} {m.label}"))
+                                f"{CHECKED if selected else UNCHECKED} {m.label}{note}"))
         rows.append(("", ""))
         values = [
             ("  ".join(f"[{e}]" if e == cfg["edge"] else f" {e} " for e in DOCK_EDGES), ""),
@@ -2014,6 +2155,16 @@ def self_test() -> None:
         assert Store.encode_path("C:/Local/OneDrive - Contoso/문서/99. Archive") == "C--Local-OneDrive---Contoso----99--Archive"
         projects = store.scan()
         assert len(projects) == 1 and projects[0].cwd == os.path.normpath(cwd) and projects[0].has_memory
+        # a row never stats: the verdict comes from the scan, and the probe runs off-thread
+        assert projects[0].exists and projects[0].mtime > 0
+        gone = str(Path(tmp) / "Work" / "Gone")
+        assert store.folder_exists(gone) is True            # unknown yet: assume fine
+        for _ in range(50):                                 # let the probe land
+            if gone in store._exists_cache:
+                break
+            time.sleep(0.02)
+        assert store.folder_exists(gone) is False
+        assert store.folder_exists(None) is False
         s = projects[0].sessions[0]
         assert s.title == "첫 프롬프트" and not s.live
 
@@ -2080,6 +2231,12 @@ def self_test() -> None:
 
         assert fit("한글제목", 5) == "한글…" and cell_width(fit("abc", 6)) == 6 and fit("ab", 4, True) == "  ab"
         assert wrap_cells("한글abc", 4) == ["한글", "abc"] and wrap_cells("", 5) == [""]
+        # the one-row editor keeps the END of the text and never exceeds the room it has
+        assert tail_within("abc", 10) == ("abc", False)
+        shown, clipped = tail_within("abcdefghij", 5)
+        assert clipped and shown == "ghij" and cell_width(shown) <= 4
+        shown, clipped = tail_within("한글제목입니다", 6)
+        assert clipped and cell_width(shown) <= 5 and "한글제목입니다".endswith(shown)
         assert hangul_to_keys("ㅂ") == ["q"] and hangul_to_keys("ㅃ") == ["Q"] and hangul_to_keys("ㅐ") == ["o"]
         assert hangul_to_keys("요") == ["d", "y"] and hangul_to_keys("왜") == ["d", "h", "o"]
         assert hangul_to_keys("값") == ["r", "k", "q", "t"] and hangul_to_keys("a") == [] and hangul_to_keys("\r") == []
@@ -2114,7 +2271,8 @@ def self_test() -> None:
         (home / MCP_CACHE).write_text(json.dumps({"servers": {"wiki": {"ok": True}}}), encoding="utf-8")
         (home / OUTLOOK_CACHE).write_text(json.dumps({"servers": {"Outlook": {"ok": False}}}), encoding="utf-8")
         (home / PONYTAIL_FLAG).write_text("full\n", encoding="utf-8")
-        plain = strip_ansi(Tui(store).status_line(140))   # wide: names shown
+        fresh = lambda: (store.invalidate_status(), strip_ansi(Tui(store).status_line(140)))[1]
+        plain = fresh()                                   # wide: names shown
         assert "⏳ 5h " + RATE_BAR_ON * 7 + RATE_BAR_OFF * 3 + " 78%" in plain, plain
         assert "📅 7d 57%" in plain and "🤖 MCP ✔" in plain, plain      # no selection = every server
         # picking servers: the label names them, an unknown one reads "?", and an empty pick hides it
@@ -2122,7 +2280,7 @@ def self_test() -> None:
             {"servers": {"wiki": {"ok": True}, "chrome": {"ok": False}}}), encoding="utf-8")
         assert store.installed_mcp_servers() == ["chrome", "wiki"]
         store.save_status_cfg({"mcp": ["wiki"]})
-        line = lambda: strip_ansi(Tui(store).status_line(140))
+        line = fresh
         assert "🤖 wiki " + OK_MARK in line(), line()
         store.save_status_cfg({"mcp": ["wiki", "chrome"]})
         assert "🤖 wiki, chrome " + BAD_MARK in line(), line()
@@ -2142,10 +2300,22 @@ def self_test() -> None:
         tui.project = proj
         assert labels() == ["Title", "Named", "Prompt", "Id", "Started", "Modified", "Size",
                             "State", "Project", "File"], labels()   # a renamed session keeps its prompt
+        # caches: a second read must not re-parse, and a changed file must invalidate
+        first = store.history_titles()
+        assert store.history_titles() is first                # same object = cache hit
+        (home / HISTORY_FILENAME).write_text(json.dumps(
+            {"display": "다른 프롬프트", "sessionId": sid}, ensure_ascii=False) + "\n", encoding="utf-8")
+        assert store.history_titles() != first, "history.jsonl changed but the cache held"
+        cached_cwd = store.transcript_cwd(enc / f"{sid}{TRANSCRIPT_EXT}")
+        assert cached_cwd == store.transcript_cwd(enc / f"{sid}{TRANSCRIPT_EXT}")
+        items = store.status_items()
+        assert store.status_items() is items                  # held for STATUS_TTL_S
+        store.invalidate_status()
+        assert store.status_items() is not items               # ...until something changes it
         assert Tui(store).handle("") is True                  # idle tick is not a command
         (home / RATE_LIMITS_CACHE).write_text(json.dumps(
             {"five_hour": {"used_percentage": 0, "resets_at": int(time.time()) + 3600}}), encoding="utf-8")
-        just_reset = strip_ansi(Tui(store).status_line(140))
+        just_reset = fresh()
         assert "⏳ 5h " + RATE_BAR_OFF * 10 + " 0%" in just_reset, just_reset   # 0% still shows
         store.save_status_cfg({"mcp": None})
         assert store.load_status_cfg()["mcp"] is None and "🤖 MCP" in line()
@@ -2156,7 +2326,7 @@ def self_test() -> None:
         assert "wiki MCP" not in strip_ansi(Tui(store).status_line(80))
         (home / RATE_LIMITS_CACHE).write_text(json.dumps(
             {"five_hour": {"used_percentage": 40, "resets_at": 1}}), encoding="utf-8")   # already reset
-        assert "⏳ 5h " + RATE_BAR_OFF * 10 + " 0%" in strip_ansi(Tui(store).status_line(140))
+        assert "⏳ 5h " + RATE_BAR_OFF * 10 + " 0%" in fresh()
 
         # dock geometry: percent applies to the EDGE's own axis, on either monitor orientation
         land, port = (0, 0, 2560, 1440), (-1080, -81, 0, 1839)      # this PC's actual two panels
@@ -2207,6 +2377,17 @@ def self_test() -> None:
         assert pick_monitor([mon_a], r"\\.\DISPLAY9") == (mon_a, r"\\.\DISPLAY9")  # gone: says so
         assert pick_monitor([], r"\\.\DISPLAY2") == (None, r"\\.\DISPLAY2")        # no monitors
         assert store.load_dock()["device"] is None    # fallback never writes itself into config
+
+        # dock settings are per monitor: each device keeps its own edge/size/on-off
+        store.save_dock({"device": r"\\.\DISPLAY1", "edge": "left", "percent": 30, "enabled": True})
+        store.save_dock({"device": r"\\.\DISPLAY2", "edge": "top", "percent": 15, "enabled": False})
+        one, two = store.load_dock(r"\\.\DISPLAY1"), store.load_dock(r"\\.\DISPLAY2")
+        assert (one["edge"], one["percent"], one["enabled"]) == ("left", 30, True), one
+        assert (two["edge"], two["percent"], two["enabled"]) == ("top", 15, False), two
+        assert store.load_dock()["device"] == r"\\.\DISPLAY2"      # last one saved
+        assert store.known_dock_devices() == {r"\\.\DISPLAY1", r"\\.\DISPLAY2"}
+        unknown = store.load_dock(r"\\.\DISPLAY9")                 # never docked there
+        assert unknown["edge"] == "top" and unknown["percent"] == 15  # falls back to last used
 
         # config normalization: a hand-edited file must not be able to crash startup
         (home / "config").mkdir(exist_ok=True)

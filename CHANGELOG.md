@@ -3,6 +3,22 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.10.0
+
+- **Much faster redraws.** A frame no longer touches the filesystem: a project's folder check and
+  last-used time are resolved by the scan, and an unreachable path (a UNC share whose host is off)
+  is probed off the UI thread instead of stalling every row of every frame — 4.5 ms → 0.4 ms per
+  frame here. Keystrokes that are already queued skip their frame, so holding a key no longer piles
+  up redraws.
+- Scanning is cheaper too: `history.jsonl` is only re-parsed when it changes and a transcript's
+  folder is remembered per file, halving the idle refresh.
+- **Renaming no longer duplicates the line.** A title that reached the end of the row made the
+  terminal wrap and scroll, leaving a copy behind on every keystroke; the editor is now one row and
+  scrolls sideways, showing the end of what you are typing.
+- **The dock is remembered per monitor** — edge, size and on/off belong to the display, and moving
+  the cursor in the monitor list shows what that monitor would go back to. Monitors with saved
+  settings are marked `(saved)`.
+
 ## v1.9.0
 
 - The exe carries a full Windows version resource, so File properties → Details is filled in:
