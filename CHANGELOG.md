@@ -3,6 +3,13 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.11.0
+
+- Sessions start from the resolved `claude` executable with the flags appended, instead of the bare
+  name. A `claude` function in the user's PowerShell profile (the `claudex` wrapper, for one)
+  outranks the executable in that shell, so the permission mode the manager set could be replaced by
+  whatever the wrapper forwarded; now `claude --dangerously-skip-permissions …` means exactly that.
+
 ## v1.10.0
 
 - **Much faster redraws.** A frame no longer touches the filesystem: a project's folder check and
