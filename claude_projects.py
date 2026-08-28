@@ -111,6 +111,7 @@ RATE_LABELS = {"five_hour": "5h", "seven_day": "7d"}
 MCP_LABEL, OUTLOOK_LABEL, PONYTAIL_LABEL = "MCP", "Outlook", "ponytail"
 UNKNOWN_MARK = "?"                             # selected server that the probe cache says nothing about
 CHECKED, UNCHECKED = "[x]", "[ ]"
+BOX_TL, BOX_TR, BOX_BL, BOX_BR, BOX_H, BOX_V = "┌", "┐", "└", "┘", "─", "│"
 RULE_CHAR = "─"
 # Opening a session is `wt` + a shell + claude starting up: Popen returns long before any of that
 # is on screen, so the footer spins until the window really exists.
@@ -1126,8 +1127,8 @@ class Tui:
     HINT_SESSIONS = "↑↓ move  Enter resume  T resume here  O resume new window  F2 rename  Del delete  S settings  ←/Esc back  Q quit"
     # Two stages, so no arrow key ever means two things at once.
     HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  M status line  L launch  Esc cancel"
-    HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  L launch  Esc back to dock"
-    HINT_SHELL = "↑↓ shell  Space/Enter select  M status line  Esc back to dock"
+    HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  D dock  L launch  Esc close"
+    HINT_SHELL = "↑↓ shell  Space/Enter select  D dock  M status line  Esc close"
     HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  M status line  L launch  Esc back"
     # Per field, because each one uses the axis its own display suggests.
     HINT_DOCK_EDIT = ("←→ edge  Enter apply & save  Esc cancel edit",
@@ -1395,12 +1396,8 @@ class Tui:
         shell_idx = next((i for i, c in enumerate(SHELL_CHOICES)
                           if c[0] == self.store.load_launch_cfg()["shell"]), 0)
         while True:
-            if stage == STAGE_SHELL:
-                self._render_shell(shell_idx)
-            elif stage == STAGE_MCP:
-                self._render_mcp(servers, server_idx)
-            else:
-                self._render_settings(monitors, idx, stage, missing, field)
+            self._render_settings(monitors, idx, stage, missing, field,
+                                  servers, server_idx, shell_idx)
             k = Key.read()
             if stage == STAGE_SHELL:
                 if k == Key.ESC:
@@ -1411,12 +1408,16 @@ class Tui:
                     self.store.save_launch_cfg({"shell": SHELL_CHOICES[shell_idx][0]})
                 elif k.lower() == "m":
                     stage = STAGE_MCP
+                elif k.lower() == "d":
+                    stage = STAGE_MONITOR
                 continue
             if stage == STAGE_MCP:
                 if k == Key.ESC:
                     stage = STAGE_MONITOR
                 elif k.lower() == "l":
                     stage = STAGE_SHELL
+                elif k.lower() == "d":
+                    stage = STAGE_MONITOR
                 elif k in (Key.UP, Key.DOWN) and servers:
                     server_idx = (server_idx + (1 if k == Key.DOWN else -1)) % len(servers)
                 elif k in (" ", Key.ENTER) and servers:
@@ -1527,124 +1528,113 @@ class Tui:
             selected.append(name)
         self.store.save_status_cfg({"mcp": [n for n in servers if n in selected]})
 
-    def _render_shell(self, idx: int) -> None:
-        """Launch section: the shell that hosts a session the manager opens. A choice whose
-        executable is missing is still selectable but says so, rather than failing at open time."""
-        cols, lines = shutil.get_terminal_size()
-        w = cols - 1
-        current = self.store.load_launch_cfg()["shell"]
-        buf = [Ansi.CLEAR,
-               Ansi.BOLD + fit(" Settings", 10) + Ansi.RESET
-               + Ansi.DIM + fit("· Launch", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
-               Ansi.EOL + "\n", Ansi.CYAN + "  Session shell" + Ansi.RESET + Ansi.EOL + "\n"]
-        for i, (key, label, note) in enumerate(SHELL_CHOICES):
-            exe = SHELL_EXE.get(key)
-            missing = exe is not None and shutil.which(exe) is None
-            mark = CHECKED if key == current else UNCHECKED
-            row = f"  {'▸' if i == idx else ' '} {mark} {fit(label, 20)}{note}"
-            if missing:
-                row += "  (not found)"
-            style = Ansi.INV if i == idx else (Ansi.YELLOW if missing else
-                                               "" if key == current else Ansi.DIM)
-            buf.append(style + fit(row, w) + Ansi.RESET + Ansi.EOL + "\n")
-        buf += [Ansi.EOL + "\n",
-                Ansi.DIM + fit(f"  Auto resolves to {PS_EXE} on this machine. The shell keeps the tab open"
-                               " after claude exits.", w) + Ansi.RESET + Ansi.EOL + "\n"]
-        buf.append(f"\x1b[{lines};1H" + Ansi.DIM + fit(self.HINT_SHELL, w) + Ansi.RESET + Ansi.EOL)
-        self.out.write("".join(buf))
-        self.out.flush()
+    # -- settings rendering ----------------------------------------------------
+    def _box(self, title: str, rows: list[tuple[str, str]], w: int, focused: bool) -> list[str]:
+        """One group box. `rows` are (style, plain text) so the frame can pad by display width —
+        a row carrying its own colour codes could not be measured reliably."""
+        inner = max(10, w - 4)
+        edge = Ansi.CYAN if focused else Ansi.DIM
+        head = f"{BOX_TL}{BOX_H} {title} "
+        out = [edge + head + BOX_H * max(0, w - cell_width(head) - 1) + BOX_TR + Ansi.RESET + Ansi.EOL + "\n"]
+        for style, text in rows:
+            out.append(edge + BOX_V + Ansi.RESET + " " + style + fit(text, inner)
+                       + Ansi.RESET + " " + edge + BOX_V + Ansi.RESET + Ansi.EOL + "\n")
+        out.append(edge + BOX_BL + BOX_H * max(0, w - 2) + BOX_BR + Ansi.RESET + Ansi.EOL + "\n")
+        return out
 
-    def _render_mcp(self, servers: list[str], idx: int) -> None:
-        """Status-line section: which MCP servers the 🤖 segment reports on."""
-        cols, lines = shutil.get_terminal_size()
-        w = cols - 1
+    def _dock_rows(self, monitors: list[Monitor], idx: int, stage: str,
+                   missing: str | None, field: int) -> list[tuple[str, str]]:
+        cfg, mon = self.dock.cfg, monitors[idx]
+        span = band_thickness(mon.rect, cfg["edge"])       # the chosen monitor's own extent
+        if stage not in (STAGE_MONITOR, STAGE_FORM, STAGE_EDIT):
+            return [(Ansi.DIM, f"{mon.device}   {cfg['edge']}   {cfg['percent']} %"
+                               f"   {'on' if cfg['enabled'] else 'off'}")]
+        rows: list[tuple[str, str]] = [(Ansi.CYAN, "Monitor")]
+        if missing:
+            rows.append((Ansi.YELLOW, f"  {missing}  (saved, not connected)"))
+        for i, m in enumerate(monitors):
+            selected, focused = i == idx, stage == STAGE_MONITOR
+            style = (Ansi.INV if (selected and focused)
+                     else (Ansi.BOLD if selected else Ansi.DIM))
+            # ▸ is the cursor, [x] is the choice — same grammar as the other two boxes, so a
+            # non-focused list still shows what is chosen without looking like it has focus.
+            rows.append((style, f"  {'▸' if selected and focused else ' '} "
+                                f"{CHECKED if selected else UNCHECKED} {m.label}"))
+        rows.append(("", ""))
+        values = [
+            ("  ".join(f"[{e}]" if e == cfg["edge"] else f" {e} " for e in DOCK_EDGES), ""),
+            (f"{cfg['percent']} %   →  {self.dock.thickness_px()} px   (of {span} px on {mon.device})", ""),
+            ("on — this edge is reserved" if cfg["enabled"] else "off — no space reserved",
+             Ansi.GREEN if cfg["enabled"] else Ansi.DIM),
+        ]
+        field_focus = stage in (STAGE_FORM, STAGE_EDIT)     # only ONE cursor on screen at a time
+        for i, (label, (value, style)) in enumerate(zip(DOCK_FIELDS, values)):
+            selected = field_focus and i == field
+            # Row lit while picking a field, VALUE lit while editing it, so the screen always says
+            # which of the two ↑↓ is driving. Both are plain text here; the box adds the colour.
+            lit = (Ansi.INV if selected else (style if field_focus else Ansi.DIM))
+            rows.append((lit, ("  ▸ " if selected else "    ") + fit(label, 9) + value))
+        if self.dock.note:
+            rows.append((Ansi.YELLOW, "  " + self.dock.note))
+        return rows
+
+    def _mcp_rows(self, servers: list[str], idx: int, focused: bool) -> list[tuple[str, str]]:
         chosen = self.store.load_status_cfg()["mcp"]
         probed = (Store._load_json(self.store.home / MCP_CACHE, {}) or {}).get("servers") or {}
-        buf = [Ansi.CLEAR,
-               Ansi.BOLD + fit(" Settings", 10) + Ansi.RESET
-               + Ansi.DIM + fit("· Status line", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
-               Ansi.EOL + "\n", Ansi.CYAN + "  MCP servers" + Ansi.RESET + Ansi.EOL + "\n"]
+        shown = servers if chosen is None else [n for n in servers if n in chosen]
+        if not focused:
+            return [(Ansi.DIM, "MCP  " + (", ".join(shown) if shown else "none shown")
+                     + ("   (all)" if chosen is None else ""))]
         if not servers:
-            buf.append(Ansi.DIM + fit("    none installed on this machine", w) + Ansi.RESET + Ansi.EOL + "\n")
+            return [(Ansi.DIM, "  no MCP server installed on this machine")]
+        rows = []
         for i, name in enumerate(servers):
             on = chosen is None or name in chosen
             probe = probed.get(name)
-            verdict = ("" if probe is None else
-                       f"  {OK_MARK}" if probe.get("ok") else f"  {BAD_MARK}")
-            row = f"  {'▸' if i == idx else ' '} {CHECKED if on else UNCHECKED} {name}{verdict}"
-            style = Ansi.INV if i == idx else ("" if on else Ansi.DIM)
-            buf.append(style + fit(row, w) + Ansi.RESET + Ansi.EOL + "\n")
-        buf += [Ansi.EOL + "\n",
-                Ansi.DIM + fit("  Unchecked servers are left out of the status line; with none checked"
-                               " the 🤖 segment is hidden.", w) + Ansi.RESET + Ansi.EOL + "\n"]
-        if chosen is None:
-            buf.append(Ansi.DIM + fit("  Currently reporting every server found (the default).", w)
-                       + Ansi.RESET + Ansi.EOL + "\n")
-        buf.append(f"\x1b[{lines};1H" + Ansi.DIM + fit(self.HINT_MCP, w) + Ansi.RESET + Ansi.EOL)
-        self.out.write("".join(buf))
-        self.out.flush()
+            verdict = "" if probe is None else (f"  {OK_MARK}" if probe.get("ok") else f"  {BAD_MARK}")
+            rows.append((Ansi.INV if i == idx else ("" if on else Ansi.DIM),
+                         f"  {'▸' if i == idx else ' '} {CHECKED if on else UNCHECKED} {name}{verdict}"))
+        rows.append((Ansi.DIM, "  unchecked servers are left out; none checked hides the segment"))
+        return rows
+
+    def _shell_rows(self, idx: int, focused: bool) -> list[tuple[str, str]]:
+        current = self.store.load_launch_cfg()["shell"]
+        label = next(c[1] for c in SHELL_CHOICES if c[0] == current)
+        if not focused:
+            return [(Ansi.DIM, f"Session shell  {label}"
+                     + (f"  ({PS_EXE})" if current == SHELL_AUTO else ""))]
+        rows = []
+        for i, (key, name, note) in enumerate(SHELL_CHOICES):
+            exe = SHELL_EXE.get(key)
+            missing = exe is not None and shutil.which(exe) is None
+            row = (f"  {'▸' if i == idx else ' '} {CHECKED if key == current else UNCHECKED} "
+                   f"{fit(name, 20)}{note}" + ("  (not found)" if missing else ""))
+            rows.append((Ansi.INV if i == idx else
+                         (Ansi.YELLOW if missing else "" if key == current else Ansi.DIM), row))
+        return rows
 
     def _render_settings(self, monitors: list[Monitor], idx: int, stage: str,
-                         missing: str | None = None, field: int = 0) -> None:
-        """Both blocks are always visible; only the focused one is lit, so it is always obvious
-        which stage the arrow keys are talking to — the monitor list, the field list, or the value
-        of one field. `missing` names a configured-but-unplugged monitor, shown as its own row so
-        the substitution is never silent.
-
-        Titled "Settings · Dock": Dock is the only section today, but the screen is the manager's
-        settings screen, so a later section slots in beside it without renaming anything."""
+                         missing: str | None = None, field: int = 0,
+                         servers: list[str] | None = None, server_idx: int = 0,
+                         shell_idx: int = 0) -> None:
+        """All three sections at once, each in its own group box: the focused one is expanded and
+        cyan-framed, the others collapse to a single dim summary so the screen stays one page."""
+        servers = servers if servers is not None else []
         cols, lines = shutil.get_terminal_size()
         w = cols - 1
-        cfg, mon = self.dock.cfg, monitors[idx]
+        dock_focus = stage in (STAGE_MONITOR, STAGE_FORM, STAGE_EDIT)
         buf = [Ansi.CLEAR,
                Ansi.BOLD + fit(" Settings", 10) + Ansi.RESET
-               + Ansi.DIM + fit("· Dock", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
-               Ansi.EOL + "\n", Ansi.CYAN + "  Monitor" + Ansi.RESET + Ansi.EOL + "\n"]
-        if missing:
-            buf.append(Ansi.YELLOW + fit(f"    {missing}  (saved, not connected)", w)
-                       + Ansi.RESET + Ansi.EOL + "\n")
-        for i, m in enumerate(monitors):
-            selected = i == idx
-            row = ("  ▸ " if selected else "    ") + m.label
-            style = (Ansi.INV if (selected and stage == STAGE_MONITOR)
-                     else (Ansi.BOLD if selected else Ansi.DIM))
-            buf.append(style + fit(row, w) + Ansi.RESET + Ansi.EOL + "\n")
-        buf.append(Ansi.EOL + "\n")
-        span = band_thickness(mon.rect, cfg["edge"])       # the chosen monitor's own extent
-        if stage == STAGE_MONITOR:
-            # Dimmed summary, no inner colour codes: a RESET inside would cancel the dim.
-            # fit() to w, NOT w + len(Ansi.DIM): the dim code sits OUTSIDE the fitted text here, so
-            # padding for it would push every row past the terminal width.
-            buf += [Ansi.DIM + fit(f"  Edge     {cfg['edge']}", w) + Ansi.RESET + Ansi.EOL + "\n",
-                    Ansi.DIM + fit(f"  Size     {cfg['percent']}%  →  {self.dock.thickness_px()} px"
-                                   f"  (of {span} px)", w) + Ansi.RESET + Ansi.EOL + "\n",
-                    Ansi.DIM + fit(f"  Dock     {'on' if cfg['enabled'] else 'off'}", w)
-                    + Ansi.RESET + Ansi.EOL + "\n"]
-        else:
-            # Values are PLAIN text so fit() can truncate them safely on a narrow terminal; the
-            # selected edge is marked with brackets rather than inverse video, and the only colour
-            # wraps the whole value from outside. Emphasis is carried by the row cursor and label.
-            values = [
-                ("  ".join(f"[{e}]" if e == cfg["edge"] else f" {e} " for e in DOCK_EDGES), ""),
-                (f"{cfg['percent']} %   →  {self.dock.thickness_px()} px"
-                 f"   (of {span} px on {mon.device})", ""),
-                ("on — this edge is reserved" if cfg["enabled"] else "off — no space reserved",
-                 Ansi.GREEN if cfg["enabled"] else Ansi.DIM),
-            ]
-            for i, (label, (value, style)) in enumerate(zip(DOCK_FIELDS, values)):
-                selected = i == field
-                cursor = (Ansi.BOLD + " ▸ " + Ansi.RESET) if selected else "   "    # 3 cells
-                # The row is lit while picking a field; the VALUE is lit while editing it, so the
-                # screen always says which of the two ↑↓ is driving.
-                name = (Ansi.INV if selected and stage == STAGE_FORM else Ansi.CYAN) \
-                    + fit(label, 8) + Ansi.RESET
-                shown = fit(value, max(1, w - 11))
-                lit = Ansi.INV if (selected and stage == STAGE_EDIT) else style
-                buf.append(cursor + name + lit + shown + Ansi.RESET + Ansi.EOL + "\n")
-        if self.dock.note:
-            buf.append(Ansi.EOL + "\n" + Ansi.YELLOW + "  " + self.dock.note + Ansi.RESET + Ansi.EOL + "\n")
+               + Ansi.DIM + fit("· D dock   M status line   L launch", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
+               Ansi.EOL + "\n"]
+        buf += self._box("Dock", self._dock_rows(monitors, idx, stage, missing, field), w, dock_focus)
+        buf += self._box("Status line", self._mcp_rows(servers, server_idx, stage == STAGE_MCP),
+                         w, stage == STAGE_MCP)
+        buf += self._box("Launch", self._shell_rows(shell_idx, stage == STAGE_SHELL),
+                         w, stage == STAGE_SHELL)
         hint = (self.HINT_DOCK_EDIT[field] if stage == STAGE_EDIT
-                else {STAGE_MONITOR: self.HINT_DOCK_MONITOR, STAGE_FORM: self.HINT_DOCK_FORM}[stage])
+                else {STAGE_MONITOR: self.HINT_DOCK_MONITOR, STAGE_FORM: self.HINT_DOCK_FORM,
+                      STAGE_MCP: self.HINT_MCP, STAGE_SHELL: self.HINT_SHELL}[stage])
         buf.append(f"\x1b[{lines};1H" + Ansi.DIM + fit(hint, w) + Ansi.RESET + Ansi.EOL)
         self.out.write("".join(buf))
         self.out.flush()

@@ -26,6 +26,9 @@ jobs:
         run: python -m compileall -q claude_projects.py
       - name: Self-test
         run: python claude_projects.py --self-test
+      - name: Changelog has a section for this tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/release_notes.py "$env:GITHUB_REF_NAME"
       - name: Smoke test (--list against an empty home)
         run: |
           New-Item -ItemType Directory -Force -Path empty-home\projects, empty-home\sessions | Out-Null
@@ -47,7 +50,9 @@ jobs:
           pyinstaller --onefile --console --name ClaudeProjects --icon assets/icon.ico claude_projects.py
       - name: Verify the exe runs
         run: dist\ClaudeProjects.exe --self-test
+      - name: Release notes from CHANGELOG.md
+        run: python tools/release_notes.py "$env:GITHUB_REF_NAME" | Out-File -FilePath notes.md -Encoding utf8
       - name: Publish release asset
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" dist\ClaudeProjects.exe --generate-notes --title "$env:GITHUB_REF_NAME"
+        run: gh release create "$env:GITHUB_REF_NAME" dist\ClaudeProjects.exe --notes-file notes.md --title "$env:GITHUB_REF_NAME"
