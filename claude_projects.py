@@ -95,7 +95,7 @@ SHIFT_PRESSED = 0x0010                         # dwControlKeyState bit: Shift+Ta
 
 LIVE_MARK = "●"
 ELLIPSIS = "…"
-DETAIL_MIN_LINES = 6                           # detail pane keeps at least this many rows (excl. separators)
+DETAIL_MIN_LINES = 8                           # detail pane keeps at least this many rows (excl. separators)
 INSTALL_DIRNAME = "ClaudeProjects"             # under %LOCALAPPDATA%\Programs
 SHORTCUT_NAME = "Claude Projects.lnk"          # under the user's Start-menu Programs folder
 ICON_NAME = "icon.ico"
@@ -166,6 +166,7 @@ class Session:
     live: bool
     custom: bool = False          # title came from custom-title.json (user-chosen)
     prompt: str = ""              # first prompt from history.jsonl (shown in the detail pane)
+    created: float = 0.0          # transcript creation time — when the session was started
 
     @property
     def side_dir(self) -> Path:
@@ -197,6 +198,14 @@ class Project:
     @property
     def live(self) -> bool:
         return any(s.live for s in self.sessions)
+
+    @property
+    def live_count(self) -> int:
+        return sum(s.live for s in self.sessions)
+
+    @property
+    def total_size(self) -> int:
+        return sum(s.size for s in self.sessions)
 
     @property
     def exists(self) -> bool:
@@ -441,7 +450,8 @@ class Store:
                 sid, st = t.stem, t.stat()
                 custom = self.custom_title(enc_dir, sid)
                 title = custom or titles.get(sid) or "(no prompt)"
-                proj.sessions.append(Session(sid, t, st.st_mtime, st.st_size, title, sid in live, bool(custom), titles.get(sid, "")))
+                proj.sessions.append(Session(sid, t, st.st_mtime, st.st_size, title, sid in live,
+                                             bool(custom), titles.get(sid, ""), st.st_ctime))
             projects.append(proj)
         projects.sort(key=lambda p: p.last_used, reverse=True)
         return projects
@@ -1350,18 +1360,35 @@ class Tui:
                 rows.append((fit(" " + label if i == 0 else "", DETAIL_LABEL_W), style, line))
 
         if self.project is None:
-            field("Name", item.display + (f"   (folder: {item.name})" if item.alias else ""), Ansi.BOLD)
-            field("Path", item.cwd or "(unknown path)", "" if item.exists else Ansi.RED)
-            field("Sessions", f"{len(item.sessions)}   Last used  {fmt_time(item.last_used)}"
-                              f"   Memory  {'yes' if item.has_memory else 'no'}")
+            field("Name", item.display, Ansi.BOLD)
+            if item.alias:
+                field("Folder", item.name)                  # the real folder behind a display alias
+            field("Path", item.cwd or "(unknown — no transcript carries a cwd)",
+                  "" if item.exists else Ansi.RED)
+            if item.cwd and not item.exists:
+                field("", "the folder no longer exists; opening a session here would fail", Ansi.RED)
+            field("Sessions", f"{len(item.sessions)}"
+                              + (f"   Running  {item.live_count}" if item.live_count else "")
+                              + (f"   Size  {fmt_size(item.total_size)}" if item.sessions else ""))
+            field("Last used", fmt_time(item.last_used))
+            field("Memory", ("yes — memory/ is kept here and Del would delete it with the project"
+                             if item.has_memory else "no"),
+                  Ansi.YELLOW if item.has_memory else Ansi.DIM)
             field("Dir", item.enc_dir.name, Ansi.DIM)
         else:
             field("Title", item.title, Ansi.BOLD)
-            if item.custom and item.prompt:
-                field("Prompt", item.prompt)
+            field("Named", "yes — set here or by /rename, and shown in /resume" if item.custom
+                           else "no — the title above is the session's first prompt",
+                  "" if item.custom else Ansi.DIM)
+            if item.prompt and item.prompt != item.title:
+                field("Prompt", item.prompt)                # the first prompt, when a name replaced it
             field("Id", item.sid)
-            field("Modified", f"{fmt_time(item.mtime)}   Size  {fmt_size(item.size)}"
-                              + (f"   State  {LIVE_MARK} running" if item.live else ""))
+            field("Started", fmt_time(item.created))
+            field("Modified", fmt_time(item.mtime))
+            field("Size", fmt_size(item.size))
+            field("State", f"{LIVE_MARK} running — Del is refused while it is" if item.live else "idle",
+                  Ansi.GREEN if item.live else Ansi.DIM)
+            field("Project", self.project.cwd or self.project.enc_dir.name, Ansi.DIM)
             field("File", str(item.path), Ansi.DIM)
         return rows
 
@@ -1885,10 +1912,19 @@ def install() -> None:
 def uninstall() -> None:
     target_dir, link = install_paths()
     link.unlink(missing_ok=True)
-    if target_dir.exists() and not getattr(sys, "frozen", False):
-        shutil.rmtree(target_dir, ignore_errors=True)
-    elif target_dir.exists():
-        print(f"left in place (it is running): {target_dir}")
+    running = Path(sys.executable).resolve()
+    if target_dir.exists():
+        # Only the copy we are RUNNING FROM has to stay; a build run from elsewhere can clean up
+        # fully. Keying this on `frozen` alone left the installed copy behind for good.
+        if running.is_relative_to(target_dir):
+            print(f"left in place (running from it): {target_dir}")
+        else:
+            try:
+                shutil.rmtree(target_dir)                   # never ignore_errors: a locked exe means
+                print(f"removed: {target_dir}")             # an open window, and saying "removed"
+            except OSError as exc:                          # would be a lie the user acts on
+                print(f"could not remove {target_dir}: {exc}")
+                print("A manager window is probably still open from it — close it and re-run.")
     print(f"removed: {link}")
 
 
@@ -2022,6 +2058,16 @@ def self_test() -> None:
         assert "🤖 chrome, ghost " + BAD_MARK in line(), line()
         store.save_status_cfg({"mcp": []})
         assert "🤖" not in line(), line()
+        # the detail box reports every fact it has about the highlighted row
+        proj = store.scan()[0]
+        tui = Tui(store)
+        tui.projects, tui.cursor = [proj], 0
+        # continuation rows carry an empty label, so only the named ones are compared
+        labels = lambda: [l for l in (strip_ansi(lbl).strip() for lbl, _, _ in tui.detail_lines(70)) if l]
+        assert labels()[:6] == ["Name", "Path", "Sessions", "Last used", "Memory", "Dir"], labels()
+        tui.project = proj
+        assert labels() == ["Title", "Named", "Prompt", "Id", "Started", "Modified", "Size",
+                            "State", "Project", "File"], labels()   # a renamed session keeps its prompt
         assert Tui(store).handle("") is True                  # idle tick is not a command
         (home / RATE_LIMITS_CACHE).write_text(json.dumps(
             {"five_hour": {"used_percentage": 0, "resets_at": int(time.time()) + 3600}}), encoding="utf-8")
