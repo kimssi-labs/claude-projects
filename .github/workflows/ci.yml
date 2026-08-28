@@ -44,7 +44,7 @@ jobs:
       - name: Build single-file exe
         run: |
           pip install pyinstaller
-          pyinstaller --onefile --console --name ClaudeProjects claude_projects.py
+          pyinstaller --onefile --console --name ClaudeProjects --icon assets/icon.ico claude_projects.py
       - name: Verify the exe runs
         run: dist\ClaudeProjects.exe --self-test
       - name: Publish release asset
