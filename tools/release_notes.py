@@ -28,6 +28,9 @@ def section(text: str, tag: str) -> str | None:
 
 
 def main() -> None:
+    # The notes contain box glyphs and arrows; a Windows runner's stdout defaults to cp1252 and
+    # would raise UnicodeEncodeError instead of printing them.
+    sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("tag", help="release tag, e.g. v1.3.0")
     ap.add_argument("--changelog", type=Path, default=CHANGELOG)
