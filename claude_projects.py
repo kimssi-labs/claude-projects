@@ -96,6 +96,9 @@ SHIFT_PRESSED = 0x0010                         # dwControlKeyState bit: Shift+Ta
 LIVE_MARK = "●"
 ELLIPSIS = "…"
 DETAIL_MIN_LINES = 6                           # detail pane keeps at least this many rows (excl. separators)
+INSTALL_DIRNAME = "ClaudeProjects"             # under %LOCALAPPDATA%\Programs
+SHORTCUT_NAME = "Claude Projects.lnk"          # under the user's Start-menu Programs folder
+ICON_NAME = "icon.ico"
 LIST_BOX_CHROME = 3                            # top border + column header + bottom border
 DETAIL_BOX_CHROME = 2                          # top + bottom border
 BOX_SIDE_COLS = 4                              # '│ ' + text + ' │'
@@ -1830,6 +1833,65 @@ class Tui:
                 self.status = "Session deleted."
 
 
+# ----------------------------------------------------------------------------- install
+def install_paths() -> tuple[Path, Path]:
+    """(install dir, Start-menu shortcut)."""
+    return (Path(os.environ["LOCALAPPDATA"]) / "Programs" / INSTALL_DIRNAME,
+            Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / SHORTCUT_NAME)
+
+
+def create_shortcut(link: Path, target: str, arguments: str = "", icon: str = "",
+                    workdir: str = "") -> None:
+    """Write a .lnk through WScript.Shell — the one shortcut API every Windows has, and the reason
+    this shells out to PowerShell instead of taking a dependency."""
+    script = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({ps_quote(str(link))});"
+              f"$s.TargetPath={ps_quote(target)};$s.Arguments={ps_quote(arguments)};"
+              f"$s.WorkingDirectory={ps_quote(workdir or str(Path(target).parent))};"
+              + (f"$s.IconLocation={ps_quote(icon)};" if icon else "")
+              + f"$s.Description={ps_quote(APP_TITLE)};$s.Save()")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([PS_EXE, "-NoProfile", "-NonInteractive", "-Command", script], check=True,
+                   stdout=subprocess.DEVNULL)
+
+
+def install() -> None:
+    """Copy the program somewhere stable and add a Start-menu entry.
+
+    Windows 11 offers no "Pin to taskbar" verb on a bare .exe, and the manager runs inside Windows
+    Terminal, so the running window's taskbar button belongs to Terminal — pinning it would pin
+    Terminal. A Start-menu entry is the supported route: Start, right-click the entry, pin."""
+    target_dir, link = install_paths()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    frozen = getattr(sys, "frozen", False)
+    source = Path(sys.executable if frozen else __file__).resolve()
+    icon = ""
+    if frozen:
+        exe = target_dir / source.name
+        if source != exe:
+            shutil.copy2(source, exe)
+        target, arguments = str(exe), ""
+    else:
+        # Running from a checkout: point the shortcut at this interpreter and this file, and use the
+        # repo's icon so the entry still looks like the app.
+        target, arguments = sys.executable, f'"{source}"'
+        repo_icon = source.parent / "assets" / ICON_NAME
+        icon = str(repo_icon) if repo_icon.exists() else ""
+    create_shortcut(link, target, arguments, icon, str(target_dir))
+    print(f"installed: {target}")
+    print(f"start menu: {link}")
+    print("To pin: open Start, find 'Claude Projects', right-click it and choose Pin to taskbar.")
+
+
+def uninstall() -> None:
+    target_dir, link = install_paths()
+    link.unlink(missing_ok=True)
+    if target_dir.exists() and not getattr(sys, "frozen", False):
+        shutil.rmtree(target_dir, ignore_errors=True)
+    elif target_dir.exists():
+        print(f"left in place (it is running): {target_dir}")
+    print(f"removed: {link}")
+
+
 # ----------------------------------------------------------------------------- CLI
 def print_list(store: Store) -> None:
     for i, p in enumerate(store.scan(), 1):
@@ -1897,6 +1959,10 @@ def self_test() -> None:
         bypass = ps_decode(Store.launch_cmd(cwd, "데모", claude_args=("--dangerously-skip-permissions",))[-1])
         assert bypass == "& 'claude' '--dangerously-skip-permissions'", bypass
         assert ps_quote("it's") == "'it''s'"
+        # install paths are derived, never typed in twice
+        target_dir, link = install_paths()
+        assert target_dir.name == INSTALL_DIRNAME and link.name == SHORTCUT_NAME
+        assert link.parent.name == "Programs"
 
         store.rename_project(projects[0], "데모")
         assert store.scan()[0].display == "데모"
@@ -2061,10 +2127,17 @@ def main() -> None:
     ap.add_argument("--home", type=Path, default=CLAUDE_HOME, help="Claude home (default ~/.claude)")
     ap.add_argument("--list", action="store_true", help="print the project table and exit")
     ap.add_argument("--self-test", action="store_true", help="run the data-layer self-check")
+    ap.add_argument("--install", action="store_true",
+                    help="add a Start-menu entry (from which Windows can pin it to the taskbar)")
+    ap.add_argument("--uninstall", action="store_true", help="remove that Start-menu entry")
     ap.add_argument("--claude-arg", action="append", default=[], metavar="ARG",
                     help="extra option for every claude launched from the manager; use --claude-arg=--flag form (repeatable)")
     a = ap.parse_args()
-    if a.self_test:
+    if a.install:
+        install()
+    elif a.uninstall:
+        uninstall()
+    elif a.self_test:
         self_test()
     elif a.list:
         print_list(Store(a.home))

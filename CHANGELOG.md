@@ -3,6 +3,13 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.6.0
+
+- `--install` adds a Start-menu entry (copying the exe to `%LOCALAPPDATA%\Programs\ClaudeProjects`),
+  which is what makes *Pin to taskbar* available — Windows 11 offers that verb only from the Start
+  menu, and pinning the running window would pin Windows Terminal instead.
+- `--uninstall` removes the entry again.
+
 ## v1.5.0
 
 - The screen redraws itself every 15 s while idle, so the status line no longer shows values from
