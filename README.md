@@ -98,6 +98,10 @@ ponytail mode flag. On a machine without them the line is not drawn at all.
 
 ## Settings (`S`)
 
+One screen with a group box per section — **Dock**, **Status line**, **Launch**. The focused box is
+expanded and framed in colour; the other two collapse to a summary line. `D`, `M` and `L` move
+between them, `Esc` closes the screen.
+
 **Dock** places the manager as a reserved band on a monitor edge — pick the monitor, then the edge,
 size and on/off; `Enter` applies, `Esc` backs out.
 
@@ -144,6 +148,11 @@ home, `--claude-arg=` adds an option to every `claude` the manager launches (rep
 
 Windows, Python 3.10+ (only for running from source), and `claude` on `PATH`. Windows Terminal is
 used for tabs when present; otherwise sessions open in a plain console window.
+
+## Releases
+
+Every version's changes are listed in [CHANGELOG.md](CHANGELOG.md); CI publishes that section as the
+release notes and refuses to release a tag that has no section.
 
 ## License
 
