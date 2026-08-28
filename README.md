@@ -64,7 +64,10 @@ function claude {
 ```
 
 Then `claude --p` opens the manager, and anything before `--p` is passed on to every session it
-opens — `claude --dangerously-skip-permissions --p` opens sessions in that mode.
+opens — `claude --dangerously-skip-permissions --p` opens sessions in that mode. That wrapper is
+only a convenience: the mode is a setting (**Settings · Permissions**), and the manager always
+starts a session from the resolved `claude` executable with the flags appended, so a shell function
+of the same name cannot change what it launches.
 
 ## Keys
 

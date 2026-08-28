@@ -18,7 +18,7 @@ in a throwaway home; run it after any change.
 """
 from __future__ import annotations
 
-__version__ = "1.10.0"        # single source: the exe resource, pyproject and the tag are checked against it
+__version__ = "1.11.0"        # single source: the exe resource, pyproject and the tag are checked against it
 
 import argparse
 import base64
@@ -53,7 +53,7 @@ TRANSCRIPT_HEAD_LINES = 20                     # lines to scan for the "cwd" fie
 CUSTOM_TITLE_TYPE = "custom-title"
 
 WT_EXE = "wt.exe"
-CLAUDE_EXE = "claude"
+CLAUDE_EXE = "claude"                          # the name on PATH; resolved before use
 SESSIONS_WINDOW = "Claude"                     # wt window NAME: created on first use, reused (new tab) afterwards
 CURRENT_WINDOW = "0"                           # wt: the window this process is running in
 NEW_WINDOW = "new"                             # wt: always a brand-new window
@@ -61,6 +61,16 @@ WT_WINDOW_FLAG, WT_NEW_TAB = "-w", "nt"
 CREATE_NEW_CONSOLE = 0x00000010                # no Windows Terminal: open a plain console window
 WT_TITLE_FLAG, WT_DIR_FLAG = "--title", "-d"
 CLAUDE_RESUME_FLAG, CLAUDE_NAME_FLAG = "--resume", "--name"
+def claude_command(which=shutil.which) -> str:
+    """Full path of the claude executable, falling back to the bare name.
+
+    The session is started from a PowerShell host, and a `claude` FUNCTION in the user's profile
+    (the `claudex` wrapper this project documents, for one) outranks the executable there — the
+    manager's own flags would then be whatever that function decided to forward. Resolving the
+    path first makes `claude <flags>` mean exactly that. `which` is injectable for --self-test."""
+    return which(CLAUDE_EXE) or CLAUDE_EXE
+
+
 def powershell_exe(which=shutil.which) -> str:
     """Shell that hosts session tabs: PowerShell 7 when installed, else the built-in 5.1 that
     every Windows has. Returned by NAME, never as a full path — the MSIX pwsh lives under a
@@ -584,7 +594,7 @@ class Store:
         """Command that starts claude in `cwd` (resuming `sid`, forcing the display `name`), hosted
         in a PowerShell shell. With Windows Terminal it becomes a titled tab of `window`; without
         it, the shell is started directly and the caller opens a plain console window instead."""
-        claude = [CLAUDE_EXE, *claude_args]
+        claude = [claude_command(), *claude_args]
         if sid:
             claude += [CLAUDE_RESUME_FLAG, sid]
         if name:
@@ -2179,7 +2189,7 @@ def self_test() -> None:
         assert Store.launch_cmd(cwd, "데모", window=CURRENT_WINDOW)[:4] == [WT_EXE, "-w", "0", "nt"]
         assert Store.launch_cmd(cwd, "데모", window=NEW_WINDOW)[:4] == [WT_EXE, "-w", "new", "nt"]
         # session shell:each choice wraps the same claude invocation its own way
-        argv = [CLAUDE_EXE, CLAUDE_RESUME_FLAG, sid]
+        argv = [claude_command(), CLAUDE_RESUME_FLAG, sid]
         assert Store.shell_cmd(argv, SHELL_NONE) == argv
         assert Store.shell_cmd(argv, SHELL_CMD)[:2] == [CMD_EXE, "/k"]
         assert sid in Store.shell_cmd(argv, SHELL_CMD)[2]
@@ -2214,10 +2224,10 @@ def self_test() -> None:
             finally:
                 Store.has_windows_terminal = original
         inner = ps_decode(cmd[-1])
-        assert inner == f"& 'claude' '--resume' '{sid}' '--name' '새 제목'", inner
+        assert inner == f"& {ps_quote(claude_command())} '--resume' '{sid}' '--name' '새 제목'", inner
         assert CLAUDE_NAME_FLAG not in ps_decode(Store.launch_cmd(cwd, "데모")[-1])
         bypass = ps_decode(Store.launch_cmd(cwd, "데모", claude_args=("--dangerously-skip-permissions",))[-1])
-        assert bypass == "& 'claude' '--dangerously-skip-permissions'", bypass
+        assert bypass == f"& {ps_quote(claude_command())} '--dangerously-skip-permissions'", bypass
         assert ps_quote("it's") == "'it''s'"
         # install paths are derived, never typed in twice
         target_dir, link = install_paths()
@@ -2368,6 +2378,11 @@ def self_test() -> None:
         # PowerShell 7 when present, the always-installed 5.1 otherwise — both branches, by name
         assert powershell_exe(lambda _: r"C:\somewhere\pwsh.exe") == "pwsh.exe"
         assert powershell_exe(lambda _: None) == "powershell.exe"
+        # the launcher names the executable, so a `claude` shell function cannot intercept it
+        assert claude_command(lambda _: r"C:\bin\claude.EXE") == r"C:\bin\claude.EXE"
+        assert claude_command(lambda _: None) == CLAUDE_EXE            # not installed: bare name
+        launched = ps_decode(Store.launch_cmd(cwd, "데모", sid)[-1])
+        assert launched.startswith("& " + ps_quote(claude_command())), launched
 
         # absent monitor: fall back to primary, name what is missing, never rewrite the saved choice
         mon_a = Monitor(r"\\.\DISPLAY2", land, True)
