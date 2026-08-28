@@ -18,6 +18,8 @@ in a throwaway home; run it after any change.
 """
 from __future__ import annotations
 
+__version__ = "1.9.0"        # single source: the exe resource, pyproject and the tag are checked against it
+
 import argparse
 import base64
 import ctypes
@@ -2242,6 +2244,7 @@ def self_test() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--version", action="version", version=f"{APP_TITLE} {__version__}")
     ap.add_argument("--home", type=Path, default=CLAUDE_HOME, help="Claude home (default ~/.claude)")
     ap.add_argument("--list", action="store_true", help="print the project table and exit")
     ap.add_argument("--self-test", action="store_true", help="run the data-layer self-check")

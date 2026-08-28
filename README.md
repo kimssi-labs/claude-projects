@@ -172,7 +172,8 @@ claude_projects.py [--list] [--self-test] [--home <dir>] [--claude-arg=<option>]
 ```
 
 `--list` prints the project table and exits, `--self-test` runs the data-layer checks in a throwaway
-home, `--claude-arg=` adds an option to every `claude` the manager launches (repeatable).
+home, `--claude-arg=` adds an option to every `claude` the manager launches (repeatable), and
+`--version` prints the version — the same one stamped into the exe's Details tab.
 
 ## Requirements
 
