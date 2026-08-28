@@ -18,7 +18,7 @@ in a throwaway home; run it after any change.
 """
 from __future__ import annotations
 
-__version__ = "1.13.0"        # single source: the exe resource, pyproject and the tag are checked against it
+__version__ = "1.14.0"        # single source: the exe resource, pyproject and the tag are checked against it
 
 import argparse
 import base64
@@ -175,6 +175,8 @@ DOCK_PCT_MIN, DOCK_PCT_MAX, DOCK_PCT_DEFAULT = 5, 60, 20
 DOCK_FIELDS = ("Edge", "Size", "Dock")         # rows of the form, selected with ↑↓
 DOCK_FIELD_KEYS = ("edge", "percent", "enabled")          # the cfg key each row edits
 DOCK_MONITORS_KEY = "monitors"                 # per-device settings inside manager-dock.json
+DOCK_FLOOR_KEY = "floor"                       # measured minimum window size, per axis
+DOCK_AXES = {"left": "width", "right": "width", "top": "height", "bottom": "height"}
 DOCK_FIELD_EDGE, DOCK_FIELD_SIZE, DOCK_FIELD_DOCK = 0, 1, 2
 # Settings screen stages. Enter descends, Esc backs out; ↑↓ never means two things at once.
 # Tab order of the settings group boxes; the dock box is always entered at its monitor list.
@@ -539,6 +541,24 @@ class Store:
                 "device": device,
                 "edge": cfg.get("edge") if cfg.get("edge") in DOCK_EDGES else DOCK_DEFAULT_EDGE,
                 "percent": max(DOCK_PCT_MIN, min(DOCK_PCT_MAX, pct))}
+
+    def dock_floor(self, edge: str) -> int:
+        """Smallest band this terminal accepted along `edge`'s axis, 0 when never measured.
+
+        Windows Terminal will not shrink past a minimum that depends on its font, so below that
+        every percentage produces the same window — worth saying out loud rather than looking broken."""
+        floors = self.load_section(SECTION_DOCK).get(DOCK_FLOOR_KEY)
+        try:
+            return int(floors.get(DOCK_AXES[edge], 0)) if isinstance(floors, dict) else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def save_dock_floor(self, edge: str, pixels: int) -> None:
+        section = self.load_section(SECTION_DOCK)
+        floors = section.get(DOCK_FLOOR_KEY)
+        floors = dict(floors) if isinstance(floors, dict) else {}
+        floors[DOCK_AXES[edge]] = int(pixels)
+        self.save_section(SECTION_DOCK, {**section, DOCK_FLOOR_KEY: floors})
 
     def known_dock_devices(self) -> set[str]:
         """Monitors that have remembered settings — used to say "restored" instead of guessing."""
@@ -1000,6 +1020,11 @@ def edge_band(box: tuple[int, int, int, int], edge: str, thick: int) -> tuple[in
     return (right - thick, top, right, bottom)
 
 
+def floor_note(floor: int, asked: int) -> str:
+    """"the terminal will not go below N px", shown only while the setting asks for less."""
+    return f"   ! terminal floor {floor} px" if floor and asked and asked < floor else ""
+
+
 def band_thickness(box: tuple[int, int, int, int], edge: str) -> int:
     """How thick `box` is along `edge`'s own axis."""
     return box[3] - box[1] if edge in ("top", "bottom") else box[2] - box[0]
@@ -1249,6 +1274,7 @@ class Dock:
             band = edge_band(band, edge, got)
             painted = self._place(band)
             self.note = f"Terminal would not shrink below {got} px — reserved that instead."
+            self.store.save_dock_floor(edge, got)      # so the size row warns BEFORE applying
         # Reserve exactly what is PAINTED, so no sliver of reserved-but-empty desktop is left over.
         self.band = painted or band
         data.rc = RECT(*self.band)
@@ -1925,7 +1951,9 @@ class Tui:
         span = band_thickness(mon.rect, cfg["edge"])       # the chosen monitor's own extent
         if stage not in (STAGE_MONITOR, STAGE_FORM, STAGE_EDIT):
             return [(Ansi.DIM, f"{mon.device}   {cfg['edge']}   {cfg['percent']} %"
-                               f"   {'on' if cfg['enabled'] else 'off'}")]
+                               f"   {'on' if cfg['enabled'] else 'off'}"
+                               + floor_note(self.store.dock_floor(cfg["edge"]),
+                                            self.dock.thickness_px()))]
         known = self.store.known_dock_devices()
         rows: list[tuple[str, str]] = [(Ansi.CYAN, "Monitor")]
         if missing:
@@ -1942,7 +1970,9 @@ class Tui:
         rows.append(("", ""))
         values = [
             ("  ".join(f"[{e}]" if e == cfg["edge"] else f" {e} " for e in DOCK_EDGES), ""),
-            (f"{cfg['percent']} %   →  {self.dock.thickness_px()} px   (of {span} px on {mon.device})", ""),
+            (f"{cfg['percent']} %   →  {self.dock.thickness_px()} px   (of {span} px on {mon.device})"
+             + floor_note(self.store.dock_floor(cfg["edge"]), self.dock.thickness_px()),
+             Ansi.YELLOW if 0 < self.dock.thickness_px() < self.store.dock_floor(cfg["edge"]) else ""),
             ("on — this edge is reserved" if cfg["enabled"] else "off — no space reserved",
              Ansi.GREEN if cfg["enabled"] else Ansi.DIM),
         ]
@@ -2528,6 +2558,12 @@ def self_test() -> None:
         assert (one["edge"], one["percent"], one["enabled"]) == ("left", 30, True), one
         assert (two["edge"], two["percent"], two["enabled"]) == ("top", 15, False), two
         assert store.load_dock()["device"] == r"\\.\DISPLAY2"      # last one saved
+        # the terminal's own minimum is remembered per axis, and warned about when asked for less
+        assert store.dock_floor("left") == 0 and floor_note(0, 100) == ""
+        store.save_dock_floor("left", 580)
+        assert store.dock_floor("left") == 580 and store.dock_floor("right") == 580
+        assert store.dock_floor("top") == 0                    # the other axis is untouched
+        assert "580" in floor_note(580, 384) and floor_note(580, 768) == ""
         assert store.known_dock_devices() >= {r"\\.\DISPLAY1", r"\\.\DISPLAY2"}   # plus any saved earlier in this test
         unknown = store.load_dock(r"\\.\DISPLAY9")                 # never docked there
         assert unknown["edge"] == "top" and unknown["percent"] == 15  # falls back to last used
