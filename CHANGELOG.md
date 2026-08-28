@@ -3,6 +3,12 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.5.0
+
+- The screen redraws itself every 15 s while idle, so the status line no longer shows values from
+  whenever a key was last pressed — a rolled 5 h or 7 d window, and sessions that started or ended
+  meanwhile, now appear on their own.
+
 ## v1.4.0
 
 - `Tab` / `Shift+Tab` move between the settings group boxes; the `D` / `M` / `L` letter shortcuts are
