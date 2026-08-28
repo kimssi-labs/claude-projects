@@ -89,11 +89,14 @@ ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 STD_OUTPUT_HANDLE = -11
 STD_INPUT_HANDLE = -10
 KEY_EVENT = 0x0001
+SHIFT_PRESSED = 0x0010                         # dwControlKeyState bit: Shift+Tab vs Tab
 
 LIVE_MARK = "●"
 ELLIPSIS = "…"
 DETAIL_MIN_LINES = 6                           # detail pane keeps at least this many rows (excl. separators)
-DETAIL_SEPARATOR_LINES = 2                     # blank row + rule line between list and pane
+LIST_BOX_CHROME = 3                            # top border + column header + bottom border
+DETAIL_BOX_CHROME = 2                          # top + bottom border
+BOX_SIDE_COLS = 4                              # '│ ' + text + ' │'
 DETAIL_LABEL_W = 11                            # label column of the detail viewer (incl. leading space)
 # Status line (moved off the Claude statusline 2026-08-27): same sources, same glyphs.
 RATE_LIMITS_CACHE = Path("cache") / "rate-limits.json"
@@ -131,8 +134,10 @@ DOCK_FIELDS = ("Edge", "Size", "Dock")         # rows of the form, selected with
 DOCK_FIELD_KEYS = ("edge", "percent", "enabled")          # the cfg key each row edits
 DOCK_FIELD_EDGE, DOCK_FIELD_SIZE, DOCK_FIELD_DOCK = 0, 1, 2
 # Settings screen stages. Enter descends, Esc backs out; ↑↓ never means two things at once.
+# Tab order of the settings group boxes; the dock box is always entered at its monitor list.
 STAGE_MONITOR, STAGE_FORM, STAGE_EDIT, STAGE_MCP, STAGE_SHELL = ("monitor", "form", "edit",
                                                                 "mcp", "shell")
+SETTINGS_SECTIONS = (STAGE_MONITOR, STAGE_MCP, STAGE_SHELL)
 ABM_NEW, ABM_REMOVE, ABM_QUERYPOS, ABM_SETPOS = 0, 1, 2, 3
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
@@ -543,6 +548,13 @@ def hangul_to_keys(ch: str) -> list[str]:
 
 
 # ----------------------------------------------------------------------------- text helpers
+def next_section(stage: str, step: int) -> str:
+    """Neighbouring settings box in Tab order. Any dock stage counts as the dock box, so Tab
+    from a field list lands on the next box rather than nowhere."""
+    current = stage if stage in SETTINGS_SECTIONS else STAGE_MONITOR
+    return SETTINGS_SECTIONS[(SETTINGS_SECTIONS.index(current) + step) % len(SETTINGS_SECTIONS)]
+
+
 def ps_quote(arg: str) -> str:
     return "'" + arg.replace("'", "''") + "'"
 
@@ -556,6 +568,14 @@ def ps_encode(argv: list[str]) -> str:
 def ps_decode(payload: str) -> str:
     return base64.b64decode(payload).decode("utf-16-le")
 
+
+
+ANSI_RE = re.compile(chr(27) + r"\[[0-9;]*m")
+
+
+def strip_ansi(s: str) -> str:
+    """Text without its colour codes — what the terminal actually shows, for width maths."""
+    return ANSI_RE.sub("", s)
 
 
 def cell_width(s: str) -> int:
@@ -631,9 +651,10 @@ class InputRecord(ctypes.Structure):
 class Key:
     UP, DOWN, LEFT, RIGHT = "UP", "DOWN", "LEFT", "RIGHT"
     PGUP, PGDN, HOME, END, DEL, F2, F5 = "PGUP", "PGDN", "HOME", "END", "DEL", "F2", "F5"
+    TAB, BACKTAB = "TAB", "BACKTAB"
     ENTER, ESC, BACKSPACE = "\r", "\x1b", "\x08"
     # Virtual-key codes are the PHYSICAL key, so these work whatever the IME language is.
-    _VK = {0x08: BACKSPACE, 0x0D: ENTER, 0x1B: ESC, 0x21: PGUP, 0x22: PGDN, 0x23: END, 0x24: HOME,
+    _VK = {0x08: BACKSPACE, 0x09: TAB, 0x0D: ENTER, 0x1B: ESC, 0x21: PGUP, 0x22: PGDN, 0x23: END, 0x24: HOME,
            0x25: LEFT, 0x26: UP, 0x27: RIGHT, 0x28: DOWN, 0x2E: DEL, 0x71: F2, 0x74: F5}
     _VK_LETTER_FIRST, _VK_LETTER_LAST = 0x41, 0x5A          # 'A'..'Z'
     _VK_PROCESSKEY = 0xE5                                   # "the IME is handling this keystroke"
@@ -641,12 +662,13 @@ class Key:
     _acted = 0                         # keystrokes already acted on that the IME has yet to commit
 
     @classmethod
-    def decode(cls, vk: int, ch: str, translate: bool = True) -> list[str]:
+    def decode(cls, vk: int, ch: str, translate: bool = True, state: int = 0) -> list[str]:
         """Keys produced by one key-down event. Empty list = ignore (modifier, IME processing…).
         `translate` maps Hangul to its Dubeolsik Latin key position (command mode); text prompts
         pass the character through unchanged."""
         if vk in cls._VK:
-            return [cls._VK[vk]]
+            key = cls._VK[vk]
+            return [cls.BACKTAB if key == cls.TAB and state & SHIFT_PRESSED else key]
         if ch and ch >= " ":
             if translate:
                 keys = hangul_to_keys(ch)
@@ -658,7 +680,7 @@ class Key:
         return []
 
     @classmethod
-    def feed(cls, vk: int, ch: str, scan: int = 0, translate: bool = True) -> list[str]:
+    def feed(cls, vk: int, ch: str, scan: int = 0, translate: bool = True, state: int = 0) -> list[str]:
         """Keys to act on for one key-down event, in command mode acting DURING IME composition.
 
         With a Korean IME the keystroke first arrives as VK_PROCESSKEY (no character) and the text
@@ -667,12 +689,12 @@ class Key:
         against `_acted` so the same keystroke never runs twice."""
         if not translate:
             cls._acted = 0
-            return cls.decode(vk, ch, False)
+            return cls.decode(vk, ch, False, state)
         if vk == cls._VK_PROCESSKEY:
             keys = [SCAN_TO_KEY[scan]] if scan in SCAN_TO_KEY else []
             cls._acted += len(keys)
             return keys
-        keys = cls.decode(vk, ch, True)
+        keys = cls.decode(vk, ch, True, state)
         if ch and hangul_to_keys(ch):                       # IME committed what we already handled
             drop = min(cls._acted, len(keys))
             cls._acted -= drop
@@ -699,7 +721,8 @@ class Key:
             if record.EventType != KEY_EVENT or not record.Event.KeyEvent.bKeyDown:
                 continue
             event = record.Event.KeyEvent
-            keys = cls.feed(event.wVirtualKeyCode, event.UnicodeChar, event.wVirtualScanCode, translate)
+            keys = cls.feed(event.wVirtualKeyCode, event.UnicodeChar, event.wVirtualScanCode,
+                            translate, event.dwControlKeyState)
             if keys:
                 cls._pending.extend(keys[1:])
                 return keys[0]
@@ -1126,10 +1149,10 @@ class Tui:
     HINT_PROJECTS = "↑↓ move  Enter/→ sessions  T open here  O open new window  F2 alias  Del delete  S settings  F5 refresh  Q quit"
     HINT_SESSIONS = "↑↓ move  Enter resume  T resume here  O resume new window  F2 rename  Del delete  S settings  ←/Esc back  Q quit"
     # Two stages, so no arrow key ever means two things at once.
-    HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  M status line  L launch  Esc cancel"
-    HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  D dock  L launch  Esc close"
-    HINT_SHELL = "↑↓ shell  Space/Enter select  D dock  M status line  Esc close"
-    HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  M status line  L launch  Esc back"
+    HINT_DOCK_MONITOR = "↑↓ monitor  Enter/→ apply & settings  Tab next box  Esc cancel"
+    HINT_MCP = "↑↓ server  Space/Enter show or hide  A all  Tab next box  Esc close"
+    HINT_SHELL = "↑↓ shell  Space/Enter select  Tab next box  Esc close"
+    HINT_DOCK_FORM = "↑↓ field  Enter/→ edit  Tab next box  Esc back"
     # Per field, because each one uses the axis its own display suggests.
     HINT_DOCK_EDIT = ("←→ edge  Enter apply & save  Esc cancel edit",
                       "↑↓ size  0-9 type %  Enter apply & save  Esc cancel edit",
@@ -1216,13 +1239,16 @@ class Tui:
             self.top = self.cursor - height + 1
 
     def layout(self) -> tuple[int, int]:
-        """(list rows, detail rows). The list shrinks to its content so the detail pane gets the rest;
-        a long list keeps DETAIL_MIN_LINES for the pane; a tiny terminal drops the pane."""
-        avail = shutil.get_terminal_size().lines - (4 if self.status_visible else 3)   # status row only when shown
-        if avail < DETAIL_MIN_LINES + DETAIL_SEPARATOR_LINES + 3:
+        """(list rows, detail rows) for the two group boxes. The list shrinks to its content so the
+        detail box gets the rest; a long list still leaves DETAIL_MIN_LINES for it, and a terminal
+        too short for both drops the detail box (its frame included)."""
+        screen = shutil.get_terminal_size().lines - (2 if self.status_visible else 1)   # status + hint
+        avail = screen - LIST_BOX_CHROME
+        if avail < DETAIL_MIN_LINES + DETAIL_BOX_CHROME + 3:
             return max(1, avail), 0
-        list_h = max(1, min(max(len(self.rows()), 1), avail - DETAIL_SEPARATOR_LINES - DETAIL_MIN_LINES))
-        return list_h, avail - list_h - DETAIL_SEPARATOR_LINES
+        avail -= DETAIL_BOX_CHROME
+        list_h = max(1, min(max(len(self.rows()), 1), avail - DETAIL_MIN_LINES))
+        return list_h, avail - list_h
 
     def list_height(self) -> int:
         return self.layout()[0]
@@ -1233,32 +1259,41 @@ class Tui:
 
     # -- render ----------------------------------------------------------------
     def render(self) -> None:
+        """The list and the detail viewer, each in its own group box — the same frame the settings
+        screen uses, so one screen reads like the other. The list box is titled with what it holds
+        (and where), the detail box with what the cursor is on."""
         cols, lines = shutil.get_terminal_size()
         w = cols - 1
-        buf = [Ansi.HOME]
-        if self.project:
-            head = f" Sessions · {self.project.display}  {Ansi.DIM}{self.project.cwd or self.project.enc_dir.name}"
-        else:
-            head = f" Projects · {len(self.projects)}  {Ansi.DIM}{self.store.projects_dir}"
-        if self.store.claude_args:
-            head += "  ⚡ " + " ".join(self.store.claude_args)
-        buf.append(Ansi.BOLD + fit(head, w + len(Ansi.DIM)) + Ansi.RESET + Ansi.EOL + "\n")
-        buf.append(Ansi.INV + (self.session_row(None, w) if self.project else self.project_row(None, w)) + Ansi.RESET + Ansi.EOL + "\n")
+        inner = max(10, w - BOX_SIDE_COLS)
         rows, (height, detail_h) = self.rows(), self.layout()
+        if self.project:
+            title = f"Sessions · {self.project.display}"
+            where = self.project.cwd or self.project.enc_dir.name
+        else:
+            title = f"Projects · {len(self.projects)}"
+            where = str(self.store.projects_dir)
+        if self.store.claude_args:
+            where += "   ⚡ " + " ".join(self.store.claude_args)
+        buf = [Ansi.HOME]
+        buf += self._box_top(title, where, w)
+        buf += self._box_row(Ansi.INV + (self.session_row(None, inner) if self.project
+                                         else self.project_row(None, inner)), w)
         for i in range(self.top, self.top + height):
             if i < len(rows):
-                text = self.session_row(rows[i], w) if self.project else self.project_row(rows[i], w)
-                buf.append((Ansi.INV if i == self.cursor else "") + text + Ansi.RESET + Ansi.EOL + "\n")
+                text = self.session_row(rows[i], inner) if self.project else self.project_row(rows[i], inner)
+                buf += self._box_row((Ansi.INV if i == self.cursor else "") + text, w)
             else:
-                buf.append(Ansi.EOL + "\n")
+                buf += self._box_row("", w)
+        buf += self._box_bottom(w)
         if detail_h:
-            detail = self.detail_lines(w)[:detail_h]
-            rule = f"{RULE_CHAR * 3} {'Session' if self.project else 'Project'} "
-            buf.append(Ansi.EOL + "\n")                               # blank row keeps the groups apart
-            buf.append(Ansi.DIM + rule + RULE_CHAR * (w - cell_width(rule)) + Ansi.RESET + Ansi.EOL + "\n")
-            buf.extend(Ansi.CYAN + label + Ansi.RESET + style + fit(text, w - cell_width(label)) + Ansi.RESET + Ansi.EOL + "\n"
-                       for label, style, text in detail)
-            buf.extend(Ansi.EOL + "\n" for _ in range(detail_h - len(detail)))
+            detail = self.detail_lines(inner)[:detail_h]
+            buf += self._box_top("Session" if self.project else "Project", "", w)
+            buf += [r for label, style, text in detail
+                    for r in self._box_row(Ansi.CYAN + label + Ansi.RESET + style
+                                           + fit(text, inner - cell_width(label)), w)]
+            for _ in range(detail_h - len(detail)):
+                buf += self._box_row("", w)
+            buf += self._box_bottom(w)
         status = self.status_line(w)
         self.status_visible = bool(status)
         if status:
@@ -1279,14 +1314,14 @@ class Tui:
             cell = lambda icon, label, body: (f"{icon} {Ansi.DIM}{label}{Ansi.RESET} " if with_labels
                                               else f"{icon} ") + body
             text = (Ansi.DIM + " | " + Ansi.RESET).join(cell(*item) for item in items)
-            plain = re.sub(chr(27) + r"\[[0-9;]*m", "", text)
+            plain = strip_ansi(text)
             return text, cell_width(plain)
 
         text, width = render(True)
         if width + 1 > w:                       # names dropped before the values are lost
             text, width = render(False)
         if width + 1 > w:
-            return " " + fit(re.sub(chr(27) + r"\[[0-9;]*m", "", text), w - 1)
+            return " " + fit(strip_ansi(text), w - 1)
         return " " + text + " " * (w - width - 1)
 
     def detail_lines(self, w: int) -> list[tuple[str, str, str]]:
@@ -1399,6 +1434,11 @@ class Tui:
             self._render_settings(monitors, idx, stage, missing, field,
                                   servers, server_idx, shell_idx)
             k = Key.read()
+            # Tab is the ONLY way between boxes. While editing a value it would abandon the
+            # edit, so it is ignored there.
+            if k in (Key.TAB, Key.BACKTAB) and stage != STAGE_EDIT:
+                stage = next_section(stage, 1 if k == Key.TAB else -1)
+                continue
             if stage == STAGE_SHELL:
                 if k == Key.ESC:
                     stage = STAGE_MONITOR
@@ -1406,17 +1446,9 @@ class Tui:
                     shell_idx = (shell_idx + (1 if k == Key.DOWN else -1)) % len(SHELL_CHOICES)
                 elif k in (" ", Key.ENTER):
                     self.store.save_launch_cfg({"shell": SHELL_CHOICES[shell_idx][0]})
-                elif k.lower() == "m":
-                    stage = STAGE_MCP
-                elif k.lower() == "d":
-                    stage = STAGE_MONITOR
                 continue
             if stage == STAGE_MCP:
                 if k == Key.ESC:
-                    stage = STAGE_MONITOR
-                elif k.lower() == "l":
-                    stage = STAGE_SHELL
-                elif k.lower() == "d":
                     stage = STAGE_MONITOR
                 elif k in (Key.UP, Key.DOWN) and servers:
                     server_idx = (server_idx + (1 if k == Key.DOWN else -1)) % len(servers)
@@ -1424,12 +1456,6 @@ class Tui:
                     self._toggle_mcp(servers, servers[server_idx])
                 elif k.lower() == "a" and servers:
                     self.store.save_status_cfg({"mcp": None})    # None = report every server
-                continue
-            if k.lower() == "m" and stage != STAGE_EDIT:
-                stage = STAGE_MCP
-                continue
-            if k.lower() == "l" and stage != STAGE_EDIT:
-                stage = STAGE_SHELL
                 continue
             if k == Key.ESC:
                 if stage == STAGE_EDIT:                  # undo just this field
@@ -1528,6 +1554,28 @@ class Tui:
             selected.append(name)
         self.store.save_status_cfg({"mcp": [n for n in servers if n in selected]})
 
+    # -- group-box frame -------------------------------------------------------
+    def _box_top(self, title: str, note: str, w: int) -> list[str]:
+        """Top border carrying the box title, plus a dim note (path, forwarded options) after it."""
+        head = f"{BOX_TL}{BOX_H} {title} {BOX_H} " if note else f"{BOX_TL}{BOX_H} {title} "
+        rest = w - cell_width(head) - 1
+        if note and rest > 12:
+            shown = fit(note, rest - 2).rstrip()
+            return [Ansi.CYAN + head + Ansi.RESET + Ansi.DIM + shown + Ansi.RESET + Ansi.CYAN
+                    + " " + BOX_H * max(0, rest - cell_width(shown) - 1) + BOX_TR + Ansi.RESET
+                    + Ansi.EOL + "\n"]
+        return [Ansi.CYAN + head + BOX_H * max(0, rest) + BOX_TR + Ansi.RESET + Ansi.EOL + "\n"]
+
+    def _box_row(self, body: str, w: int) -> list[str]:
+        """One framed row. `body` carries its own styles, so it is measured with the codes stripped
+        and padded here — otherwise a blank or short row collapses the frame to `│  │`."""
+        pad = " " * max(0, w - BOX_SIDE_COLS - cell_width(strip_ansi(body)))
+        return [Ansi.CYAN + BOX_V + Ansi.RESET + " " + body + Ansi.RESET + pad + " "
+                + Ansi.CYAN + BOX_V + Ansi.RESET + Ansi.EOL + "\n"]
+
+    def _box_bottom(self, w: int) -> list[str]:
+        return [Ansi.CYAN + BOX_BL + BOX_H * max(0, w - 2) + BOX_BR + Ansi.RESET + Ansi.EOL + "\n"]
+
     # -- settings rendering ----------------------------------------------------
     def _box(self, title: str, rows: list[tuple[str, str]], w: int, focused: bool) -> list[str]:
         """One group box. `rows` are (style, plain text) so the frame can pad by display width —
@@ -1625,7 +1673,7 @@ class Tui:
         dock_focus = stage in (STAGE_MONITOR, STAGE_FORM, STAGE_EDIT)
         buf = [Ansi.CLEAR,
                Ansi.BOLD + fit(" Settings", 10) + Ansi.RESET
-               + Ansi.DIM + fit("· D dock   M status line   L launch", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
+               + Ansi.DIM + fit("· Tab moves between boxes", w - 10) + Ansi.RESET + Ansi.EOL + "\n",
                Ansi.EOL + "\n"]
         buf += self._box("Dock", self._dock_rows(monitors, idx, stage, missing, field), w, dock_focus)
         buf += self._box("Status line", self._mcp_rows(servers, server_idx, stage == STAGE_MCP),
@@ -1853,6 +1901,13 @@ def self_test() -> None:
         assert Key.decode(0x51, "q") == ["q"] and Key.decode(0x51, "\x00") == ["q"]      # IME idle / composing
         assert Key.decode(0, "ㅂ") == ["q"] and Key.decode(0, "요") == ["d", "y"]         # IME committed Hangul
         assert Key.decode(0, "한", translate=False) == ["한"] and Key.decode(0x10, "\x00") == []
+        assert Key.decode(0x09, "\t") == [Key.TAB]
+        assert Key.decode(0x09, "\t", state=SHIFT_PRESSED) == [Key.BACKTAB]
+        assert Key.feed(0x09, "\t", state=SHIFT_PRESSED) == [Key.BACKTAB]
+        assert next_section(STAGE_MONITOR, 1) == STAGE_MCP
+        assert next_section(STAGE_SHELL, 1) == STAGE_MONITOR
+        assert next_section(STAGE_MONITOR, -1) == STAGE_SHELL
+        assert next_section(STAGE_EDIT, 1) == STAGE_MCP        # any dock stage = the dock box
         # IME composing: act on the scan code at once, then swallow the commit that follows
         Key._acted = 0
         assert Key.feed(0xE5, "\x00", 0x18) == ["o"]                      # ㅐ key, still composing
@@ -1871,7 +1926,7 @@ def self_test() -> None:
         (home / MCP_CACHE).write_text(json.dumps({"servers": {"wiki": {"ok": True}}}), encoding="utf-8")
         (home / OUTLOOK_CACHE).write_text(json.dumps({"servers": {"Outlook": {"ok": False}}}), encoding="utf-8")
         (home / PONYTAIL_FLAG).write_text("full\n", encoding="utf-8")
-        plain = re.sub(chr(27) + r"\[[0-9;]*m", "", Tui(store).status_line(140))   # wide: names shown
+        plain = strip_ansi(Tui(store).status_line(140))   # wide: names shown
         assert "⏳ 5h " + RATE_BAR_ON * 7 + RATE_BAR_OFF * 3 + " 78%" in plain, plain
         assert "📅 7d 57%" in plain and "🤖 MCP ✔" in plain, plain      # no selection = every server
         # picking servers: the label names them, an unknown one reads "?", and an empty pick hides it
@@ -1879,7 +1934,7 @@ def self_test() -> None:
             {"servers": {"wiki": {"ok": True}, "chrome": {"ok": False}}}), encoding="utf-8")
         assert store.installed_mcp_servers() == ["chrome", "wiki"]
         store.save_status_cfg({"mcp": ["wiki"]})
-        line = lambda: re.sub(chr(27) + r"\[[0-9;]*m", "", Tui(store).status_line(140))
+        line = lambda: strip_ansi(Tui(store).status_line(140))
         assert "🤖 wiki " + OK_MARK in line(), line()
         store.save_status_cfg({"mcp": ["wiki", "chrome"]})
         assert "🤖 wiki, chrome " + BAD_MARK in line(), line()
@@ -1894,11 +1949,11 @@ def self_test() -> None:
         assert "📧 Outlook ✘" in plain and "🧔 ponytail full" in plain, plain
         for width in (120, 80, 40, 12):        # never wider than the terminal, values before names
             line = Tui(store).status_line(width)
-            assert cell_width(re.sub(chr(27) + r"\[[0-9;]*m", "", line)) <= width, (width, line)
-        assert "wiki MCP" not in re.sub(chr(27) + r"\[[0-9;]*m", "", Tui(store).status_line(80))
+            assert cell_width(strip_ansi(line)) <= width, (width, line)
+        assert "wiki MCP" not in strip_ansi(Tui(store).status_line(80))
         (home / RATE_LIMITS_CACHE).write_text(json.dumps(
             {"five_hour": {"used_percentage": 40, "resets_at": 1}}), encoding="utf-8")   # already reset
-        assert "⏳ 5h " + RATE_BAR_OFF * 10 + " 0%" in re.sub(chr(27) + r"\[[0-9;]*m", "", Tui(store).status_line(140))
+        assert "⏳ 5h " + RATE_BAR_OFF * 10 + " 0%" in strip_ansi(Tui(store).status_line(140))
 
         # dock geometry: percent applies to the EDGE's own axis, on either monitor orientation
         land, port = (0, 0, 2560, 1440), (-1080, -81, 0, 1839)      # this PC's actual two panels
