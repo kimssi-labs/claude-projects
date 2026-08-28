@@ -18,7 +18,7 @@ in a throwaway home; run it after any change.
 """
 from __future__ import annotations
 
-__version__ = "1.11.0"        # single source: the exe resource, pyproject and the tag are checked against it
+__version__ = "1.12.0"        # single source: the exe resource, pyproject and the tag are checked against it
 
 import argparse
 import base64
@@ -162,6 +162,11 @@ OPEN_TIMEOUT_S = 12.0
 DOCK_FILE = Path("config") / "manager-dock.json"
 DOCK_STATE_FILE = Path("config") / "manager-dock-state.json"   # runtime only: the HWND we docked
 STATUS_FILE = Path("config") / "manager-status.json"           # which MCP servers the status line reports
+CONFIG_FILE = Path("config") / "manager.json"                  # everything the manager remembers
+# Section per feature inside CONFIG_FILE, and the single-purpose file each one grew out of —
+# read once when its section is missing, so an existing setup keeps its settings.
+SECTION_DOCK, SECTION_STATUS, SECTION_LAUNCH, SECTION_UI = "dock", "status", "launch", "ui"
+LEGACY_FILES = {SECTION_DOCK: DOCK_FILE, SECTION_STATUS: STATUS_FILE, SECTION_LAUNCH: LAUNCH_FILE}
 DOCK_EDGES = ("left", "top", "right", "bottom")   # index == the ABE_* value Windows expects
 DOCK_DEFAULT_EDGE = "top"
 DOCK_PCT_MIN, DOCK_PCT_MAX, DOCK_PCT_DEFAULT = 5, 60, 20
@@ -266,6 +271,7 @@ class Store:
         self.dock_state_file = home / DOCK_STATE_FILE
         self.status_file = home / STATUS_FILE
         self.launch_file = home / LAUNCH_FILE
+        self.config_file = home / CONFIG_FILE
 
     # -- helpers ---------------------------------------------------------------
     @staticmethod
@@ -401,7 +407,7 @@ class Store:
         return items
 
     def load_launch_cfg(self) -> dict:
-        cfg = self._load_json(self.launch_file, {})
+        cfg = self.load_section(SECTION_LAUNCH)
         shell, perm = cfg.get("shell"), cfg.get("permission")
         return {"shell": shell if shell in SHELL_EXE or shell in (SHELL_AUTO, SHELL_NONE) else SHELL_AUTO,
                 "permission": perm if perm in PERMISSION_ARGS else PERM_DEFAULT}
@@ -413,8 +419,7 @@ class Store:
         return () if any(a in self.claude_args for a in args) else args
 
     def save_launch_cfg(self, cfg: dict) -> None:
-        self.launch_file.parent.mkdir(parents=True, exist_ok=True)
-        self.launch_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.save_section(SECTION_LAUNCH, cfg)
 
     @staticmethod
     def shell_cmd(claude: list[str], shell: str = SHELL_AUTO) -> list[str]:
@@ -463,7 +468,7 @@ class Store:
     def load_status_cfg(self) -> dict:
         """`mcp`: list of server names to report, or None for "every server in the cache" —
         the default on a machine that has never opened the settings screen."""
-        cfg = self._load_json(self.home / STATUS_FILE, {})
+        cfg = self.load_section(SECTION_STATUS)
         chosen = cfg.get("mcp")
         return {"mcp": [str(n) for n in chosen] if isinstance(chosen, list) else None}
 
@@ -472,8 +477,7 @@ class Store:
         self._status_cache = None
 
     def save_status_cfg(self, cfg: dict) -> None:
-        self.status_file.parent.mkdir(parents=True, exist_ok=True)
-        self.status_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.save_section(SECTION_STATUS, cfg)
         self.invalidate_status()
 
     def load_aliases(self) -> dict[str, str]:
@@ -483,6 +487,36 @@ class Store:
         self.aliases_file.parent.mkdir(parents=True, exist_ok=True)
         self.aliases_file.write_text(json.dumps(aliases, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def load_section(self, name: str) -> dict:
+        """One section of manager.json, or the legacy single-purpose file when it has none yet."""
+        config = self._load_json(self.config_file, {})
+        section = config.get(name) if isinstance(config, dict) else None
+        if isinstance(section, dict):
+            return section
+        legacy = LEGACY_FILES.get(name)
+        loaded = self._load_json(self.home / legacy, {}) if legacy else {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def save_section(self, name: str, section: dict) -> None:
+        """Write one section, leaving the others alone — settings screens save one at a time."""
+        config = self._load_json(self.config_file, {})
+        config = config if isinstance(config, dict) else {}
+        config[name] = section
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        self.config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def load_ui(self) -> dict:
+        """Where the manager was last: which project was open and which row the cursor was on."""
+        ui = self.load_section(SECTION_UI)
+        try:
+            cursor = int(ui.get("cursor", 0))
+        except (TypeError, ValueError):
+            cursor = 0
+        return {"project": ui.get("project") or None, "cursor": max(0, cursor)}
+
+    def save_ui(self, project: str | None, cursor: int) -> None:
+        self.save_section(SECTION_UI, {"project": project, "cursor": max(0, int(cursor))})
+
     def load_dock(self, device: str | None = None) -> dict:
         """Dock config for `device` (default: the last one used), normalized — a hand-edited or
         stale file must not be able to crash startup.
@@ -490,8 +524,7 @@ class Store:
         Each monitor keeps its own edge, size and on/off under `monitors`, because a band that fits
         a 1080p portrait display is wrong on a 1440p landscape one; the top level holds the last
         monitor used, which is also what a file written before per-monitor settings looks like."""
-        raw = self._load_json(self.dock_file, {})
-        raw = raw if isinstance(raw, dict) else {}
+        raw = self.load_section(SECTION_DOCK)
         per_device = raw.get(DOCK_MONITORS_KEY)
         per_device = per_device if isinstance(per_device, dict) else {}
         device = device or raw.get("device") or None
@@ -507,22 +540,18 @@ class Store:
 
     def known_dock_devices(self) -> set[str]:
         """Monitors that have remembered settings — used to say "restored" instead of guessing."""
-        raw = self._load_json(self.dock_file, {})
-        per_device = raw.get(DOCK_MONITORS_KEY) if isinstance(raw, dict) else None
+        per_device = self.load_section(SECTION_DOCK).get(DOCK_MONITORS_KEY)
         return set(per_device) if isinstance(per_device, dict) else set()
 
     def save_dock(self, cfg: dict) -> None:
         """Write the settings both under their monitor and at the top level (= last used), so an
         older build — and the next start, before a monitor is chosen — still reads something sane."""
-        raw = self._load_json(self.dock_file, {})
-        raw = raw if isinstance(raw, dict) else {}
+        raw = self.load_section(SECTION_DOCK)
         per_device = raw.get(DOCK_MONITORS_KEY)
         per_device = dict(per_device) if isinstance(per_device, dict) else {}
         if cfg.get("device"):
             per_device[cfg["device"]] = {k: cfg[k] for k in DOCK_FIELD_KEYS}
-        merged = {**cfg, DOCK_MONITORS_KEY: per_device}
-        self.dock_file.parent.mkdir(parents=True, exist_ok=True)
-        self.dock_file.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.save_section(SECTION_DOCK, {**cfg, DOCK_MONITORS_KEY: per_device})
 
     def load_docked_hwnd(self) -> int | None:
         """The window a previous run reserved space for. Kept OUT of manager-dock.json so live,
@@ -1386,6 +1415,7 @@ class Tui:
                 elif self.dock.note:
                     self.status = Ansi.YELLOW + self.dock.note
             self.refresh()
+            self.restore_position()
             while True:
                 if not Key.input_pending():          # a frame nobody would see is a frame skipped
                     self._sync_title()
@@ -1399,12 +1429,30 @@ class Tui:
                 if not self.handle(k):
                     break
         finally:
+            self.remember_position()
             self.dock.shutdown()                  # first: never leave the work area reserved
             self.out.write(Ansi.CUR_SHOW + Ansi.ALT_OFF)
             self.out.flush()
             self._set_console_title(previous_title)
 
     # -- state -----------------------------------------------------------------
+    def restore_position(self) -> None:
+        """Come back to the project (and row) the last run ended on — the manager is opened over and
+        over for the same handful of projects, and starting at the top every time is a step back."""
+        saved = self.store.load_ui()
+        if saved["project"]:
+            match = next((p for p in self.projects if p.enc_dir.name == saved["project"]), None)
+            if match:
+                self.project = match
+        self.cursor = saved["cursor"]
+        self.clamp()
+
+    def remember_position(self) -> None:
+        try:
+            self.store.save_ui(self.project.enc_dir.name if self.project else None, self.cursor)
+        except OSError:
+            pass                                  # a read-only home must not break the exit path
+
     def refresh(self) -> None:
         keep = self.project.enc_dir if self.project else None
         self.projects = self.store.scan()
@@ -2322,6 +2370,20 @@ def self_test() -> None:
         assert store.status_items() is items                  # held for STATUS_TTL_S
         store.invalidate_status()
         assert store.status_items() is not items               # ...until something changes it
+        # every setting lives in ONE file, and the position is remembered too
+        store.save_dock({"device": r"\.\DISPLAY1", "edge": "left", "percent": 25, "enabled": False})
+        store.save_status_cfg({"mcp": None})
+        store.save_launch_cfg({"shell": SHELL_AUTO, "permission": PERM_DEFAULT})
+        store.save_ui("C--Users-Terry", 4)
+        written = json.loads((home / CONFIG_FILE).read_text(encoding="utf-8"))
+        assert written.keys() >= {SECTION_DOCK, SECTION_STATUS, SECTION_LAUNCH, SECTION_UI}, written
+        assert store.load_ui() == {"project": "C--Users-Terry", "cursor": 4}
+        assert store.load_dock()["edge"] and store.load_launch_cfg()["shell"]   # still readable
+        # a setup written by an older build keeps its settings: legacy file, no section yet
+        legacy_home = home.parent / ".legacy"
+        (legacy_home / "config").mkdir(parents=True)
+        (legacy_home / LAUNCH_FILE).write_text(json.dumps({"shell": SHELL_CMD}), encoding="utf-8")
+        assert Store(legacy_home).load_launch_cfg()["shell"] == SHELL_CMD
         assert Tui(store).handle("") is True                  # idle tick is not a command
         (home / RATE_LIMITS_CACHE).write_text(json.dumps(
             {"five_hour": {"used_percentage": 0, "resets_at": int(time.time()) + 3600}}), encoding="utf-8")
@@ -2391,7 +2453,8 @@ def self_test() -> None:
         assert pick_monitor([mon_a, mon_b], None) == (mon_a, None)                 # unset: primary
         assert pick_monitor([mon_a], r"\\.\DISPLAY9") == (mon_a, r"\\.\DISPLAY9")  # gone: says so
         assert pick_monitor([], r"\\.\DISPLAY2") == (None, r"\\.\DISPLAY2")        # no monitors
-        assert store.load_dock()["device"] is None    # fallback never writes itself into config
+        # ...and the fallback never writes itself into config: a home that never docked has no device
+        assert Store(home.parent / ".never-docked").load_dock()["device"] is None
 
         # dock settings are per monitor: each device keeps its own edge/size/on-off
         store.save_dock({"device": r"\\.\DISPLAY1", "edge": "left", "percent": 30, "enabled": True})
@@ -2400,7 +2463,7 @@ def self_test() -> None:
         assert (one["edge"], one["percent"], one["enabled"]) == ("left", 30, True), one
         assert (two["edge"], two["percent"], two["enabled"]) == ("top", 15, False), two
         assert store.load_dock()["device"] == r"\\.\DISPLAY2"      # last one saved
-        assert store.known_dock_devices() == {r"\\.\DISPLAY1", r"\\.\DISPLAY2"}
+        assert store.known_dock_devices() >= {r"\\.\DISPLAY1", r"\\.\DISPLAY2"}   # plus any saved earlier in this test
         unknown = store.load_dock(r"\\.\DISPLAY9")                 # never docked there
         assert unknown["edge"] == "top" and unknown["percent"] == 15  # falls back to last used
 
@@ -2408,12 +2471,12 @@ def self_test() -> None:
         (home / "config").mkdir(exist_ok=True)
         store.save_dock({"enabled": True, "device": r"\\.\DISPLAY2", "edge": "left", "percent": 33})
         assert store.load_dock() == {"enabled": True, "device": r"\\.\DISPLAY2", "edge": "left", "percent": 33}
-        store.dock_file.write_text('{"edge": "sideways", "percent": "junk"}', encoding="utf-8")
+        store.config_file.write_text('{"dock": {"edge": "sideways", "percent": "junk"}}', encoding="utf-8")
         assert store.load_dock() == {"enabled": False, "device": None,
                                      "edge": DOCK_DEFAULT_EDGE, "percent": DOCK_PCT_DEFAULT}
-        store.dock_file.write_text("not json at all", encoding="utf-8")
+        store.config_file.write_text("not json at all", encoding="utf-8")
         assert store.load_dock()["edge"] == DOCK_DEFAULT_EDGE
-        store.dock_file.unlink()
+        store.config_file.unlink()
         # docked-HWND state: what lets the NEXT run release a reservation a hard kill stranded
         assert store.load_docked_hwnd() is None                       # absent file
         store.save_docked_hwnd(135076)

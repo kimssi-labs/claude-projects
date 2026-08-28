@@ -109,7 +109,8 @@ Everything comes from files Claude Code maintains under `~/.claude` (override wi
 | `sessions/*.json` | which sessions are running right now (the ● mark) |
 | `history.jsonl` | first prompt of a session, used as its title when it has no custom one |
 | `~/.claude.json` | folder path for projects whose transcripts are gone |
-| `config/project-aliases.json`, `config/manager-dock.json` | this tool's own settings |
+| `config/manager.json` | this tool's own settings: dock (per monitor), status line, launch, and the last position |
+| `config/project-aliases.json` | display aliases for projects |
 
 The status line is optional: each segment appears only if that source exists on your machine — rate
 limits from `cache/rate-limits.json`, MCP and Outlook health from their status caches, and the
@@ -119,7 +120,8 @@ ponytail mode flag. On a machine without them the line is not drawn at all.
 
 One screen with a group box per section — **Dock**, **Status line**, **Launch**. The focused box is
 expanded and framed in colour; the other two collapse to a summary line. `Tab` and `Shift+Tab` move
-between them, `Esc` closes the screen.
+between them, `Esc` closes the screen. Every choice — and the project and row you were last on —
+is kept in `config/manager.json`.
 
 **Dock** places the manager as a reserved band on a monitor edge — pick the monitor, then the edge,
 size and on/off; `Enter` applies, `Esc` backs out. Every monitor keeps its own edge, size and on/off
@@ -138,8 +140,7 @@ shows what each display would go back to; the ones with saved settings are marke
 
 `Space`/`Enter` toggles, `A` goes back to reporting every server. The segment shows ✔ when all the
 checked servers are healthy, ✘ when one is failing, and a dim `?` when a checked server has no
-verdict in the cache. Uncheck everything and the segment disappears. Choices live in
-`config/manager-status.json`.
+verdict in the cache. Uncheck everything and the segment disappears.
 
 **Launch** (`L`) picks the shell that hosts an opened session:
 
@@ -154,7 +155,6 @@ verdict in the cache. Uncheck everything and the segment disappears. Choices liv
 
 A missing executable is marked `(not found)` rather than failing when a session is opened. The shell
 is what keeps the tab open after `claude` exits — pick *No shell* if you would rather it closed.
-Saved in `config/manager-launch.json`.
 
 **Permissions** picks the mode a session starts in:
 

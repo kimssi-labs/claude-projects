@@ -3,6 +3,14 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.12.0
+
+- Everything the manager remembers now lives in one file, `config/manager.json`, with a section per
+  feature (`dock`, `status`, `launch`, `ui`). Settings written by an older build are still read from
+  their single-purpose files until the section exists, so nothing is lost on upgrade.
+- **Where you were is remembered too**: the project that was open and the row the cursor was on come
+  back on the next start.
+
 ## v1.11.0
 
 - Sessions start from the resolved `claude` executable with the flags appended, instead of the bare
