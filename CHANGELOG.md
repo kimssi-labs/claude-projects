@@ -3,6 +3,14 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.15.0
+
+- The size setting stops at what the terminal will actually do. Once a refusal has been measured on
+  an axis, that floor becomes the lower bound — stepping down stops there instead of changing a
+  number nothing acts on — and the row states it: `38 %  →  583 px  min 38 % (terminal floor 580 px)`.
+- Opening the settings screen raises a saved size that is under the floor and says so, so what the
+  screen shows is what docking will give you.
+
 ## v1.14.0
 
 - A left or right dock that seemed to ignore the size setting now explains itself. Windows Terminal
