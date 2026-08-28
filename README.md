@@ -34,6 +34,16 @@ new terminal tab — while the manager stays open for the next one.
 Download `ClaudeProjects.exe` from [Releases](../../releases) and run it. Nothing to install: it is a
 single file, and it only reads the files Claude Code already writes.
 
+To put it in the Start menu (and from there on the taskbar):
+
+```powershell
+.\ClaudeProjects.exe --install     # copies itself to %LOCALAPPDATA%\Programs and adds a Start entry
+```
+
+Then open Start, find **Claude Projects**, right-click it and choose *Pin to taskbar* — Windows 11
+offers that only from the Start menu, never from an .exe in Explorer, and pinning the running window
+would pin Windows Terminal instead (it is what hosts the console). `--uninstall` removes the entry.
+
 From source instead (Python 3.10+, standard library only):
 
 ```powershell
