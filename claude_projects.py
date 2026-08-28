@@ -89,6 +89,8 @@ ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 STD_OUTPUT_HANDLE = -11
 STD_INPUT_HANDLE = -10
 KEY_EVENT = 0x0001
+IDLE_REFRESH_MS = 15000                        # redraw while idle: rate-limit windows roll, sessions start/stop
+WAIT_TIMEOUT = 0x00000102                      # WaitForSingleObject: nothing to read yet
 SHIFT_PRESSED = 0x0010                         # dwControlKeyState bit: Shift+Tab vs Tab
 
 LIVE_MARK = "●"
@@ -706,16 +708,18 @@ class Key:
         return keys
 
     @classmethod
-    def read(cls, translate: bool = True) -> str:
-        """Block for the next key, reading console input records directly so IME composition
-        (which hands msvcrt.getwch NUL chars and desyncs its two-call extended-key protocol)
-        cannot swallow keys."""
+    def read(cls, translate: bool = True, timeout_ms: int | None = None) -> str:
+        """Next key, or "" when `timeout_ms` passes with nothing pressed — the caller uses that
+        to redraw. Console input records are read directly because IME composition hands
+        msvcrt.getwch NUL chars and desyncs its two-call extended-key protocol."""
         if cls._pending:
             return cls._pending.popleft()
         k32 = ctypes.windll.kernel32
         handle = k32.GetStdHandle(STD_INPUT_HANDLE)
         record, count = InputRecord(), ctypes.c_ulong()
         while True:
+            if timeout_ms is not None and k32.WaitForSingleObject(handle, timeout_ms) == WAIT_TIMEOUT:
+                return ""                       # idle tick: let the caller redraw
             if not k32.ReadConsoleInputW(handle, ctypes.byref(record), 1, ctypes.byref(count)) or not count.value:
                 return ""
             if record.EventType != KEY_EVENT or not record.Event.KeyEvent.bKeyDown:
@@ -1213,7 +1217,13 @@ class Tui:
             while True:
                 self._sync_title()
                 self.render()
-                if not self.handle(Key.read()):
+                # A timed-out read returns "" and simply loops: the next render picks up a
+                # rolled rate-limit window or a session that started or ended meanwhile.
+                k = Key.read(timeout_ms=IDLE_REFRESH_MS)
+                if not k:
+                    self.refresh()
+                    continue
+                if not self.handle(k):
                     break
         finally:
             self.dock.shutdown()                  # first: never leave the work area reserved
@@ -1689,6 +1699,8 @@ class Tui:
 
     # -- input -----------------------------------------------------------------
     def handle(self, k: str) -> bool:
+        if not k:                                # idle tick, or a key with no meaning here
+            return True
         rows = self.rows()
         if k.lower() == "q":
             return False
@@ -1944,6 +1956,11 @@ def self_test() -> None:
         assert "🤖 chrome, ghost " + BAD_MARK in line(), line()
         store.save_status_cfg({"mcp": []})
         assert "🤖" not in line(), line()
+        assert Tui(store).handle("") is True                  # idle tick is not a command
+        (home / RATE_LIMITS_CACHE).write_text(json.dumps(
+            {"five_hour": {"used_percentage": 0, "resets_at": int(time.time()) + 3600}}), encoding="utf-8")
+        just_reset = strip_ansi(Tui(store).status_line(140))
+        assert "⏳ 5h " + RATE_BAR_OFF * 10 + " 0%" in just_reset, just_reset   # 0% still shows
         store.save_status_cfg({"mcp": None})
         assert store.load_status_cfg()["mcp"] is None and "🤖 MCP" in line()
         assert "📧 Outlook ✘" in plain and "🧔 ponytail full" in plain, plain
