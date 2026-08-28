@@ -3,6 +3,15 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.14.0
+
+- A left or right dock that seemed to ignore the size setting now explains itself. Windows Terminal
+  refuses to shrink past a minimum that depends on its font (measured 580 px here), so every
+  percentage below that produced the same window. The manager remembers that floor per axis and
+  shows it beside the size — `20 %  →  307 px  ! terminal floor 580 px` — instead of promising a
+  width the terminal will not give.
+- The floor is stored per axis in `config/manager.json`, so the warning is there before you apply.
+
 ## v1.13.0
 
 - **Narrow windows no longer tear the frame.** List rows had minimum column widths that made them
