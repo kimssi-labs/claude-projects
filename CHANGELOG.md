@@ -3,6 +3,14 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v1.9.0
+
+- The exe carries a full Windows version resource, so File properties → Details is filled in:
+  company and copyright **kimssi-labs** (MIT), product and description, internal and original
+  filename, and the version — both File and Product.
+- `__version__` in the source is the single origin of that version; `--version` prints it, and CI
+  refuses a tag that disagrees with the source, `pyproject.toml`, or the built exe.
+
 ## v1.8.0
 
 - **Settings · Permissions**: the mode every session opened from the manager starts in — Ask

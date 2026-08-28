@@ -29,6 +29,9 @@ jobs:
       - name: Changelog has a section for this tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: python tools/release_notes.py "$env:GITHUB_REF_NAME"
+      - name: Tag matches __version__ and pyproject
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/version_info.py --check "$env:GITHUB_REF_NAME"
       - name: Smoke test (--list against an empty home)
         run: |
           New-Item -ItemType Directory -Force -Path empty-home\projects, empty-home\sessions | Out-Null
@@ -47,9 +50,15 @@ jobs:
       - name: Build single-file exe
         run: |
           pip install pyinstaller
-          pyinstaller --onefile --console --name ClaudeProjects --icon assets/icon.ico claude_projects.py
-      - name: Verify the exe runs
-        run: dist\ClaudeProjects.exe --self-test
+          python tools/version_info.py build/version_info.txt
+          pyinstaller --onefile --console --name ClaudeProjects --icon assets/icon.ico `
+                      --version-file build/version_info.txt claude_projects.py
+      - name: Verify the exe runs and is stamped
+        run: |
+          dist\ClaudeProjects.exe --self-test
+          $info = (Get-Item dist\ClaudeProjects.exe).VersionInfo
+          $info | Format-List CompanyName, FileVersion, ProductVersion, LegalCopyright
+          if ($info.FileVersion -ne $env:GITHUB_REF_NAME.TrimStart('v')) { throw 'exe version resource does not match the tag' }
       - name: Release notes from CHANGELOG.md
         run: python tools/release_notes.py "$env:GITHUB_REF_NAME" | Out-File -FilePath notes.md -Encoding utf8
       - name: Publish release asset
