@@ -9,7 +9,7 @@ export type Screen = "projects" | "sessions" | "settings";
 
 export type Action =
   | "moveUp" | "moveDown" | "pageUp" | "pageDown" | "moveFirst" | "moveLast"
-  | "enter" | "openHere" | "openNewWindow"
+  | "enter" | "openNewWindow"
   | "rename" | "delete" | "back" | "refresh" | "settings" | "quit"
   | "search" | "help" | "nextSection" | "previousSection";
 
@@ -27,7 +27,6 @@ export const SHORTCUTS: { keys: string; action: Action; description: string; scr
   { keys: "PgUp PgDn", action: "pageDown", description: "Move a page at a time", screens: ["projects", "sessions"] },
   { keys: "Home End", action: "moveLast", description: "First / last row", screens: ["projects", "sessions"] },
   { keys: "Enter", action: "enter", description: "Open sessions / resume a session", screens: ["projects", "sessions"] },
-  { keys: "T", action: "openHere", description: "Open in the current window", screens: ["projects", "sessions"] },
   { keys: "O", action: "openNewWindow", description: "Open in a new window", screens: ["projects", "sessions"] },
   { keys: "F2", action: "rename", description: "Rename (alias for a project)", screens: ["projects", "sessions"] },
   { keys: "Del", action: "delete", description: "Delete, after a confirmation", screens: ["projects", "sessions"] },
@@ -78,7 +77,6 @@ export function resolveAction(event: KeyEventLike, screen: Screen, typing = fals
   if (key === "?") return "help";
 
   switch (key.toLowerCase()) {
-    case "t": return "openHere";
     case "o": return "openNewWindow";
     case "s": return "settings";
     default: return null;

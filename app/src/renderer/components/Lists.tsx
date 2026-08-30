@@ -103,12 +103,12 @@ export function SessionRow({
 }
 
 function Field({ label, children, tone = "" }: { label: string; children: React.ReactNode; tone?: string }) {
+  // Stacked, not two columns: the panel is narrow, and a value column that narrow turns a path
+  // into one character per line. The label reads as a caption above its value instead.
   return (
-    <div className="grid grid-cols-[7rem_1fr] gap-2 py-1 text-xs">
-      <span className="text-bone-500">{label}</span>
-      {/* min-w-0 + break-all: a Windows path is one long token, and a grid cell will happily grow
-          past the panel to fit it, which is where the sideways scrollbar came from. */}
-      <span className={`min-w-0 break-all ${tone || "text-bone-200"}`}>{children}</span>
+    <div className="py-1 text-xs">
+      <div className="text-[11px] text-bone-500">{label}</div>
+      <div className={`break-all ${tone || "text-bone-200"}`}>{children}</div>
     </div>
   );
 }

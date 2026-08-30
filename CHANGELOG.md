@@ -3,6 +3,43 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.1.0
+
+**The window stopped freezing.** Three things were blocking the thread that draws it, and all three
+were measured rather than guessed:
+
+- A project on an unreachable network share made every scan wait for the SMB timeout — **10.9 s**,
+  on the UI thread. Whether a folder is there is now answered from a background probe, so a dead
+  share greys out a row a moment later instead of stopping the app.
+- Reading a transcript to find one field at the top of it read the whole file: 48 MB, 23 MB, 20 MB…
+  once per scan, because the session you are in is being appended to constantly. Only the first
+  64 KB is read now, and the answer is kept for good — a scan went from **21 s to 36 ms**.
+- Registering or removing the dock band makes the shell tell every window on the desktop about the
+  new work area, and waits for them. That call now runs on a worker thread.
+
+Sampling moved off the UI thread as well — the process table, the per-session readings and their
+arithmetic all happen on a worker now, and the main thread only receives finished snapshots.
+
+**Docking on a second monitor works.** Electron's display ids are not stable between runs (measured:
+the same two monitors reported four different ids across two launches), so a dock saved for the
+second monitor came back on the first. Monitors are identified by where they are and how big they
+are instead. The DIP-to-pixel conversion also used the scale of the monitor the *window* was on, so
+a band placed on a 125 % monitor from a 100 % one landed at the wrong size and place.
+
+Also in this release:
+
+- **No title bar**: the caption buttons are drawn over the app's own header, so a docked window
+  fills its band edge to edge, with nothing above the content.
+- **Layout is a choice** — side by side, stacked, or stacked once the window is narrower than a
+  width you set. Stacked puts the project list, its sessions and the graphs one under the other.
+- Dragging a docked window's inner edge sets the dock size; dragging it anywhere else still undocks.
+- A refresh button (`↻`) beside the usage bars re-reads the limits without waiting for the poll.
+- The detail panel puts each value under its label, so a long path no longer wraps one character
+  per line in a narrow panel.
+- Status line: **Select all** / **Select none** beside "Every server, always".
+- `T` is gone. It opened a session "in the current window", which as a separate program is what
+  `Enter` already does.
+
 ## v2.0.0
 
 **Claude Projects is now Hangar, a desktop application.** Same job, same keys, a window instead of a

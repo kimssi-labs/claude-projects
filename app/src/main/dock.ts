@@ -48,10 +48,39 @@ export function bandThickness(rect: Rectangle, edge: DockEdge): number {
   return edge === "left" || edge === "right" ? rect.width : rect.height;
 }
 
-/** Monitor the config points at, falling back to the primary one and saying which is missing. */
+/**
+ * A name for a monitor that is the same on the next run.
+ *
+ * Electron's `display.id` is NOT: measured here, the same two monitors were 2043045714 and
+ * 2636662435 one run and 3621328712 and 456769406 the next — which is why a dock saved for the
+ * second monitor quietly came back on the first. Where it is and how big it is does not change
+ * unless the monitors really do.
+ */
+export function displayKey(display: Electron.Display): string {
+  const { x, y, width, height } = display.bounds;
+  return `${x},${y} ${width}x${height}`;
+}
+
+/** Where a display sits, as a looser fallback for a monitor that was resized but not moved. */
+export function displayOrigin(display: Electron.Display): string {
+  return `${display.bounds.x},${display.bounds.y}`;
+}
+
+/**
+ * Monitor the config points at, falling back to the primary one and saying which is missing.
+ *
+ * Keys are tried most specific first: the stable key, then an id from an older config, then the
+ * device name, then just the position. A saved dock that silently moves to the primary display is
+ * the confusing kind of wrong.
+ */
 export function pickDisplay(device: string | null): { display: Electron.Display; missing: string | null } {
   const displays = screen.getAllDisplays();
-  const wanted = device ? displays.find((d) => String(d.id) === device || d.label === device) : undefined;
+  const wanted = device
+    ? displays.find((d) => displayKey(d) === device)
+      ?? displays.find((d) => String(d.id) === device)          // configs written before the key
+      ?? displays.find((d) => d.label && d.label === device)
+      ?? displays.find((d) => displayOrigin(d) === device)
+    : undefined;
   if (wanted) return { display: wanted, missing: null };
   return { display: screen.getPrimaryDisplay(), missing: device };
 }
@@ -68,6 +97,14 @@ interface AppBarData {
 interface Win32Api {
   /** koffi writes the shell's answer back into `data`, which is what QUERYPOS is for. */
   SHAppBarMessage: (message: number, data: AppBarData) => number;
+  /**
+   * The same call on a worker thread.
+   *
+   * Registering or removing an appbar makes the shell change the desktop work area and tell every
+   * top-level window about it, waiting on each — measured at 300-400 ms on an idle desktop and far
+   * worse with a lot of windows open. On the main thread that is the window going grey.
+   */
+  SHAppBarMessageAsync: (message: number, data: AppBarData) => Promise<number>;
   /** Physical-pixel placement. Electron's setBounds speaks DIP and keeps the window out of the
    *  work area it just shrank; an appbar has to sit in exactly the rectangle it reserved. */
   setWindowPos: (hwnd: number, rect: Rectangle) => void;
@@ -104,6 +141,12 @@ function loadWin32(): Win32Api | null {
     ]);
     win32 = {
       SHAppBarMessage: (message, data) => Number(SHAppBarMessage(message, data)),
+      SHAppBarMessageAsync: (message, data) => new Promise((resolve, reject) => {
+        SHAppBarMessage.async(message, data, (error: Error | null, result: number | bigint) => {
+          if (error) reject(error);
+          else resolve(Number(result));               // koffi fills `data` before calling back
+        });
+      }),
       setWindowPos: (hwnd, rect) =>
         void SetWindowPos(hwnd, 0, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING),
       make: (hwnd, edge, rect) => ({
@@ -159,6 +202,13 @@ export class Dock {
   private assertUntil = 0;
   /** Told when a user move undocked us, so the setting and the screen can agree. */
   onUserUndock: (() => void) | null = null;
+  /**
+   * Told when the user dragged the band's inner edge: the new thickness in DIP.
+   *
+   * Dragging that edge is the obvious way to ask for a different band size, so it sets the size
+   * rather than undocking; dragging the window somewhere else still undocks.
+   */
+  onUserResize: ((thickness: number) => void) | null = null;
 
   constructor(private readonly window: BrowserWindow) {
     this.minimum = window.getMinimumSize();
@@ -167,10 +217,19 @@ export class Dock {
     const reassert = (): void => {
       if (this.placing || !this.reserved || !this.registered) return;
       const current = this.window.getBounds();
-      const want = screen.screenToDipRect(this.window, this.reserved);
+      const want = screen.screenToDipRect(null, this.reserved);
       if (current.x === want.x && current.y === want.y
         && current.width === want.width && current.height === want.height) return;
       if (Date.now() > this.assertUntil) {
+        const edge = this.current?.edge;
+        // Still spanning its whole edge? Then only the thickness changed, and that is a size.
+        const alongEdge = edge && (edge === "left" || edge === "right"
+          ? current.y === want.y && current.height === want.height
+          : current.x === want.x && current.width === want.width);
+        if (edge && alongEdge && this.onUserResize) {
+          this.onUserResize(bandThickness(current, edge));
+          return;
+        }
         void this.release().then(() => this.onUserUndock?.());
         return;
       }
@@ -207,7 +266,7 @@ export class Dock {
     this.window.setMinimumSize(BAND_MINIMUM, BAND_MINIMUM);
 
     let note = missing ? `Saved monitor ${missing} is not connected — using ${display.label}.` : null;
-    if (process.platform === "win32") note = this.reserveWindows(band, config.edge) ?? note;
+    if (process.platform === "win32") note = (await this.reserveWindows(band, config.edge)) ?? note;
     else note = (await this.reserveX11(band, config.edge, display.bounds)) ?? note;
 
     // Set the bounds AFTER reserving: SETPOS can slide the band away from the taskbar, and the
@@ -217,7 +276,7 @@ export class Dock {
     this.assertUntil = Date.now() + SETTLE_MS;
     this.place(this.reserved ?? band);
     const target = this.reserved && process.platform === "win32"
-      ? screen.screenToDipRect(this.window, this.reserved)
+      ? screen.screenToDipRect(null, this.reserved)
       : band;
     const applied = this.window.getBounds();
     return { bounds: target, applied, note };
@@ -248,37 +307,48 @@ export class Dock {
 
   /** Give the space back; safe to call when nothing was reserved. */
   async release(): Promise<void> {
-    this.releaseSync();
-    if (process.platform !== "win32") {
+    if (process.platform === "win32") {
+      const api = this.registered ? loadWin32() : null;
+      if (api) {
+        const hwnd = this.hwnd;
+        this.registered = false;                    // nothing may re-enter while the shell works
+        this.reserved = null;
+        await api.SHAppBarMessageAsync(ABM.remove, api.make(hwnd, ABE.top));
+      }
+      this.restoreMinimum();
+    } else {
       await this.clearX11();
       this.restoreMinimum();
     }
     this.current = null;
   }
 
-  private reserveWindows(band: Rectangle, edge: DockEdge): string | null {
+  private async reserveWindows(band: Rectangle, edge: DockEdge): Promise<string | null> {
     const api = loadWin32();
     if (!api) return "Docking without reserving space — the native helper did not load.";
     const hwnd = nativeHandle(this.window);
     // Electron speaks DIP; the shell speaks physical pixels. On a scaled display the difference is
     // the whole point: a 20 % band asked for in DIP reserves 16 % of the screen at 125 %.
-    const physical = screen.dipToScreenRect(this.window, band);
+    //
+    // The window is deliberately NOT the reference: dipToScreenRect(window, …) scales by the display
+    // the WINDOW is on, so docking from a 100 % monitor onto a 125 % one used the wrong scale.
+    const physical = screen.dipToScreenRect(null, band);
 
     if (!this.registered) {
-      api.SHAppBarMessage(ABM.new, api.make(hwnd, ABE[edge]));
+      await api.SHAppBarMessageAsync(ABM.new, api.make(hwnd, ABE[edge]));
       this.registered = true;
       this.hwnd = hwnd;
     }
     // QUERYPOS slides the band clear of the taskbar and any other appbar, but does not preserve
     // thickness — restore it before SETPOS or the band grows into whatever room it was offered.
     const query = api.make(hwnd, ABE[edge], physical);
-    api.SHAppBarMessage(ABM.queryPos, query);
+    await api.SHAppBarMessageAsync(ABM.queryPos, query);
     const offered = {
       x: query.rc.left, y: query.rc.top,
       width: query.rc.right - query.rc.left, height: query.rc.bottom - query.rc.top,
     };
     const kept = keepThickness(offered, physical, edge);
-    api.SHAppBarMessage(ABM.setPos, api.make(hwnd, ABE[edge], kept));
+    await api.SHAppBarMessageAsync(ABM.setPos, api.make(hwnd, ABE[edge], kept));
     this.reserved = kept;
     return null;
   }

@@ -55,7 +55,7 @@ export function App() {
   const [navWidth, setNavWidth] = useState(0);
   const [asideWidth, setAsideWidth] = useState(0);
   useTheme(theme);
-  const { mode } = useLayoutMode();
+  const { mode } = useLayoutMode(settings?.ui.layout ?? "auto", settings?.ui.stackBelow ?? 520);
   const searchRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLInputElement>(null);
 
@@ -226,7 +226,6 @@ export function App() {
           else if (now.screen === "sessions") void open("sessionsWindow");
           break;
         }
-        case "openHere": void open("currentWindow"); break;
         case "openNewWindow": void open("newWindow"); break;
         case "rename": {
           const id = now.screen === "sessions" ? now.session?.id : now.project?.dir;
@@ -334,7 +333,12 @@ export function App() {
 
   return (
     <div className="h-full flex flex-col bg-ink-900 overflow-hidden">
-      <StatusBar status={status} appVersion={info?.version ?? "—"} compact={mode !== "full"} />
+      <StatusBar
+        status={status}
+        appVersion={info?.version ?? "—"}
+        compact={mode !== "full"}
+        onRefresh={() => void api.status().then(setStatus)}
+      />
 
       <div className="flex-1 min-h-0 flex">
         {column ? null : (
@@ -387,8 +391,58 @@ export function App() {
               </div>
 
               <div className="flex-1 min-h-0 flex">
-                {column && screen === "projects" ? (
-                  <div className="flex-1 min-w-0 flex flex-col">{projectPane}</div>
+                {column ? (
+                  // Stacked: the project list, that project's sessions, and the graphs, one under
+                  // the other — a tall narrow window has no room for panes side by side.
+                  <div className="flex-1 min-w-0 flex flex-col">
+                    <div className="flex-1 min-h-0 flex flex-col border-b border-ink-600">{projectPane}</div>
+                    <div className="flex-1 min-h-0 overflow-auto p-1 space-y-0.5">
+                  {screen === "sessions"
+                    ? sessions.map((item: SessionInfo, index: number) => (
+                      editing === item.id ? (
+                        <input
+                          key={item.id}
+                          ref={editRef}
+                          defaultValue={item.title}
+                          onBlur={(event) => void commitRename(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value);
+                            if (event.key === "Escape") setEditing(null);
+                          }}
+                          data-testid="rename-input"
+                  aria-label="New name"
+                  className="w-full bg-ink-700 border border-accent/60 rounded-lg px-3 py-2 text-sm"
+                        />
+                      ) : (
+                        <SessionRow
+                          key={item.id}
+                          session={item}
+                          selected={index === sessionIndex}
+                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
+                          onSelect={() => setSessionIndex(index)}
+                          onOpen={() => void open("sessionsWindow")}
+                        />
+                      )
+                    ))
+                    : project
+                      ? project.sessions.slice(0, 8).map((item) => (
+                        <SessionRow
+                          key={item.id}
+                          session={item}
+                          selected={false}
+                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
+                          onSelect={() => enterSessions(project.dir)}
+                          onOpen={() => enterSessions(project.dir)}
+                        />
+                      ))
+                      : null}
+                  {screen === "projects" && project && project.sessions.length > 8 ? (
+                    <button type="button" className="btn w-full mt-1" onClick={() => enterSessions(project.dir)}>
+                      Show all {project.sessions.length} sessions (Enter)
+                    </button>
+                  ) : null}
+                    </div>
+                  </div>
                 ) : (
                 <div className={`flex-1 min-w-0 overflow-auto space-y-0.5 ${tight ? "p-1" : "p-2"}`}>
                   {screen === "sessions"

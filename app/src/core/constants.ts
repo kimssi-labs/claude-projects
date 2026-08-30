@@ -4,7 +4,7 @@
  * Kept free of any `node:` import on purpose: the renderer bundles whatever it imports, and pulling
  * `fs` into the page is how a browser build breaks (and how a preload boundary gets blurred).
  */
-import type { DockEdge, PermissionMode, ShellChoice, ThemeMode } from "./types.js";
+import type { DockEdge, LayoutMode, PermissionMode, ShellChoice, ThemeMode } from "./types.js";
 
 export const DOCK_EDGES: DockEdge[] = ["left", "top", "right", "bottom"];
 export const DOCK_PERCENT = { min: 5, max: 60, default: 20 } as const;
@@ -16,3 +16,6 @@ export const EDGE_AXIS: Record<DockEdge, "width" | "height"> = {
 };
 
 export const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
+export const LAYOUT_MODES: LayoutMode[] = ["auto", "horizontal", "vertical"];
+/** The stacking width is a real window width, so the useful range is a real window's range. */
+export const STACK_BELOW = { min: 360, max: 1600, default: 520, step: 20 } as const;

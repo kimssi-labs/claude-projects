@@ -6,18 +6,24 @@
  */
 import { useEffect, useMemo, useState } from "react";
 
-import { DOCK_EDGES, DOCK_PERCENT } from "@core/constants";
-import type { DockEdge, PermissionMode, ShellChoice, ThemeMode } from "@core/types";
+import { DOCK_EDGES, DOCK_PERCENT, STACK_BELOW } from "@core/constants";
+import type { DockEdge, LayoutMode, PermissionMode, ShellChoice, ThemeMode } from "@core/types";
 
 import type { DisplayInfo, SettingsPayload } from "../api";
 
-export const SETTINGS_SECTIONS = ["appearance", "monitor", "dock", "status", "launch", "permissions"] as const;
+export const SETTINGS_SECTIONS = ["appearance", "layout", "monitor", "dock", "status", "launch", "permissions"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 const THEMES: { key: ThemeMode; label: string; note: string }[] = [
   { key: "system", label: "System", note: "follows the OS setting, and changes with it" },
   { key: "light", label: "Light", note: "" },
   { key: "dark", label: "Dark", note: "" },
+];
+
+const LAYOUTS: { key: LayoutMode; label: string; note: string }[] = [
+  { key: "auto", label: "Auto", note: "side by side, stacked once the window is narrower than the width below" },
+  { key: "horizontal", label: "Side by side", note: "lists beside each other, whatever the size" },
+  { key: "vertical", label: "Stacked", note: "project list, sessions and graphs one under the other" },
 ];
 
 const SHELLS: { key: ShellChoice; label: string; note: string }[] = [
@@ -132,6 +138,38 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
         </div>
       </Card>
 
+      <Card title="Layout" section="layout" focused={focused} hint="Tab moves between cards">
+        <div className="space-y-3" onMouseEnter={() => onFocus("layout")}>
+          <div className="space-y-1">
+            {LAYOUTS.map((option) => (
+              <Choice
+                key={option.key}
+                label={option.label}
+                note={option.note}
+                selected={draft.ui.layout === option.key}
+                onSelect={() => update({ ...draft, ui: { ...draft.ui, layout: option.key } })}
+              />
+            ))}
+          </div>
+          <div className={`flex items-center gap-3 ${draft.ui.layout === "auto" ? "" : "opacity-40"}`}>
+            <span className="text-[11px] text-bone-500 shrink-0">Stack below</span>
+            <input
+              type="range"
+              min={STACK_BELOW.min}
+              max={STACK_BELOW.max}
+              step={STACK_BELOW.step}
+              value={draft.ui.stackBelow}
+              disabled={draft.ui.layout !== "auto"}
+              onChange={(event) => update({ ...draft, ui: { ...draft.ui, stackBelow: Number(event.target.value) } })}
+              className="flex-1 min-w-0 accent-accent"
+            />
+            <span className="text-xs tabular-nums text-bone-200 shrink-0 whitespace-nowrap">
+              {draft.ui.stackBelow} px
+            </span>
+          </div>
+        </div>
+      </Card>
+
       <Card title="Monitoring" section="monitor" focused={focused} hint="Tab moves between cards">
         <div className="space-y-1" onMouseEnter={() => onFocus("monitor")}>
           <Choice
@@ -166,8 +204,8 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] text-bone-500 w-16">Edge</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-bone-500 shrink-0">Edge</span>
             {DOCK_EDGES.map((edge: DockEdge) => (
               <button
                 key={edge}
@@ -181,16 +219,18 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="text-[11px] text-bone-500 w-16">Size</span>
+            <span className="text-[11px] text-bone-500 shrink-0">Size</span>
+            {/* min-w-0 on the slider and shrink-0 on the number: without both, a narrow card lets
+                the two overlap instead of letting the slider give way. */}
             <input
               type="range"
               min={minPercent}
               max={DOCK_PERCENT.max}
               value={Math.max(minPercent, draft.dock.percent)}
               onChange={(event) => setDock({ percent: Number(event.target.value) })}
-              className="flex-1 accent-accent"
+              className="flex-1 min-w-0 accent-accent"
             />
-            <span className="text-xs tabular-nums text-bone-200 w-28 text-right">
+            <span className="text-xs tabular-nums text-bone-200 shrink-0 whitespace-nowrap">
               {draft.dock.percent}% · {bandPx} px
             </span>
           </div>
@@ -236,9 +276,27 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
             );
           })}
           {draft.mcpServers.length ? (
-            <button type="button" className="btn mt-2" onClick={() => update({ ...draft, status: { mcp: null } })}>
-              Report every server
-            </button>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {/* "All" ticks the servers this machine has right now; "Every server" keeps following
+                  the list, so one installed later is reported without coming back here. */}
+              <button
+                type="button"
+                className="btn"
+                onClick={() => update({ ...draft, status: { mcp: [...draft.mcpServers] } })}
+              >
+                Select all
+              </button>
+              <button type="button" className="btn" onClick={() => update({ ...draft, status: { mcp: [] } })}>
+                Select none
+              </button>
+              <button
+                type="button"
+                className={`btn ${draft.status.mcp === null ? "btn-accent" : ""}`}
+                onClick={() => update({ ...draft, status: { mcp: null } })}
+              >
+                Every server, always
+              </button>
+            </div>
           ) : null}
         </div>
       </Card>

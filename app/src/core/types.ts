@@ -97,7 +97,14 @@ export interface LaunchConfig {
 
 export type ThemeMode = "system" | "light" | "dark";
 
+/** How the panes are arranged: beside each other, stacked, or stacked once the window is narrow. */
+export type LayoutMode = "auto" | "horizontal" | "vertical";
+
 export interface UiConfig {
+  /** Side by side, stacked, or stacked below `stackBelow` pixels wide. */
+  layout: LayoutMode;
+  /** The width, in pixels, at which "auto" switches to stacked. */
+  stackBelow: number;
   /** Where the window was last left, when it was not docked. */
   window: { x: number; y: number; width: number; height: number } | null;
   /** Pane widths in pixels; 0 means "whatever the layout would pick". */
