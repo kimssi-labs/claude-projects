@@ -3,6 +3,36 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.0.0
+
+**Claude Projects is now Hangar, a desktop application.** Same job, same keys, a window instead of a
+console — and it runs on Linux as well as Windows. The new name keeps a third-party tool from
+reading as an official product; *for Claude Code* is a subtitle, never part of the name.
+
+- Rewritten in Electron and TypeScript. Every feature of the terminal version is here: the project
+  and session lists, resume in a tab or a new window, aliases, `/rename`-compatible session titles,
+  guarded deletes, search, per-monitor docking, the status strip, and the launch and permission
+  settings.
+- **Docking still reserves the space.** The band is registered as an application desktop toolbar on
+  Windows and as `_NET_WM_STRUT_PARTIAL` on X11, so the desktop work area shrinks and a maximised
+  window stops at the band instead of covering it. Wayland cannot do this for an ordinary
+  application, and the screen says so rather than pretending.
+- **CPU and memory monitoring.** Each running session's whole process tree is sampled once a second
+  and drawn in its row; the machine's own CPU and memory are charted beside the list, with five
+  minutes of history.
+- **Light, dark and system themes.** System follows the OS and changes with it, without a restart.
+- **Four layouts, chosen from the window's own size** — full, compact, a horizontal band for a
+  top/bottom dock, and a vertical column for a left/right dock. None of them scrolls the page.
+- The usage strip reads the weekly Fable/Opus and Sonnet windows as well as the 5-hour and 7-day
+  ones, when Claude Code has published them.
+- **Usage is drawn as bars**, one fixed-width column per window, so the labels line up with each
+  other and the percentages line up with each other however many windows a machine reports. A band
+  too narrow for all of them fades at the edge instead of clipping one in half.
+- Keyboard operation is unchanged, and `?` lists every key.
+
+The Python terminal version is not part of this release. It remains available as **v1.15.0** under
+the old name, and its source is in this repository's history.
+
 ## v1.15.0
 
 - The size setting stops at what the terminal will actually do. Once a refusal has been measured on

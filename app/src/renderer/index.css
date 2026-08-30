@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* One scrollbar style for the whole app: the default light one tears a dark surface apart. */
+@layer base {
+  * { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--line)); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--faint)); background-clip: content-box; }
+  /* One set of tokens, two palettes. Components use the tokens, never a literal colour, so the
+     light theme is a value swap rather than a second stylesheet. */
+  :root {
+    --surface: 250 249 247;      /* page */
+    --panel: 255 255 255;        /* cards, sidebars */
+    --raised: 236 234 228;       /* rows, inputs */
+    --line: 214 211 202;
+    --text: 28 27 26;
+    --muted: 107 104 98;
+    --faint: 143 139 129;
+  }
+  [data-theme="dark"] {
+    --surface: 20 20 19;
+    --panel: 28 27 26;
+    --raised: 48 47 45;
+    --line: 61 59 56;
+    --text: 236 234 228;
+    --muted: 143 139 129;
+    --faint: 107 104 98;
+  }
+  body { @apply font-sans antialiased select-none; background: rgb(var(--surface)); color: rgb(var(--text)); }
+  /* Keyboard focus must always be visible — the app is meant to be driven without a mouse. */
+  :focus-visible { @apply outline-none ring-2 ring-accent/70 rounded; }
+}
+
+@layer components {
+  .row { @apply flex items-center gap-3 px-3 py-2 rounded-lg cursor-default; }
+  .row-selected { @apply bg-ink-700 ring-1 ring-accent/40; }
+  .card { @apply bg-ink-800 border border-ink-600 rounded-xl; }
+  .chip { @apply text-[11px] px-1.5 py-0.5 rounded-md bg-ink-700 text-bone-400; }
+  .btn { @apply px-3 py-1.5 rounded-lg text-sm bg-ink-700 border border-ink-600 transition-colors hover:border-bone-500; }
+  /* Fixed dark ink: on the accent orange, the light theme's near-white surface would not read. */
+  .btn-accent { @apply bg-accent/90 hover:bg-accent text-[#1c1b1a] border-transparent font-medium; }
+}

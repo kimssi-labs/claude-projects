@@ -1,6 +1,7 @@
+node_modules/
+app/dist/
+app/release/
+app/test-results/
+app/playwright-report/
 __pycache__/
 *.pyc
-build/
-dist/
-*.spec
-.venv/
