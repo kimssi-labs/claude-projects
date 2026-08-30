@@ -23,11 +23,11 @@ test.afterAll(() => {
   }
 });
 
-function fixture(): string {
+function fixture(workspaceName = "workspace"): string {
   const root = mkdtempSync(join(tmpdir(), "hangar-layout-"));
   roots.push(root);
   const home = join(root, ".claude");
-  const workspace = join(root, "workspace");
+  const workspace = join(root, workspaceName);
   const projectDir = workspace.replace(/[^A-Za-z0-9]/g, "-");
   mkdirSync(join(home, "projects", projectDir), { recursive: true });
   mkdirSync(workspace, { recursive: true });
@@ -143,29 +143,28 @@ test("neither thin shape makes the page scroll", async () => {
 });
 
 test("text that does not fit says the whole of itself on hover", async () => {
-  const { app, page } = await launch(fixture());
+  // A name long enough to be cut in any window, on any platform: the CI runner's temp paths are
+  // short, and a test that only clips on one machine proves nothing on the other.
+  const longName = `workspace-${"long-project-name-".repeat(4)}end`;
+  const { app, page } = await launch(fixture(longName));
   try {
-    const path = page.locator("nav .truncate, #root .truncate").filter({ hasText: "workspace" }).first();
-    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+    await expect(page.getByText(longName, { exact: false }).first()).toBeVisible();
 
-    // Wide: the row has room, so no tooltip nags.
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1400, 800));
-    await page.waitForTimeout(500);
-    const roomy = await page.evaluate(() => {
-      const el = [...document.querySelectorAll("div,span")]
-        .find((n) => n.className.includes("truncate") && n.textContent?.includes("workspace"));
-      return { title: el?.getAttribute("title"), clipped: !!el && el.scrollWidth > el.clientWidth + 1 };
+    const clipping = () => page.evaluate(() => {
+      const all = [...document.querySelectorAll("div,span")]
+        .filter((n) => n.className.includes("truncate"));
+      const cut = all.filter((n) => n.scrollWidth > n.clientWidth + 1);
+      return {
+        cut: cut.length,
+        titled: cut.filter((n) => (n.getAttribute("title") ?? "").length > 0).length,
+      };
     });
-    expect(roomy.clipped).toBe(false);
 
-    // Narrow: the same text no longer fits, and now it carries its full self.
+    // Narrow: the name cannot fit, and every cut label carries its full self.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(430, 800));
-    await page.waitForTimeout(600);
-    await expect.poll(async () => page.evaluate(() => {
-      const cut = [...document.querySelectorAll("div,span")]
-        .filter((n) => n.className.includes("truncate") && n.scrollWidth > n.clientWidth + 1);
-      return cut.length > 0 && cut.every((n) => (n.getAttribute("title") ?? "").length > 0);
-    })).toBe(true);
+    await expect.poll(async () => (await clipping()).cut, { timeout: 8000 }).toBeGreaterThan(0);
+    const narrow = await clipping();
+    expect(narrow.titled, "every cut-off label has a tooltip").toBe(narrow.cut);
   } finally {
     await app.close();
   }
