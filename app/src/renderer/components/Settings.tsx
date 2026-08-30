@@ -11,7 +11,7 @@ import type { DockEdge, PermissionMode, ShellChoice, ThemeMode } from "@core/typ
 
 import type { DisplayInfo, SettingsPayload } from "../api";
 
-export const SETTINGS_SECTIONS = ["appearance", "dock", "status", "launch", "permissions"] as const;
+export const SETTINGS_SECTIONS = ["appearance", "monitor", "dock", "status", "launch", "permissions"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 const THEMES: { key: ThemeMode; label: string; note: string }[] = [
@@ -129,6 +129,23 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
               onSelect={() => update({ ...draft, ui: { ...draft.ui, theme: theme.key } })}
             />
           ))}
+        </div>
+      </Card>
+
+      <Card title="Monitoring" section="monitor" focused={focused} hint="Tab moves between cards">
+        <div className="space-y-1" onMouseEnter={() => onFocus("monitor")}>
+          <Choice
+            label="On"
+            note="CPU and memory sampled once a second, in-process"
+            selected={draft.ui.monitor}
+            onSelect={() => update({ ...draft, ui: { ...draft.ui, monitor: true } })}
+          />
+          <Choice
+            label="Off"
+            note="no sampling at all — the graphs disappear and nothing is measured"
+            selected={!draft.ui.monitor}
+            onSelect={() => update({ ...draft, ui: { ...draft.ui, monitor: false } })}
+          />
         </div>
       </Card>
 

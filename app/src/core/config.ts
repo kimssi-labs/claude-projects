@@ -33,6 +33,22 @@ function asRecord(value: unknown): Json {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
 }
 
+/** A remembered pixel width, or 0 for "let the layout decide". */
+function pixels(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+}
+
+/** A remembered window rectangle, or null when there is none worth restoring. */
+function windowBounds(value: unknown): UiConfig["window"] {
+  const raw = asRecord(value);
+  const numbers = ["x", "y", "width", "height"].map((key) => Number(raw[key]));
+  if (numbers.some((n) => !Number.isFinite(n))) return null;
+  const [x, y, width, height] = numbers as [number, number, number, number];
+  // A zero-sized window is not a position anyone wants restored.
+  return width > 0 && height > 0 ? { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) } : null;
+}
+
 function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
 }
@@ -142,6 +158,10 @@ export class ConfigStore {
       project: typeof raw["project"] === "string" ? (raw["project"] as string) : null,
       cursor: Number.isFinite(cursor) && cursor > 0 ? Math.round(cursor) : 0,
       theme: THEME_MODES.includes(theme as ThemeMode) ? (theme as ThemeMode) : "system",
+      monitor: raw["monitor"] !== false,          // on unless it was explicitly turned off
+      window: windowBounds(raw["window"]),
+      navWidth: pixels(raw["navWidth"]),
+      asideWidth: pixels(raw["asideWidth"]),
     };
   }
 

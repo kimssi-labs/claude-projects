@@ -15,11 +15,18 @@ import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./componen
 import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./components/Settings";
 import { StatusBar } from "./components/StatusBar";
 import { formatBytes } from "./format";
+import { Splitter } from "./components/Splitter";
 import { useLayoutMode } from "./useLayoutMode";
 import { useTheme } from "./useTheme";
 
 const PAGE_SIZE = 10;
 const REFRESH_MS = 15_000;
+/** Room enough for a path, never so much that the lists it frames disappear. */
+const NAV_MIN = 180;
+const NAV_MAX = 560;
+const ASIDE_MIN = 160;
+const ASIDE_MAX = 640;
+
 const HISTORY_LIMIT = 300;
 
 type Toast = { text: string; tone: "ok" | "bad" } | null;
@@ -40,8 +47,13 @@ export function App() {
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("dock");
   const [systemHistory, setSystemHistory] = useState<MetricSample[]>([]);
+  // Not part of the history: a clock speed is a reading of right now, not a series.
+  const [cpuGhz, setCpuGhz] = useState<number | null>(null);
   const [sessionHistory, setSessionHistory] = useState<Record<string, MetricSample[]>>({});
   const [theme, setTheme] = useState<ThemeMode>("system");
+  // 0 = the width the layout would have chosen; anything else is what the user dragged it to.
+  const [navWidth, setNavWidth] = useState(0);
+  const [asideWidth, setAsideWidth] = useState(0);
   useTheme(theme);
   const { mode } = useLayoutMode();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -60,6 +72,8 @@ export function App() {
         api.scan(), api.status(), api.appInfo(), api.metrics(), api.loadSettings(),
       ]);
       setTheme(saved.ui.theme);
+      setNavWidth(saved.ui.navWidth);
+      setAsideWidth(saved.ui.asideWidth);
       setSettings(saved);
       setProjects(scanned);
       setStatus(statusSnapshot);
@@ -75,7 +89,11 @@ export function App() {
   }, [refresh]);
 
   // Live samples arrive from the main process; keep the same bounded history the sampler keeps.
+  // Main can change the settings on its own — undocking when the window is dragged out of its band.
+  useEffect(() => api.onSettings((next) => setSettings(next)), []);
+
   useEffect(() => api.onMetrics((snapshot: MetricsSnapshot) => {
+    setCpuGhz(snapshot.system.cpuGhz);
     setSystemHistory((previous) => cap([...previous, {
       at: snapshot.at, cpu: snapshot.system.cpu, memoryBytes: snapshot.system.memoryBytes,
     }]));
@@ -258,8 +276,13 @@ export function App() {
 
   const totalMemory = systemHistory.length ? Math.max(...systemHistory.map((s) => s.memoryBytes)) : 1;
   const latestSystem = systemHistory.length ? systemHistory[systemHistory.length - 1] : null;
+  const cpuValue = latestSystem
+    ? `${latestSystem.cpu.toFixed(0)}%${cpuGhz ? ` · ${cpuGhz.toFixed(1)} GHz` : ""}`
+    : "\u2014";
   const liveSessions = projects.flatMap((p) => p.sessions.filter((s) => s.live));
 
+  // Monitoring off means there is nothing to draw — and nothing being measured, which is the point.
+  const monitoring = settings?.ui.monitor ?? true;
   const band = mode === "band";
   const column = mode === "column";
   const showDetail = mode === "full";
@@ -268,7 +291,7 @@ export function App() {
 
   const projectPane = (
     <>
-          <div className={band ? "p-1.5" : "p-2"}>
+          <div className={tight ? "p-1" : "p-2"}>
             <input
               ref={searchRef}
               value={query}
@@ -278,7 +301,7 @@ export function App() {
               className="w-full bg-ink-800 border border-ink-600 rounded-lg px-3 py-1.5 text-sm placeholder:text-bone-500 focus:border-accent/60"
             />
           </div>
-          <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
+          <div className={`flex-1 overflow-auto space-y-0.5 ${tight ? "px-1 pb-1" : "px-2 pb-2"}`}>
             {filtered.map((item, index) => (
               editing === item.dir ? (
                 <input
@@ -315,9 +338,22 @@ export function App() {
 
       <div className="flex-1 min-h-0 flex">
         {column ? null : (
-          <nav className={`${band ? "w-56" : "w-72"} shrink-0 border-r border-ink-600 flex flex-col`}>
-            {projectPane}
-          </nav>
+          <>
+            <nav
+              className={`${navWidth ? "" : band ? "w-56" : "w-72"} shrink-0 border-r border-ink-600 flex flex-col`}
+              style={navWidth ? { width: navWidth } : undefined}
+            >
+              {projectPane}
+            </nav>
+            <Splitter
+              width={navWidth || (band ? 224 : 288)}
+              side="left"
+              min={NAV_MIN}
+              max={NAV_MAX}
+              onDrag={setNavWidth}
+              onCommit={(width) => void api.saveUi({ navWidth: width })}
+            />
+          </>
         )}
 
         <main className="flex-1 min-w-0 flex flex-col">
@@ -333,7 +369,7 @@ export function App() {
             />
           ) : (
             <>
-              <div className={`px-4 flex items-center gap-2 border-b border-ink-600 ${band ? "py-1" : "py-2"}`}>
+              <div className={`flex items-center gap-2 border-b border-ink-600 ${tight ? "px-2 py-1" : "px-4 py-2"}`}>
                 <h1 className="text-sm text-bone-200 truncate">
                   {screen === "sessions" && openProjectInfo ? openProjectInfo.name : "Projects"}
                 </h1>
@@ -354,7 +390,7 @@ export function App() {
                 {column && screen === "projects" ? (
                   <div className="flex-1 min-w-0 flex flex-col">{projectPane}</div>
                 ) : (
-                <div className="flex-1 min-w-0 overflow-auto p-2 space-y-0.5">
+                <div className={`flex-1 min-w-0 overflow-auto space-y-0.5 ${tight ? "p-1" : "p-2"}`}>
                   {screen === "sessions"
                     ? sessions.map((item: SessionInfo, index: number) => (
                       editing === item.id ? (
@@ -376,7 +412,7 @@ export function App() {
                           key={item.id}
                           session={item}
                           selected={index === sessionIndex}
-                          samples={sessionHistory[item.id] ?? []}
+                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
                           onSelect={() => setSessionIndex(index)}
                           onOpen={() => void open("sessionsWindow")}
                         />
@@ -388,7 +424,7 @@ export function App() {
                           key={item.id}
                           session={item}
                           selected={false}
-                          samples={sessionHistory[item.id] ?? []}
+                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
                           onSelect={() => enterSessions(project.dir)}
                           onOpen={() => enterSessions(project.dir)}
                         />
@@ -402,10 +438,23 @@ export function App() {
                 </div>
                 )}
 
-                {column ? null : showDetail ? (
-                <aside className="w-80 shrink-0 border-l border-ink-600 overflow-auto">
+                {column ? null : (
+                  <Splitter
+                    width={asideWidth || (showDetail ? 320 : 208)}
+                    side="right"
+                    min={ASIDE_MIN}
+                    max={ASIDE_MAX}
+                    onDrag={setAsideWidth}
+                    onCommit={(width) => void api.saveUi({ asideWidth: width })}
+                  />
+                )}
+                {column || !monitoring ? null : showDetail ? (
+                <aside
+                  className={`${asideWidth ? "" : "w-80"} shrink-0 border-l border-ink-600 overflow-auto`}
+                  style={asideWidth ? { width: asideWidth } : undefined}
+                >
                   {screen === "sessions" && session ? (
-                    <SessionDetail session={session} samples={sessionHistory[session.id] ?? []} />
+                    <SessionDetail session={session} samples={monitoring ? sessionHistory[session.id] ?? [] : []} />
                   ) : project ? (
                     <ProjectDetail project={project} />
                   ) : null}
@@ -416,7 +465,7 @@ export function App() {
                       field="cpu"
                       max={100}
                       label="CPU (machine)"
-                      value={latestSystem ? `${latestSystem.cpu.toFixed(0)}%` : "—"}
+                      value={cpuValue}
                     />
                     <AreaChart
                       samples={systemHistory}
@@ -435,13 +484,16 @@ export function App() {
                 ) : (
                   // Band and compact: the machine graphs stay — they are the reason to keep the
                   // window on screen — but as a narrow column with no detail panel behind them.
-                  <aside className="w-52 shrink-0 border-l border-ink-600 p-2 space-y-2 overflow-hidden">
+                  <aside
+                    className={`${asideWidth ? "" : "w-52"} shrink-0 border-l border-ink-600 p-1 space-y-1 overflow-y-auto no-bar`}
+                    style={asideWidth ? { width: asideWidth } : undefined}
+                  >
                     <AreaChart
                       samples={systemHistory}
                       field="cpu"
                       max={100}
                       label="CPU"
-                      value={latestSystem ? `${latestSystem.cpu.toFixed(0)}%` : "—"}
+                      value={cpuValue}
                     />
                     <AreaChart
                       samples={systemHistory}
@@ -457,15 +509,15 @@ export function App() {
                 )}
               </div>
 
-              {column ? (
-                <div className="shrink-0 border-t border-ink-600 p-1.5 grid grid-cols-2 gap-1.5">
+              {column && monitoring ? (
+                <div className="shrink-0 border-t border-ink-600 p-1 flex gap-1 overflow-x-auto no-bar [&>*]:min-w-[9rem] [&>*]:flex-1">
                   <AreaChart
                     compact
                     samples={systemHistory}
                     field="cpu"
                     max={100}
                     label="CPU"
-                    value={latestSystem ? `${latestSystem.cpu.toFixed(0)}%` : "\u2014"}
+                    value={cpuValue}
                   />
                   <AreaChart
                     compact

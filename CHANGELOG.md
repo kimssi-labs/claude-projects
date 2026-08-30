@@ -17,9 +17,14 @@ reading as an official product; *for Claude Code* is a subtitle, never part of t
   Windows and as `_NET_WM_STRUT_PARTIAL` on X11, so the desktop work area shrinks and a maximised
   window stops at the band instead of covering it. Wayland cannot do this for an ordinary
   application, and the screen says so rather than pretending.
-- **CPU and memory monitoring.** Each running session's whole process tree is sampled once a second
-  and drawn in its row; the machine's own CPU and memory are charted beside the list, with five
-  minutes of history.
+- **CPU and memory monitoring that costs nothing.** Each running session's whole process tree is
+  sampled once a second and drawn in its row; the machine's own CPU, clock speed and memory are
+  charted beside the list, with five minutes of history. Every reading is taken in-process — a
+  toolhelp snapshot and `GetProcessTimes` on Windows, `/proc` on Linux, `os.cpus()` for the machine.
+  The obvious library for this shelled out to WMI: `processes()` measured 3.6 s per call and `mem()`
+  3.3 s, once a second. The whole app now costs about 3 % of one core.
+- **Monitoring can be switched off** (Settings · Monitoring). Off is not a hidden graph: the timer
+  stops and nothing is measured at all.
 - **Light, dark and system themes.** System follows the OS and changes with it, without a restart.
 - **Four layouts, chosen from the window's own size** — full, compact, a horizontal band for a
   top/bottom dock, and a vertical column for a left/right dock. None of them scrolls the page.
@@ -28,7 +33,17 @@ reading as an official product; *for Claude Code* is a subtitle, never part of t
 - **Usage is drawn as bars**, one fixed-width column per window, so the labels line up with each
   other and the percentages line up with each other however many windows a machine reports. A band
   too narrow for all of them fades at the edge instead of clipping one in half.
+- **The three panes can be dragged to any width** — double-click a divider to go back to the
+  layout's own. Widths are remembered like every other setting.
+- Dragging or resizing a docked window undocks it and gives the edge back, instead of snapping the
+  window into the band it just left.
+- **Everything is remembered**: the window's own size and position (restored only if that rectangle
+  is still on a connected display), the pane widths, the theme, the per-monitor dock, the shell and
+  permission mode, the MCP servers the strip reports, and the project and row you were last on.
 - Keyboard operation is unchanged, and `?` lists every key.
+- The band gives its edge back the moment the window closes, and fills the space it reserved exactly
+  — Windows enforces a window's minimum size and drags it back inside the work area unless both are
+  handled, which is what left a strip of desktop above the window and a shrunken desktop behind it.
 
 The Python terminal version is not part of this release. It remains available as **v1.15.0** under
 the old name, and its source is in this repository's history.

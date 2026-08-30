@@ -70,7 +70,7 @@ export interface MetricSeries {
 
 export interface MetricsSnapshot {
   at: number;
-  system: { cpu: number; memoryBytes: number; memoryTotalBytes: number };
+  system: { cpu: number; memoryBytes: number; memoryTotalBytes: number; cpuGhz: number | null };
   /** Per session id: the process tree of that session. */
   sessions: Record<string, { cpu: number; memoryBytes: number; pid: number }>;
 }
@@ -98,6 +98,13 @@ export interface LaunchConfig {
 export type ThemeMode = "system" | "light" | "dark";
 
 export interface UiConfig {
+  /** Where the window was last left, when it was not docked. */
+  window: { x: number; y: number; width: number; height: number } | null;
+  /** Pane widths in pixels; 0 means "whatever the layout would pick". */
+  navWidth: number;
+  asideWidth: number;
+  /** Whether CPU and memory are sampled at all. Off costs nothing — the timer stops. */
+  monitor: boolean;
   project: string | null;
   cursor: number;
   /** "system" follows the OS setting and changes with it while the app is open. */

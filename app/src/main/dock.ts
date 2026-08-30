@@ -18,6 +18,8 @@ const run = promisify(execFile);
 const ABE = { left: 0, top: 1, right: 2, bottom: 3 } as const;
 const ABM = { new: 0, remove: 1, queryPos: 2, setPos: 3 } as const;
 const APPBAR_CALLBACK_MESSAGE = 0x8000 + 1;      // WM_APP + 1: we never read it, it just must be set
+/** How long the shell is allowed to argue about the placement before a move means the user. */
+const SETTLE_MS = 1500;
 /** A docked band is a strip, not a window: its own minimum size must not fight the thickness. */
 const BAND_MINIMUM = 60;
 const SWP_NOZORDER = 0x0004;
@@ -147,6 +149,16 @@ export class Dock {
   private readonly minimum: number[];
   /** Set while we are the ones moving the window, so re-asserting the band cannot recurse. */
   private placing = false;
+  /**
+   * How long after a placement a move still counts as the system's doing rather than the user's.
+   *
+   * Windows nudges an appbar out of the work area right after it is placed, so the band has to be
+   * re-asserted; but a drag or a resize a second later is the user asking for their window back,
+   * and the answer to that is to give the edge up, not to snap the window into place again.
+   */
+  private assertUntil = 0;
+  /** Told when a user move undocked us, so the setting and the screen can agree. */
+  onUserUndock: (() => void) | null = null;
 
   constructor(private readonly window: BrowserWindow) {
     this.minimum = window.getMinimumSize();
@@ -158,6 +170,10 @@ export class Dock {
       const want = screen.screenToDipRect(this.window, this.reserved);
       if (current.x === want.x && current.y === want.y
         && current.width === want.width && current.height === want.height) return;
+      if (Date.now() > this.assertUntil) {
+        void this.release().then(() => this.onUserUndock?.());
+        return;
+      }
       this.place(this.reserved);
     };
     window.on("move", reassert);
@@ -198,6 +214,7 @@ export class Dock {
     // window has to land where the reservation actually is, not where it was asked for.
     // Straight to the shell in physical pixels. Going through setBounds pushes the window out of
     // the work area the reservation just shrank, leaving the band empty and the window beside it.
+    this.assertUntil = Date.now() + SETTLE_MS;
     this.place(this.reserved ?? band);
     const target = this.reserved && process.platform === "win32"
       ? screen.screenToDipRect(this.window, this.reserved)
