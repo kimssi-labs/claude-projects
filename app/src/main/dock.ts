@@ -18,6 +18,8 @@ const run = promisify(execFile);
 const ABE = { left: 0, top: 1, right: 2, bottom: 3 } as const;
 const ABM = { new: 0, remove: 1, queryPos: 2, setPos: 3 } as const;
 const APPBAR_CALLBACK_MESSAGE = 0x8000 + 1;      // WM_APP + 1: we never read it, it just must be set
+/** Long enough for Chromium to notice the window is on a monitor with a different scale factor. */
+const DPI_SETTLE_MS = 80;
 /** How long the shell is allowed to argue about the placement before a move means the user. */
 const SETTLE_MS = 1500;
 /** A docked band is a strip, not a window: its own minimum size must not fight the thickness. */
@@ -255,15 +257,53 @@ export class Dock {
     return this.current?.enabled === true;
   }
 
+  /**
+   * The display's work area as if we were not docked to it.
+   *
+   * `display.workArea` already excludes our own band, so sizing the band from it shrinks the band
+   * every time it is applied: 20 % of a work area that is itself 20 % smaller. Adding our own
+   * reservation back gives a percentage that always means the same thing.
+   */
+  workArea(display: Electron.Display): Rectangle {
+    const area = display.workArea;
+    const edge = this.current?.edge;
+    if (!this.registered || !this.reserved || !edge) return area;
+    const band = screen.screenToDipRect(null, this.reserved);
+    const onThisDisplay = band.x < display.bounds.x + display.bounds.width
+      && display.bounds.x < band.x + band.width
+      && band.y < display.bounds.y + display.bounds.height
+      && display.bounds.y < band.y + band.height;
+    if (!onThisDisplay) return area;
+    const thickness = bandThickness(band, edge);
+    if (edge === "top") return { x: area.x, y: area.y - thickness, width: area.width, height: area.height + thickness };
+    if (edge === "bottom") return { ...area, height: area.height + thickness };
+    if (edge === "left") return { x: area.x - thickness, y: area.y, width: area.width + thickness, height: area.height };
+    return { ...area, width: area.width + thickness };
+  }
+
   /** Place the window in its band and reserve that space; returns what actually happened. */
   async apply(config: DockConfig): Promise<DockPlacement> {
     const { display, missing } = pickDisplay(config.device);
-    const band = bandRect(display.workArea, config.edge, config.percent);
+    // Measured against the undocked work area, so 20 % means the same thing every time it is asked
+    // for — not 20 % of whatever is left after the last band.
+    const band = bandRect(this.workArea(display), config.edge, config.percent);
     this.current = config;
 
     // Before anything is placed: a 15 % band is thinner than the window's usual minimum height, and
     // Windows enforces that minimum, which would leave the window overlapping its own reservation.
     this.window.setMinimumSize(BAND_MINIMUM, BAND_MINIMUM);
+
+    // Move to the target monitor BEFORE reserving anything.
+    //
+    // The placement below uses SWP_NOSENDCHANGING, which is what stops Chromium dragging the window
+    // back out of its own band — but it also means Chromium never learns it changed monitors, and
+    // on a display with a different scale factor it then reports and lays out at the old one. A
+    // normal move first, while nothing is reserved and nothing will clamp it, teaches it the DPI.
+    const currentDisplay = screen.getDisplayMatching(this.window.getBounds());
+    if (currentDisplay.id !== display.id) {
+      this.window.setBounds(band);
+      await new Promise((resolve) => setTimeout(resolve, DPI_SETTLE_MS));
+    }
 
     let note = missing ? `Saved monitor ${missing} is not connected — using ${display.label}.` : null;
     if (process.platform === "win32") note = (await this.reserveWindows(band, config.edge)) ?? note;

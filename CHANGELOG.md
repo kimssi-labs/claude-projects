@@ -3,6 +3,25 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.2.0
+
+- **A splash while it starts.** It names what the app is doing — reading settings, scanning
+  projects, opening the window — and only appears if start-up takes longer than 450 ms, so a warm
+  start (about two seconds here) does not flash a window at you.
+- **The dock size stopped shrinking itself.** A band was measured against a work area it had already
+  taken a bite out of, so asking for the same percentage twice gave a smaller band each time.
+- **Docking across monitors with different scaling.** Placing the band with `SWP_NOSENDCHANGING`
+  meant Chromium never noticed the window had moved to a 125 % monitor and kept laying it out at the
+  old scale, so the band was a quarter too wide. The window is moved to the target monitor first,
+  while nothing is reserved and nothing can clamp it.
+- **The stacked layout can be split** — drag the divider between the project list and the sessions;
+  the height is remembered like every other size.
+- **Status line: every segment is a choice** — usage bars, Outlook, ponytail — beside the MCP list.
+- The usage strip's spacing was uneven and started hard against the window edge.
+
+Docking is now tested on **every connected monitor**, on all four edges, for reserve / fill /
+release, and for a percentage meaning the same thing however often it is applied.
+
 ## v2.1.0
 
 **The window stopped freezing.** Three things were blocking the thread that draws it, and all three

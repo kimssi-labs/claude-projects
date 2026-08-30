@@ -57,9 +57,18 @@ async function launch(home: string): Promise<{ app: ElectronApplication; page: P
     cwd: process.cwd(),
     env: { ...process.env, CLAUDE_HOME: home },
   });
-  const page = await app.firstWindow();
+  const page = await mainWindow(app);
   await page.waitForLoadState("domcontentloaded");
   return { app, page };
+}
+
+/** The app's own window — `firstWindow()` can hand back the splash, which then closes. */
+export async function mainWindow(app: ElectronApplication): Promise<Page> {
+  for (;;) {
+    const found = app.windows().find((w) => w.url().includes("index.html"));
+    if (found) return found;
+    await app.waitForEvent("window");
+  }
 }
 
 test("shows the fixture's project and its sessions, and moves with the keyboard", async () => {

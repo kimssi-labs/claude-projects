@@ -36,6 +36,78 @@ const OVERLAY = {
   dark: { color: "#141413", symbolColor: "#eceae4" },
 } as const;
 
+/** Small enough to read at a glance, large enough for the longest step. */
+const SPLASH = { width: 380, height: 96 } as const;
+/**
+ * How long start-up may take before it is worth explaining itself.
+ *
+ * A warm start puts the window up in about two seconds, and a splash that flashes for a moment is
+ * worse than no splash at all; a cold start after an install took 23 s here, which is not.
+ */
+const SPLASH_AFTER_MS = 450;
+
+/**
+ * Open the splash, hidden, and show it only if the app is still starting a moment later.
+ *
+ * It is created straight away rather than after the delay because creating a window is itself work:
+ * doing that at the moment the app is busiest is how a "loading" window arrives after the loading.
+ */
+function openSplash(): void {
+  try {
+    splash = new BrowserWindow({
+      ...SPLASH,
+      show: false,
+      frame: false,
+      transparent: false,
+      resizable: false,
+      movable: true,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      center: true,
+      backgroundColor: resolvedTheme() === "dark" ? "#1c1b1a" : "#ffffff",
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    splash.setMenu(null);
+    const theme = resolvedTheme();
+    void splash.loadFile(join(__dirname, "..", "renderer", "splash.html"));
+    // Set from here rather than by a script in the page: the splash keeps a no-script CSP.
+    splash.webContents.once("did-finish-load", () => {
+      void splash?.webContents
+        .executeJavaScript(`document.documentElement.dataset.theme = ${JSON.stringify(theme)};`)
+        .catch(() => undefined);
+      splashSays(pendingStep);
+    });
+    splashTimer = setTimeout(() => {
+      splashTimer = null;
+      if (splash && !splash.isDestroyed() && !window?.isVisible()) splash.show();
+    }, SPLASH_AFTER_MS);
+  } catch (error) {
+    console.error("[hangar] splash unavailable:", (error as Error).message);
+    splash = null;
+  }
+}
+
+/** What the app is doing right now, in the splash and in the log. */
+function splashSays(step: string): void {
+  pendingStep = step;
+  if (!splash || splash.isDestroyed()) return;
+  // executeJavaScript runs in the page, so the splash needs no preload and no channel of its own.
+  void splash.webContents
+    .executeJavaScript(`document.getElementById("step").textContent = ${JSON.stringify(step)};`)
+    .catch(() => {
+      /* the page may not have loaded yet; the next step will say the same thing */
+    });
+}
+
+function closeSplash(): void {
+  if (splashTimer) {
+    clearTimeout(splashTimer);
+    splashTimer = null;
+  }
+  if (splash && !splash.isDestroyed()) splash.destroy();
+  splash = null;
+}
+
 /** Which palette the window is actually in, resolving "system" the way the page does. */
 function resolvedTheme(): "light" | "dark" {
   const mode = config.ui().theme;
@@ -60,6 +132,10 @@ let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
 let sampling: NodeJS.Timeout | null = null;
 let worker: Worker | null = null;
+let splash: BrowserWindow | null = null;
+let splashTimer: NodeJS.Timeout | null = null;
+/** The last step named before the page finished loading, so it is not lost. */
+let pendingStep = "Starting…";
 let lastProjects: ProjectInfo[] = [];
 
 function which(exe: string): string | null {
@@ -144,7 +220,7 @@ async function createWindow(): Promise<void> {
       const current = config.dock();
       if (!current.enabled || !window) return;
       const { display } = pickDisplay(current.device);
-      const span = bandThickness(display.workArea, current.edge);
+      const span = bandThickness(dock?.workArea(display) ?? display.workArea, current.edge);
       const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
       if (percent === current.percent) return;
       config.saveDock({ ...current, percent });
@@ -160,7 +236,10 @@ async function createWindow(): Promise<void> {
 
   // Subscribe BEFORE loading: `ready-to-show` fires during the load, and a listener attached
   // afterwards misses it — the window then stays hidden forever with no error anywhere.
-  window.once("ready-to-show", () => window?.show());
+  window.once("ready-to-show", () => {
+    window?.show();
+    closeSplash();
+  });
   // `close` and not `closed`: the reservation is removed while the window still exists, and
   // synchronously, because nothing waits for us once the process starts shutting down.
   window.on("close", () => {
@@ -413,13 +492,17 @@ function registerIpc(): void {
       if (config.ui().monitor) startSampling();
       else stopSampling();
     }
-    return settingsPayload();
+    const saved = settingsPayload();
+    // Tell the window too: whoever changed a setting, the screen should already agree with it.
+    window?.webContents.send(CHANNEL.settingsPush, saved);
+    return saved;
   });
 
   ipcMain.handle(CHANNEL.applyDock, async (_event, wanted: DockConfig) => {
     if (!window || !dock) return { ok: false, message: "No window." };
     const { display } = pickDisplay(wanted.device);
-    const span = bandThickness(display.workArea, wanted.edge);
+    // The same undocked measure the band itself uses; see Dock.workArea.
+    const span = bandThickness(dock.workArea(display), wanted.edge);
     const floor = config.dockFloor(wanted.edge);
     const percent = Math.max(wanted.percent, percentFloor(floor, span));
     const applied: DockConfig = { ...wanted, percent };
@@ -427,7 +510,7 @@ function registerIpc(): void {
     const placement = await dock.apply(applied);
     // What the window really got is the floor for this axis: remember it so the slider can stop there.
     const got = bandThickness(placement.applied, applied.edge);
-    const asked = bandThickness(bandRect(display.workArea, applied.edge, applied.percent), applied.edge);
+    const asked = bandThickness(bandRect(dock.workArea(display), applied.edge, applied.percent), applied.edge);
     if (got > asked + 2) config.saveDockFloor(applied.edge, got);
     return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
   });
@@ -469,10 +552,16 @@ async function confirm(message: string, detail: string): Promise<boolean> {
 }
 
 app.whenReady().then(async () => {
+  openSplash();
+  splashSays("Reading settings…");
   registerIpc();
+  splashSays("Scanning projects…");
   scanProjects();
+  splashSays(`Opening ${lastProjects.length} project${lastProjects.length === 1 ? "" : "s"}…`);
   await createWindow();
+  splashSays("Starting the monitor…");
   startSampling();
+  closeSplash();
   console.log(`[hangar] window ready — ${lastProjects.length} projects from ${claudeHome()}`);
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
@@ -481,6 +570,7 @@ app.whenReady().then(async () => {
 
 process.on("uncaughtException", (error) => {
   console.error("[hangar] fatal:", error);
+  closeSplash();                                  // never leave a splash on screen with no app
 });
 
 // An app that disappears should say why. These are the three ways it can happen without anyone

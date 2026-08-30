@@ -110,6 +110,8 @@ export interface UiConfig {
   /** Pane widths in pixels; 0 means "whatever the layout would pick". */
   navWidth: number;
   asideWidth: number;
+  /** Height of the project list when the layout is stacked; 0 means "half". */
+  stackTop: number;
   /** Whether CPU and memory are sampled at all. Off costs nothing — the timer stops. */
   monitor: boolean;
   project: string | null;
@@ -121,4 +123,10 @@ export interface UiConfig {
 export interface StatusConfig {
   /** Selected MCP servers, or null for "every server the probe knows". */
   mcp: string[] | null;
+  /** Show the Outlook reachability segment, when that probe writes a cache here. */
+  outlook: boolean;
+  /** Show the ponytail mode chip, when the flag file is present. */
+  ponytail: boolean;
+  /** Show the rate-limit bars. */
+  usage: boolean;
 }

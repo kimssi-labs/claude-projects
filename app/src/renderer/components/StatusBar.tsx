@@ -54,10 +54,10 @@ function UsageColumn({ window: usage }: { window: RateWindow }) {
 /** Docked band: one line, but still three fixed columns, so nothing wanders as numbers change. */
 function UsageRow({ window: usage }: { window: RateWindow }) {
   return (
-    <div className="flex items-center gap-2 shrink-0" title={`${usage.label} usage`}>
-      <span className="text-[11px] uppercase tracking-wide text-bone-500 w-12 truncate">{usage.label}</span>
-      <Bar percent={usage.usedPercent} className="w-16" />
-      <span className={`text-xs tabular-nums w-9 text-right ${usageTone(usage.usedPercent)}`}>
+    <div className="flex items-center gap-1.5 shrink-0" title={`${usage.label} usage`}>
+      <span className="text-[11px] uppercase tracking-wide text-bone-500 whitespace-nowrap">{usage.label}</span>
+      <Bar percent={usage.usedPercent} className="w-14" />
+      <span className={`text-xs tabular-nums w-10 text-right ${usageTone(usage.usedPercent)}`}>
         {formatPercent(usage.usedPercent)}
       </span>
     </div>
@@ -75,7 +75,7 @@ export function StatusBar({ status, appVersion, compact = false, onRefresh }: {
   if (!status) return null;
   const hasAnything = status.windows.length || status.health.length || status.ponytail;
   return (
-    <header className={`drag flex items-center border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8 gap-2 px-1.5" : "h-14 gap-4 px-3"}`}
+    <header className={`drag flex items-center border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8 gap-3 pl-5 pr-3" : "h-14 gap-4 px-3"}`}
       // The caption buttons are drawn over the right end of this strip.
       style={{ paddingRight: CAPTION_WIDTH }}>
       {/* No wordmark here: the title bar already says Hangar, and the strip needs the width. */}

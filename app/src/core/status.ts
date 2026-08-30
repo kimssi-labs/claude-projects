@@ -77,15 +77,23 @@ export function mcpHealth(probe: Record<string, unknown>, selected: string[] | n
   return { key: "mcp", label: selected ? names.join(", ") : "MCP", ok, detail };
 }
 
-export function readStatus(home?: string, config: StatusConfig = { mcp: null }, now = Date.now()): StatusSnapshot {
+export function readStatus(
+  home?: string,
+  config: StatusConfig = { mcp: null, outlook: true, ponytail: true, usage: true },
+  now = Date.now(),
+): StatusSnapshot {
   const paths = homePaths(home);
-  const windows = rateWindows(readJson<Record<string, unknown>>(paths.rateLimits, {}), now);
+  const windows = config.usage === false
+    ? []
+    : rateWindows(readJson<Record<string, unknown>>(paths.rateLimits, {}), now);
   const health: HealthItem[] = [];
 
   const mcp = mcpHealth(readJson<Record<string, unknown>>(paths.mcpStatus, {}), config.mcp);
   if (mcp) health.push(mcp);
 
-  const outlook = readJson<{ servers?: Record<string, { ok?: boolean }> }>(paths.outlookStatus, {});
+  const outlook = config.outlook === false
+    ? {}
+    : readJson<{ servers?: Record<string, { ok?: boolean }> }>(paths.outlookStatus, {});
   const outlookServers = Object.values(outlook.servers ?? {});
   if (outlookServers.length) {
     health.push({
@@ -97,6 +105,7 @@ export function readStatus(home?: string, config: StatusConfig = { mcp: null }, 
   }
 
   let ponytail: string | null = null;
+  if (config.ponytail === false) return { windows, health, ponytail };
   try {
     ponytail = readFileSync(paths.ponytailFlag, "utf8").trim().split("\n")[0] || null;
   } catch {
