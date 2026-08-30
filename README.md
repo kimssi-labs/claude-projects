@@ -167,6 +167,15 @@ npm run dist         # installers into app/release
 CI runs typecheck, unit tests and the end-to-end suite on Windows and Linux for every push; a tag
 builds the installers on both and publishes them.
 
+Tests are filed by what they cover, and a fix lands with the case that would have caught it:
+
+| Where | What it covers |
+|---|---|
+| `src/core/__tests__` | the feature's own logic — scanning, config, launch commands, key map, layout rules |
+| `src/main/__tests__` | the main process: docking arithmetic and what the OS is asked for |
+| `src/renderer/__tests__` | what the window decides to draw |
+| `e2e` | the built app, driven like a person: keyboard, settings, and the real docked window |
+
 The end-to-end suite drives the real window: it docks to every attached monitor on every edge and
 checks the desktop's work area really changed and came back. A machine with one screen exercises
 one, and the run says which it checked.
