@@ -9,6 +9,8 @@ import { useEffect, useRef } from "react";
 
 import type { MetricSample } from "@core/types";
 
+import { Truncated } from "./Truncated";
+
 const ACCENT = "#d97757";
 const ACCENT_SOFT = "rgba(217, 119, 87, 0.18)";
 
@@ -110,7 +112,7 @@ export function AreaChart({ samples, field, max, label, value, className = "", c
   return (
     <div className={`card ${compact ? "p-1.5" : "p-3"} ${className}`}>
       <div className="flex items-baseline justify-between gap-2">
-        <span className={`${compact ? "text-[11px]" : "text-xs"} text-bone-400 truncate`}>{label}</span>
+        <Truncated as="span" className={`${compact ? "text-[11px]" : "text-xs"} text-bone-400`}>{label}</Truncated>
         <span className={`${compact ? "text-xs" : "text-sm"} font-medium text-bone-100 tabular-nums`}>{value}</span>
       </div>
       <canvas ref={ref} className={`${compact ? "mt-1 h-7" : "mt-2 h-16"} w-full`} />

@@ -10,6 +10,7 @@
 import type { RateWindow, StatusSnapshot } from "@core/types";
 
 import { formatClock, formatPercent, usageTone } from "../format";
+import { Truncated } from "./Truncated";
 
 function barTone(percent: number): string {
   return percent >= 80 ? "bg-bad" : percent >= 50 ? "bg-warn" : "bg-ok";
@@ -41,9 +42,13 @@ function UsageColumn({ window: usage }: { window: RateWindow }) {
           it belonged to the next window along. */}
       <div className="flex items-baseline gap-2 min-w-0">
         <span className="text-[11px] uppercase tracking-wide text-bone-500 shrink-0">{usage.label}</span>
-        <span className="text-[10px] text-bone-500 tabular-nums truncate">
+        <Truncated
+          as="span"
+          title={usage.resetsAt ? `Resets ${formatClock(usage.resetsAt)}` : undefined}
+          className="text-[10px] text-bone-500 tabular-nums"
+        >
           {usage.resetsAt ? `↻ ${formatClock(usage.resetsAt)}` : ""}
-        </span>
+        </Truncated>
       </div>
       <div className="mt-1 flex items-center gap-1.5">
         <Bar percent={usage.usedPercent} className="flex-1" />
@@ -109,11 +114,11 @@ export function StatusBar({ status, appVersion, compact = false, onRefresh, cont
 
       <div className="flex items-center gap-3 shrink-0">
         {(status?.health ?? []).map((item) => (
-          <span key={item.key} className="flex items-center gap-1 text-xs text-bone-400" title={item.detail}>
+          <span key={item.key} className="flex items-center gap-1 text-xs text-bone-400 min-w-0" title={item.detail}>
             <span className={item.ok === true ? "text-ok" : item.ok === false ? "text-bad" : "text-bone-500"}>
               {item.ok === true ? "●" : item.ok === false ? "▲" : "○"}
             </span>
-            {item.label}
+            <Truncated as="span" className="max-w-[12rem]">{item.label}</Truncated>
           </span>
         ))}
         {status?.ponytail ? <span className="chip">ponytail {status.ponytail}</span> : null}

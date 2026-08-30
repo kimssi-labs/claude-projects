@@ -3,6 +3,25 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.2.4
+
+- **Docked is the maximised state, and now behaves like one.** The maximise button docks — back to
+  the band this arrangement remembers — and restore undocks into an ordinary resizable window. While
+  docked the window is not movable and not maximisable, so it cannot be dragged off its edge at all;
+  putting it back on every move event was fighting the window manager's own drag loop instead.
+- **The loading panel is the window itself.** A second window meant a second renderer starting up
+  beside the app's own — 800 ms — so the "loading" window arrived after the loading. The panel is
+  markup in the page, painted when the document parses, and the window is shown the moment it is
+  created: measured **1,000 ms → about 500 ms** from launch, with the taskbar button showing
+  progress from that same moment.
+- **Text that does not fit says the whole of itself on hover** — measured rather than guessed, so a
+  label only carries a tooltip when it is really cut off. The MCP segment lists every server it was
+  asked about with its verdict, one per line.
+- **The splash arrives about twice as early.** It was waiting for its page to load — 800 ms, because
+  its renderer was starting up beside the app's own — and only then appearing. The window is shown
+  the moment it is created, painted by the compositor from its background colour, with the text
+  filling in behind it: measured 1,000 ms → 400-550 ms from launch.
+
 ## v2.2.3
 
 Everything the 2.x line changed, in one place — the terminal manager became a desktop app, and the

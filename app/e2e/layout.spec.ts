@@ -141,3 +141,32 @@ test("neither thin shape makes the page scroll", async () => {
     await app.close();
   }
 });
+
+test("text that does not fit says the whole of itself on hover", async () => {
+  const { app, page } = await launch(fixture());
+  try {
+    const path = page.locator("nav .truncate, #root .truncate").filter({ hasText: "workspace" }).first();
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+
+    // Wide: the row has room, so no tooltip nags.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1400, 800));
+    await page.waitForTimeout(500);
+    const roomy = await page.evaluate(() => {
+      const el = [...document.querySelectorAll("div,span")]
+        .find((n) => n.className.includes("truncate") && n.textContent?.includes("workspace"));
+      return { title: el?.getAttribute("title"), clipped: !!el && el.scrollWidth > el.clientWidth + 1 };
+    });
+    expect(roomy.clipped).toBe(false);
+
+    // Narrow: the same text no longer fits, and now it carries its full self.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(430, 800));
+    await page.waitForTimeout(600);
+    await expect.poll(async () => page.evaluate(() => {
+      const cut = [...document.querySelectorAll("div,span")]
+        .filter((n) => n.className.includes("truncate") && n.scrollWidth > n.clientWidth + 1);
+      return cut.length > 0 && cut.every((n) => (n.getAttribute("title") ?? "").length > 0);
+    })).toBe(true);
+  } finally {
+    await app.close();
+  }
+});

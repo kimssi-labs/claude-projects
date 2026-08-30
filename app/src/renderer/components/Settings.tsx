@@ -7,6 +7,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DOCK_EDGES, DOCK_PERCENT, STACK_BELOW } from "@core/constants";
+
+import { Truncated } from "./Truncated";
 import type { DockEdge, LayoutMode, PermissionMode, ShellChoice, ThemeMode } from "@core/types";
 
 import type { DisplayInfo, SettingsPayload } from "../api";
@@ -277,8 +279,8 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
                 onChange={() => update({ ...draft, status: { ...draft.status, [key]: draft.status[key] === false } })}
                 className="accent-accent"
               />
-              <span className="text-sm text-bone-100">{label}</span>
-              <span className="text-[11px] text-bone-500 truncate">{note}</span>
+              <Truncated as="span" className="text-sm text-bone-100">{label}</Truncated>
+              <Truncated as="span" className="text-[11px] text-bone-500">{note}</Truncated>
             </label>
           ))}
 
