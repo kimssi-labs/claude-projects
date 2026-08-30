@@ -63,7 +63,7 @@ describe("readStatus", () => {
     }));
     writeFileSync(join(home, "cache", "mcp-status.json"), JSON.stringify({ servers: { wiki: { ok: true } } }));
     writeFileSync(join(home, ".ponytail-active"), "full\n");
-    const status = readStatus(home, { mcp: null }, NOW);
+    const status = readStatus(home, { mcp: null, outlook: true, ponytail: true, usage: true }, NOW);
     expect(status.windows).toHaveLength(1);
     expect(status.health.map((h) => h.key)).toEqual(["mcp"]);
     expect(status.ponytail).toBe("full");

@@ -7,10 +7,10 @@
 import { useRef } from "react";
 
 export interface SplitterProps {
-  /** Current width of the pane being sized, in pixels. */
+  /** Current width — or height, for a horizontal divider — of the pane being sized, in pixels. */
   width: number;
   /** Which side the pane is on — the direction a drag has to grow it. */
-  side: "left" | "right";
+  side: "left" | "right" | "top" | "bottom";
   min: number;
   max: number;
   onDrag: (width: number) => void;
@@ -19,22 +19,25 @@ export interface SplitterProps {
 }
 
 export function Splitter({ width, side, min, max, onDrag, onCommit }: SplitterProps) {
-  const start = useRef({ x: 0, width: 0 });
+  const start = useRef({ position: 0, width: 0 });
+  const vertical = side === "left" || side === "right";
+  const grows = side === "left" || side === "top";
 
   return (
     <div
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={vertical ? "vertical" : "horizontal"}
       aria-label="Resize panel"
-      className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/40 active:bg-accent/60 transition-colors"
+      className={`shrink-0 bg-transparent hover:bg-accent/40 active:bg-accent/60 transition-colors ${
+        vertical ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"}`}
       onPointerDown={(event) => {
-        start.current = { x: event.clientX, width };
+        start.current = { position: vertical ? event.clientX : event.clientY, width };
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-        const delta = event.clientX - start.current.x;
-        const next = start.current.width + (side === "left" ? delta : -delta);
+        const delta = (vertical ? event.clientX : event.clientY) - start.current.position;
+        const next = start.current.width + (grows ? delta : -delta);
         onDrag(Math.max(min, Math.min(max, Math.round(next))));
       }}
       onPointerUp={(event) => {

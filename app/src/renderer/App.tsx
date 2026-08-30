@@ -25,6 +25,8 @@ const REFRESH_MS = 15_000;
 const NAV_MIN = 180;
 const NAV_MAX = 560;
 const ASIDE_MIN = 160;
+/** Enough of a stacked pane to be a list rather than a sliver. */
+const STACK_MIN = 120;
 const ASIDE_MAX = 640;
 
 const HISTORY_LIMIT = 300;
@@ -54,6 +56,7 @@ export function App() {
   // 0 = the width the layout would have chosen; anything else is what the user dragged it to.
   const [navWidth, setNavWidth] = useState(0);
   const [asideWidth, setAsideWidth] = useState(0);
+  const [stackTop, setStackTop] = useState(0);
   useTheme(theme);
   const { mode } = useLayoutMode(settings?.ui.layout ?? "auto", settings?.ui.stackBelow ?? 520);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -74,6 +77,7 @@ export function App() {
       setTheme(saved.ui.theme);
       setNavWidth(saved.ui.navWidth);
       setAsideWidth(saved.ui.asideWidth);
+      setStackTop(saved.ui.stackTop);
       setSettings(saved);
       setProjects(scanned);
       setStatus(statusSnapshot);
@@ -395,7 +399,20 @@ export function App() {
                   // Stacked: the project list, that project's sessions, and the graphs, one under
                   // the other — a tall narrow window has no room for panes side by side.
                   <div className="flex-1 min-w-0 flex flex-col">
-                    <div className="flex-1 min-h-0 flex flex-col border-b border-ink-600">{projectPane}</div>
+                    <div
+                      className={`${stackTop ? "" : "flex-1"} min-h-0 flex flex-col border-b border-ink-600`}
+                      style={stackTop ? { height: stackTop } : undefined}
+                    >
+                      {projectPane}
+                    </div>
+                    <Splitter
+                      width={stackTop || Math.round(window.innerHeight / 2)}
+                      side="top"
+                      min={STACK_MIN}
+                      max={Math.max(STACK_MIN, window.innerHeight - STACK_MIN)}
+                      onDrag={setStackTop}
+                      onCommit={(height) => void api.saveUi({ stackTop: height })}
+                    />
                     <div className="flex-1 min-h-0 overflow-auto p-1 space-y-0.5">
                   {screen === "sessions"
                     ? sessions.map((item: SessionInfo, index: number) => (
