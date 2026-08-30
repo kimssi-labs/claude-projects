@@ -19,7 +19,7 @@ import { Store } from "../core/store.js";
 import type { DockConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
 import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
 import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type SettingsPayload } from "./ipc.js";
+import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 import { Worker } from "node:worker_threads";
 
 import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
@@ -117,14 +117,17 @@ function resolvedTheme(): "light" | "dark" {
   return mode;
 }
 
-/** Keep the caption buttons on the same background as the page under them. */
-function paintTitleBar(): void {
-  if (!window || window.isDestroyed() || process.platform === "darwin") return;
-  try {
-    window.setTitleBarOverlay({ ...OVERLAY[resolvedTheme()], height: TITLE_BAR_HEIGHT });
-  } catch {
-    /* only Windows has an overlay to paint */
-  }
+/** What the caption buttons should show right now. */
+function windowState(): WindowState {
+  return {
+    maximized: window ? !window.isDestroyed() && window.isMaximized() : false,
+    docked: dock?.isDocked === true,
+  };
+}
+
+function pushWindowState(): void {
+  if (!window || window.isDestroyed()) return;
+  window.webContents.send(CHANNEL.windowStatePush, windowState());
 }
 
 const store = new Store();
@@ -198,10 +201,9 @@ async function createWindow(): Promise<void> {
     autoHideMenuBar: true,
     // Docked, a title bar is a strip of the band that shows nothing. The caption buttons are drawn
     // over our own header instead, so the window fills its reservation edge to edge.
+    // No system overlay either: the buttons are drawn in the header, because the middle one has to
+    // say "restore" while docked, which the platform has no way of knowing.
     titleBarStyle: "hidden",
-    ...(process.platform === "win32"
-      ? { titleBarOverlay: { ...OVERLAY[resolvedTheme()], height: TITLE_BAR_HEIGHT } }
-      : {}),
     icon: join(__dirname, "..", "..", "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
     webPreferences: {
       preload: join(__dirname, "..", "preload", "preload.js"),
@@ -211,7 +213,14 @@ async function createWindow(): Promise<void> {
     },
   });
   dock = new Dock(window);
-  nativeTheme.on("updated", paintTitleBar);
+  window.on("maximize", () => {
+    // setMaximizable(false) stops the caption button and the system menu, not the API or every
+    // window-manager gesture. While docked the band already is the full state, so undo it.
+    if (dock?.isDocked && window && !window.isDestroyed()) window.unmaximize();
+    pushWindowState();
+  });
+  window.on("unmaximize", pushWindowState);
+  window.on("restore", pushWindowState);
   // Plugging a monitor in or out is a different arrangement, with its own remembered dock.
   const rearranged = (): void => void reapplyDockForSetup();
   screen.on("display-added", rearranged);
@@ -254,6 +263,7 @@ async function createWindow(): Promise<void> {
     const current = config.dock(null, setupKey());
     if (!current.enabled) return;
     config.saveDock({ ...current, enabled: false }, setupKey());
+    pushWindowState();
     window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
   };
 
@@ -520,6 +530,22 @@ function registerIpc(): void {
   ipcMain.handle(CHANNEL.loadSettings, () => settingsPayload());
   ipcMain.handle(CHANNEL.displays, () => displays());
 
+  ipcMain.handle(CHANNEL.windowState, () => windowState());
+
+  ipcMain.handle(CHANNEL.windowCommand, async (_event, command: WindowCommand) => {
+    if (!window || window.isDestroyed()) return windowState();
+    if (command === "minimize") window.minimize();
+    else if (command === "close") window.close();
+    else if (dock?.isDocked) {
+      // Docked IS the maximised state, so "restore" here means: be an ordinary window again.
+      await dock.release();
+      dock.onUserUndock?.();
+    } else if (window.isMaximized()) window.unmaximize();
+    else window.maximize();
+    pushWindowState();
+    return windowState();
+  });
+
   ipcMain.handle(CHANNEL.saveSettings, (_event, payload: {
     dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: UiConfig;
   }) => {
@@ -531,7 +557,6 @@ function registerIpc(): void {
     // The theme lives with the rest of the remembered position, so it comes back with it.
     if (payload.ui) {
       config.saveUi({ ...config.ui(), ...payload.ui });
-      paintTitleBar();                            // the theme may have just changed
       if (config.ui().monitor) startSampling();
       else stopSampling();
     }
@@ -557,13 +582,16 @@ function registerIpc(): void {
     const asked = bandThickness(bandRect(dock.workArea(display), applied.edge, applied.percent), applied.edge);
     if (got > asked + FLOOR_SLACK_PX) config.saveDockFloor(applied.edge, got);
     else config.saveDockFloor(applied.edge, 0);   // it fitted, so nothing is stopping it here
+    pushWindowState();
     return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
   });
 
   ipcMain.handle(CHANNEL.releaseDock, async () => {
     await dock?.release();
+    pushWindowState();
     const current = config.dock(null, setupKey());
     config.saveDock({ ...current, enabled: false }, setupKey());
+    pushWindowState();
     return settingsPayload();
   });
 

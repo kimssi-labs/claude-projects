@@ -215,7 +215,7 @@ export class Dock {
    * and the answer to that is to give the edge up, not to snap the window into place again.
    */
   private assertUntil = 0;
-  /** Told when a user move undocked us, so the setting and the screen can agree. */
+  /** Told when we let go of the edge, so the setting and the screen can agree. */
   onUserUndock: (() => void) | null = null;
   /**
    * Told when the user dragged the band's inner edge: the new thickness in DIP.
@@ -252,7 +252,10 @@ export class Dock {
           this.onUserResize(bandThickness(current, edge));
           return;
         }
-        void this.release().then(() => this.onUserUndock?.());
+        // Moved, not resized — dragged by its title bar, or maximised. A docked window is a band,
+        // so it goes back to its band. Undocking is a deliberate act: restoring the window from
+        // maximised, or the Undock button.
+        this.place(this.reserved);
         return;
       }
       this.place(this.reserved);
@@ -316,6 +319,11 @@ export class Dock {
     // Before anything is placed: a 15 % band is thinner than the window's usual minimum height, and
     // Windows enforces that minimum, which would leave the window overlapping its own reservation.
     this.window.setMinimumSize(BAND_MINIMUM, BAND_MINIMUM);
+    // A band IS the window at its full extent, so there is nothing left to maximise into. Leaving
+    // maximise available means Windows resizes the band, we put it back, and Windows then reports
+    // an unmaximise — a gesture that used to give the edge away by accident.
+    if (this.window.isMaximized()) this.window.unmaximize();
+    this.window.setMaximizable(false);
 
     // Move to the target monitor BEFORE reserving anything.
     //
@@ -363,10 +371,11 @@ export class Dock {
     this.restoreMinimum();
   }
 
-  /** Undocked, the window is a window again — including how small it may be made. */
+  /** Undocked, the window is a window again — including how small and how large it may be made. */
   private restoreMinimum(): void {
     if (this.window.isDestroyed()) return;
     this.window.setMinimumSize(this.minimum[0] ?? 1, this.minimum[1] ?? 1);
+    this.window.setMaximizable(true);
   }
 
   /** Give the space back; safe to call when nothing was reserved. */

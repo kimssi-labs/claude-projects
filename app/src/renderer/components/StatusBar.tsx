@@ -11,9 +11,6 @@ import type { RateWindow, StatusSnapshot } from "@core/types";
 
 import { formatClock, formatPercent, usageTone } from "../format";
 
-/** Room the system's minimise/maximise/close buttons take at the right end of the header. */
-const CAPTION_WIDTH = 144;
-
 function barTone(percent: number): string {
   return percent >= 80 ? "bg-bad" : percent >= 50 ? "bg-warn" : "bg-ok";
 }
@@ -72,25 +69,26 @@ function UsageRow({ window: usage }: { window: RateWindow }) {
   );
 }
 
-export function StatusBar({ status, appVersion, compact = false, onRefresh }: {
+export function StatusBar({ status, appVersion, compact = false, onRefresh, controls }: {
   status: StatusSnapshot | null;
   appVersion: string;
+  /** The caption buttons, drawn at the right end of this strip. */
+  controls?: React.ReactNode;
   /** Re-read the usage cache now, instead of waiting for the next poll. */
   onRefresh?: () => void;
   /** A docked band has no room for two lines per window; the bar and the number still fit on one. */
   compact?: boolean;
 }) {
-  if (!status) return null;
-  const hasAnything = status.windows.length || status.health.length || status.ponytail;
+  const hasAnything = !!status && (status.windows.length || status.health.length || !!status.ponytail);
   return (
-    <header className={`drag flex items-center border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8 gap-3 pl-5 pr-3" : "h-14 gap-4 px-3"}`}
+    <header className={`drag flex items-center border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8 gap-3 pl-5 pr-0" : "h-14 gap-4 pl-3 pr-0"}`}
       // The caption buttons are drawn over the right end of this strip.
-      style={{ paddingRight: CAPTION_WIDTH }}>
+      >
       {/* No wordmark here: the title bar already says Hangar, and the strip needs the width. */}
       {/* More windows than the width can show is normal in a band: scroll them sideways rather
           than hide the ones that did not fit. The page itself still never scrolls. */}
       <div className={`flex items-center gap-4 flex-1 min-w-0 ${compact ? "overflow-x-auto no-bar" : "overflow-hidden"}`}>
-        {status.windows.map((usage) => (
+        {(status?.windows ?? []).map((usage) => (
           compact
             ? <UsageRow key={usage.key} window={usage} />
             : <UsageColumn key={usage.key} window={usage} />
@@ -110,7 +108,7 @@ export function StatusBar({ status, appVersion, compact = false, onRefresh }: {
       ) : null}
 
       <div className="flex items-center gap-3 shrink-0">
-        {status.health.map((item) => (
+        {(status?.health ?? []).map((item) => (
           <span key={item.key} className="flex items-center gap-1 text-xs text-bone-400" title={item.detail}>
             <span className={item.ok === true ? "text-ok" : item.ok === false ? "text-bad" : "text-bone-500"}>
               {item.ok === true ? "●" : item.ok === false ? "▲" : "○"}
@@ -118,10 +116,11 @@ export function StatusBar({ status, appVersion, compact = false, onRefresh }: {
             {item.label}
           </span>
         ))}
-        {status.ponytail ? <span className="chip">ponytail {status.ponytail}</span> : null}
+        {status?.ponytail ? <span className="chip">ponytail {status.ponytail}</span> : null}
         {!hasAnything ? <span className="text-xs text-bone-500">no status sources on this machine</span> : null}
-        {compact ? null : <span className="text-[11px] text-bone-500 tabular-nums">v{appVersion}</span>}
+        {compact ? null : <span className="text-[11px] text-bone-500 tabular-nums pr-1">v{appVersion}</span>}
       </div>
+      {controls}
     </header>
   );
 }

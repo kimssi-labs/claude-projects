@@ -16,6 +16,7 @@ import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./compone
 import { StatusBar } from "./components/StatusBar";
 import { formatBytes } from "./format";
 import { Splitter } from "./components/Splitter";
+import { WindowControls } from "./components/WindowControls";
 import { useLayoutMode } from "./useLayoutMode";
 import { useTheme } from "./useTheme";
 
@@ -51,6 +52,9 @@ export function App() {
   const [systemHistory, setSystemHistory] = useState<MetricSample[]>([]);
   // Not part of the history: a clock speed is a reading of right now, not a series.
   const [cpuGhz, setCpuGhz] = useState<number | null>(null);
+  // Docked counts as maximised: the band is the window at its full extent, so the middle caption
+  // button offers to restore, and restoring is what gives the edge back.
+  const [windowState, setWindowState] = useState({ maximized: false, docked: false });
   const [sessionHistory, setSessionHistory] = useState<Record<string, MetricSample[]>>({});
   const [theme, setTheme] = useState<ThemeMode>("system");
   // 0 = the width the layout would have chosen; anything else is what the user dragged it to.
@@ -95,6 +99,8 @@ export function App() {
   // Live samples arrive from the main process; keep the same bounded history the sampler keeps.
   // Main can change the settings on its own — undocking when the window is dragged out of its band.
   useEffect(() => api.onSettings((next) => setSettings(next)), []);
+  useEffect(() => api.onWindowState(setWindowState), []);
+  useEffect(() => { void api.windowState().then(setWindowState); }, []);
 
   useEffect(() => api.onMetrics((snapshot: MetricsSnapshot) => {
     setCpuGhz(snapshot.system.cpuGhz);
@@ -342,6 +348,14 @@ export function App() {
         appVersion={info?.version ?? "—"}
         compact={mode !== "full"}
         onRefresh={() => void api.status().then(setStatus)}
+        controls={
+          <WindowControls
+            restorable={windowState.maximized || windowState.docked}
+            onMinimize={() => void api.windowCommand("minimize")}
+            onToggle={() => void api.windowCommand("toggle")}
+            onClose={() => void api.windowCommand("close")}
+          />
+        }
       />
 
       <div className="flex-1 min-h-0 flex">
