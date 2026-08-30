@@ -312,6 +312,44 @@ test("dragging a docked window off its edge undocks it", async () => {
   }
 });
 
+test("resizing a docked band keeps it on its edge", async () => {
+  const { app, page } = await launch(fixture());
+  try {
+    const displays = await monitors(page);
+    const display = displays.find((d) => d.primary) ?? displays[0]!;
+    const before = await workAreaOf(app, display.id);
+    test.skip(!(await reservesSpace(app, page, display.id)), "no window manager to reserve space");
+
+    // Docked right: the band's outer edge IS the screen's right edge.
+    await dockTo(page, display.id, "right", 20);
+    expect(await settled(async () => (await workAreaOf(app, display.id)).width < before.width)).toBe(true);
+    await page.waitForTimeout(1700);                          // past the settle window
+
+    const docked = await bounds(app);
+    const rightEdge = before.x + before.width;
+    samePixels(docked.x + docked.width, rightEdge, "docked flush with the right edge");
+
+    // Drag the OUTER edge inwards: the width changes, the position does not — which used to leave a
+    // strip of desktop between the band and the screen edge.
+    await app.evaluate(({ BrowserWindow }, rect) =>
+      BrowserWindow.getAllWindows()[0]?.setBounds(rect),
+    { x: docked.x, y: docked.y, width: Math.round(docked.width * 0.6), height: docked.height });
+
+    await expect.poll(async () => {
+      const now = await bounds(app);
+      return Math.abs(now.x + now.width - rightEdge) <= 1;
+    }, { timeout: 8000 }).toBe(true);
+
+    // And the size it settled on is what the setting now says.
+    const settings = await settingsOf(page);
+    expect(settings.dock.edge).toBe("right");
+    expect(settings.dock.percent).toBeGreaterThan(0);
+  } finally {
+    await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
+    await app.close();
+  }
+});
+
 test("a dock change made in settings sticks", async () => {
   const home = fixture();
   const { app, page } = await launch(home);

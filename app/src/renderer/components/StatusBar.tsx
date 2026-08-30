@@ -31,20 +31,28 @@ function Bar({ percent, className = "" }: { percent: number; className?: string 
   );
 }
 
-/** Full height: label and percentage on one line, the bar under them, reset time beside it. */
+/**
+ * Full height: the name and its reset time on top, the bar and its number together underneath.
+ *
+ * The percentage belongs beside the bar it describes. Putting it on the label row pushed it to the
+ * far side of the column, half an inch from the thing it is a reading of.
+ */
 function UsageColumn({ window: usage }: { window: RateWindow }) {
   return (
     <div className="w-44 shrink-0" title={`${usage.label} usage`}>
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] uppercase tracking-wide text-bone-500 truncate">{usage.label}</span>
-        <span className={`text-xs tabular-nums ${usageTone(usage.usedPercent)}`}>
-          {formatPercent(usage.usedPercent)}
+      {/* Both belong to the label, so they sit together — pushed apart, the reset time reads as if
+          it belonged to the next window along. */}
+      <div className="flex items-baseline gap-2 min-w-0">
+        <span className="text-[11px] uppercase tracking-wide text-bone-500 shrink-0">{usage.label}</span>
+        <span className="text-[10px] text-bone-500 tabular-nums truncate">
+          {usage.resetsAt ? `↻ ${formatClock(usage.resetsAt)}` : ""}
         </span>
       </div>
-      <div className="mt-1 flex items-center gap-2">
+      <div className="mt-1 flex items-center gap-1.5">
         <Bar percent={usage.usedPercent} className="flex-1" />
-        <span className="text-[10px] text-bone-500 tabular-nums w-16 text-right">
-          {usage.resetsAt ? `↻ ${formatClock(usage.resetsAt)}` : ""}
+        {/* Fixed width, right-aligned: the numbers still line up down the strip. */}
+        <span className={`text-xs tabular-nums w-9 text-right ${usageTone(usage.usedPercent)}`}>
+          {formatPercent(usage.usedPercent)}
         </span>
       </div>
     </div>
@@ -54,10 +62,10 @@ function UsageColumn({ window: usage }: { window: RateWindow }) {
 /** Docked band: one line, but still three fixed columns, so nothing wanders as numbers change. */
 function UsageRow({ window: usage }: { window: RateWindow }) {
   return (
-    <div className="flex items-center gap-1.5 shrink-0" title={`${usage.label} usage`}>
+    <div className="flex items-center gap-1 shrink-0" title={`${usage.label} usage`}>
       <span className="text-[11px] uppercase tracking-wide text-bone-500 whitespace-nowrap">{usage.label}</span>
       <Bar percent={usage.usedPercent} className="w-14" />
-      <span className={`text-xs tabular-nums w-10 text-right ${usageTone(usage.usedPercent)}`}>
+      <span className={`text-xs tabular-nums w-9 text-right ${usageTone(usage.usedPercent)}`}>
         {formatPercent(usage.usedPercent)}
       </span>
     </div>

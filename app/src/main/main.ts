@@ -236,9 +236,14 @@ async function createWindow(): Promise<void> {
       const { display } = pickDisplay(current.device);
       const span = bandThickness(dock?.workArea(display) ?? display.workArea, current.edge);
       const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
-      if (percent === current.percent) return;
-      config.saveDock({ ...current, percent }, setupKey());
-      window.webContents.send(CHANNEL.settingsPush, settingsPayload());
+      const resized = { ...current, percent };
+      config.saveDock(resized, setupKey());
+      // Re-apply, always: a band is anchored to its edge, and dragging the OUTER edge of a
+      // right- or bottom-docked window changes its size without moving it, which leaves a strip of
+      // desktop between the band and the screen edge. Applying the size puts it back on the edge.
+      void dock.apply(resized).then(() => {
+        window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
+      });
     }, DOCK_RESIZE_SETTLE_MS);
   };
   dock.onUserUndock = () => {
