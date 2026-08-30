@@ -2,7 +2,10 @@
   "name": "hangar",
   "version": "2.0.0",
   "description": "Session manager for Claude Code",
-  "author": "kimssi-labs",
+  "author": {
+    "name": "kimssi-labs",
+    "email": "kimssi-labs@users.noreply.github.com"
+  },
   "license": "MIT",
   "private": true,
   "main": "dist/main/main.js",
@@ -39,5 +42,10 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "vitest": "^2.1.8"
+  },
+  "homepage": "https://github.com/kimssi-labs/hangar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kimssi-labs/hangar.git"
   }
 }

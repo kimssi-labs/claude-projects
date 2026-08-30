@@ -72,10 +72,10 @@ jobs:
       - run: npm ci
       # electron-builder packages dist/, it does not create it.
       - run: npm run build
+      # No GH_TOKEN here on purpose: with one in the environment electron-builder starts resolving
+      # a publish provider even under --publish never, and fails on a null one.
       - name: Build installers
         run: npx electron-builder --publish never
-        env:
-          GH_TOKEN: ${{ github.token }}       # electron-builder looks for it even when not publishing
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}

@@ -1,6 +1,8 @@
 appId: dev.kimssilabs.hangar
 productName: Hangar
 copyright: Copyright (c) 2026 kimssi-labs. MIT License.
+# Nothing is published from the build itself; the release job uploads the artifacts.
+publish: null
 directories:
   output: release
   buildResources: build
@@ -26,6 +28,7 @@ nsis:
   createStartMenuShortcut: true          # the Start entry is what Windows pins to the taskbar from
   shortcutName: Hangar
 linux:
+  maintainer: kimssi-labs <kimssi-labs@users.noreply.github.com>
   icon: build/icon.png
   category: Development
   target:
