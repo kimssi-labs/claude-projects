@@ -19,8 +19,7 @@
     "dist": "npm run build && electron-builder"
   },
   "dependencies": {
-    "koffi": "^2.9.0",
-    "systeminformation": "^5.23.5"
+    "koffi": "^2.9.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

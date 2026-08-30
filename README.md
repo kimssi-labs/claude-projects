@@ -74,8 +74,14 @@ Deletions ask first and refuse anything still running. Renaming a session writes
 ## Monitoring
 
 Every running session is sampled once a second — its whole process tree, not just the `claude`
-process — and drawn as a sparkline in its row; the machine's own CPU and memory are drawn beside the
-list. Five minutes of history is kept, which is enough to see whether a session is working or stuck.
+process — and drawn as a sparkline in its row; the machine's own CPU, clock speed and memory are
+drawn beside the list. Five minutes of history is kept, which is enough to see whether a session is
+working or stuck.
+
+A monitor may not be the reason a machine is busy, so every reading is taken in-process: a toolhelp
+snapshot plus `GetProcessTimes` on Windows, `/proc` on Linux, and `os.cpus()` for the machine
+itself. Sampling costs about 3 % of one core, and **Settings · Monitoring** turns it off entirely —
+which stops the timer, not just the drawing.
 
 ## Layout
 
@@ -109,7 +115,8 @@ health from its status cache. On a machine without them the segment is not drawn
 
 ## Settings (`S`)
 
-One screen of cards — **Appearance**, **Dock**, **Status line**, **Launch**, **Permissions**. `Tab`
+One screen of cards — **Appearance**, **Monitoring**, **Dock**, **Status line**, **Launch**,
+**Permissions**. `Tab`
 moves between them, `Esc` closes. Every choice, and the project and row you were last on, is kept in
 `config/manager.json`.
 

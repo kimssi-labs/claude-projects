@@ -59,14 +59,27 @@ function findProject(dir: string): ProjectInfo | undefined {
   return lastProjects.find((p) => p.dir === dir);
 }
 
+/** Do two rectangles share any pixel? Enough to decide a saved position is still reachable. */
+function rectsOverlap(a: Electron.Rectangle, b: Electron.Rectangle): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
 function scanProjects(): ProjectInfo[] {
   lastProjects = store.scan();
   return lastProjects;
 }
 
 async function createWindow(): Promise<void> {
+  // Reopen where it was left, but only if that rectangle is still on a connected display — a saved
+  // position from a monitor that is now unplugged would open the window off-screen.
+  const savedBounds = config.ui().window;
+  const onScreen = savedBounds
+    ? screen.getAllDisplays().some((display) => rectsOverlap(display.workArea, savedBounds))
+    : false;
+
   window = new BrowserWindow({
     ...WINDOW,
+    ...(onScreen && savedBounds ? savedBounds : {}),
     show: false,
     backgroundColor: "#141413",
     title: "Hangar",
@@ -80,13 +93,26 @@ async function createWindow(): Promise<void> {
     },
   });
   dock = new Dock(window);
+  // Dragging a docked window out of its band is how you undock it; the saved setting follows.
+  dock.onUserUndock = () => {
+    const current = config.dock();
+    if (!current.enabled) return;
+    config.saveDock({ ...current, enabled: false });
+    window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
+  };
 
   // Subscribe BEFORE loading: `ready-to-show` fires during the load, and a listener attached
   // afterwards misses it — the window then stays hidden forever with no error anywhere.
   window.once("ready-to-show", () => window?.show());
   // `close` and not `closed`: the reservation is removed while the window still exists, and
   // synchronously, because nothing waits for us once the process starts shutting down.
-  window.on("close", () => dock?.releaseSync());
+  window.on("close", () => {
+    // Docked, the bounds are the band's, not the user's choice — do not remember those.
+    if (window && !dock?.isDocked && !window.isMinimized()) {
+      config.saveUi({ ...config.ui(), window: window.getNormalBounds() });
+    }
+    dock?.releaseSync();
+  });
   window.on("closed", () => {
     window = null;
   });
@@ -103,8 +129,16 @@ async function createWindow(): Promise<void> {
   }
 }
 
+function stopSampling(): void {
+  if (!sampling) return;
+  clearInterval(sampling);
+  sampling = null;
+}
+
+/** Runs only when the setting says so — the whole point of the setting is that off costs nothing. */
 function startSampling(): void {
   if (sampling) return;
+  if (!config.ui().monitor) return;
   sampling = setInterval(async () => {
     const targets = lastProjects.flatMap((project) =>
       project.sessions.filter((s) => s.live && s.pid).map((s) => ({ sessionId: s.id, pid: s.pid as number })));
@@ -267,7 +301,11 @@ function registerIpc(): void {
     if (payload.status) config.saveStatus(payload.status);
     if (payload.launch) config.saveLaunch(payload.launch);
     // The theme lives with the rest of the remembered position, so it comes back with it.
-    if (payload.ui) config.saveUi({ ...config.ui(), ...payload.ui });
+    if (payload.ui) {
+      config.saveUi({ ...config.ui(), ...payload.ui });
+      if (config.ui().monitor) startSampling();
+      else stopSampling();
+    }
     return settingsPayload();
   });
 
@@ -338,8 +376,17 @@ process.on("uncaughtException", (error) => {
   console.error("[hangar] fatal:", error);
 });
 
+// An app that disappears should say why. These are the three ways it can happen without anyone
+// closing a window, and all three are silent by default.
+process.on("unhandledRejection", (reason) => console.error("[hangar] unhandled rejection:", reason));
+app.on("render-process-gone", (_event, _contents, details) =>
+  console.error("[hangar] renderer gone:", details.reason, details.exitCode));
+app.on("child-process-gone", (_event, details) =>
+  console.error("[hangar] child gone:", details.type, details.reason, details.exitCode));
+
 app.on("window-all-closed", () => {
-  if (sampling) clearInterval(sampling);
+  console.log("[hangar] window-all-closed -> quitting");
+  stopSampling();
   dock?.releaseSync();
   app.quit();
 });

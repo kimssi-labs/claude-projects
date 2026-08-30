@@ -11,9 +11,6 @@ import type { RateWindow, StatusSnapshot } from "@core/types";
 
 import { formatClock, formatPercent, usageTone } from "../format";
 
-/** Softens the right edge when the strip has more windows than the width can show. */
-const FADE = "linear-gradient(to right, #000 88%, transparent 100%)";
-
 function barTone(percent: number): string {
   return percent >= 80 ? "bg-bad" : percent >= 50 ? "bg-warn" : "bg-ok";
 }
@@ -73,14 +70,11 @@ export function StatusBar({ status, appVersion, compact = false }: {
   if (!status) return null;
   const hasAnything = status.windows.length || status.health.length || status.ponytail;
   return (
-    <header className={`flex items-center gap-4 px-3 border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8" : "h-14"}`}>
+    <header className={`flex items-center border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8 gap-2 px-1.5" : "h-14 gap-4 px-3"}`}>
       {/* No wordmark here: the title bar already says Hangar, and the strip needs the width. */}
-      {/* Too many windows for a narrow band is normal; fade the edge so the last one reads as
-          "there is more" instead of as a half-drawn widget. */}
-      <div
-        className="flex items-center gap-4 flex-1 min-w-0 overflow-hidden"
-        style={compact ? { maskImage: FADE, WebkitMaskImage: FADE } : undefined}
-      >
+      {/* More windows than the width can show is normal in a band: scroll them sideways rather
+          than hide the ones that did not fit. The page itself still never scrolls. */}
+      <div className={`flex items-center gap-4 flex-1 min-w-0 ${compact ? "overflow-x-auto no-bar" : "overflow-hidden"}`}>
         {status.windows.map((usage) => (
           compact
             ? <UsageRow key={usage.key} window={usage} />

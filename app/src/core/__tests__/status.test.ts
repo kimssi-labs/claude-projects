@@ -93,7 +93,7 @@ describe("metrics", () => {
     const history = new MetricsHistory(3);
     const snapshot = (at: number, cpu: number): MetricsSnapshot => ({
       at,
-      system: { cpu, memoryBytes: 1, memoryTotalBytes: 10 },
+      system: { cpu, memoryBytes: 1, memoryTotalBytes: 10, cpuGhz: 3.4 },
       sessions: { s1: { cpu, memoryBytes: 2, pid: 5 } },
     });
     for (let i = 0; i < 5; i += 1) history.push(snapshot(i, i));

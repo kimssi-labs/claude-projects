@@ -20,17 +20,18 @@ ROW = (250, 249, 247, 235)
 ROW_DIM = (250, 249, 247, 175)
 LIVE = (74, 200, 120, 255)
 
-# No plate behind the mark: the background is transparent, so the folder takes the whole canvas
-# and sits on whatever the taskbar, Start menu or dock happens to be.
-MARGIN = 48
-TAB_WIDTH = 186
-TAB_HEIGHT = 48
-BODY_TOP = 128
-BODY_BOTTOM = 452
-ROW_HEIGHT = 36
-ROW_GAP = 40
-ROW_INSET = 48
-DOT_RADIUS = 27
+# No plate behind the mark: the background is transparent, so the folder takes the whole canvas.
+# Without a plate the mark also has to be BIGGER than a plated icon to look the same size beside
+# one — a filled square reads larger than an outline of equal bounds.
+MARGIN = 16
+TAB_WIDTH = 210
+TAB_HEIGHT = 54
+BODY_TOP = 104
+BODY_BOTTOM = 496
+ROW_HEIGHT = 42
+ROW_GAP = 46
+ROW_INSET = 52
+DOT_RADIUS = 31
 
 
 def draw_icon(size: int) -> Image.Image:

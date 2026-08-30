@@ -34,6 +34,9 @@
 }
 
 @layer components {
+  /* Scrollable, but without a visible bar: in a 32 px strip the bar is taller than the content. */
+  .no-bar { scrollbar-width: none; }
+  .no-bar::-webkit-scrollbar { display: none; }
   .row { @apply flex items-center gap-3 px-3 py-2 rounded-lg cursor-default; }
   .row-selected { @apply bg-ink-700 ring-1 ring-accent/40; }
   .card { @apply bg-ink-800 border border-ink-600 rounded-xl; }

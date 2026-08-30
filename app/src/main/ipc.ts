@@ -4,6 +4,7 @@ export const CHANNEL = {
   status: "status:read",
   metrics: "metrics:history",
   metricsPush: "metrics:push",                   // main -> renderer, on every sample
+  settingsPush: "settings:push",                 // main -> renderer, when main changed them
   openSession: "session:open",
   renameSession: "session:rename",
   deleteSession: "session:delete",

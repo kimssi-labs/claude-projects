@@ -24,6 +24,11 @@ const api = {
     ipcRenderer.on(CHANNEL.metricsPush, handler);
     return () => ipcRenderer.removeListener(CHANNEL.metricsPush, handler);
   },
+  onSettings: (listener: (settings: SettingsPayload) => void): (() => void) => {
+    const handler = (_event: unknown, settings: SettingsPayload): void => listener(settings);
+    ipcRenderer.on(CHANNEL.settingsPush, handler);
+    return () => ipcRenderer.removeListener(CHANNEL.settingsPush, handler);
+  },
   openSession: (request: OpenSessionRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.openSession, request),
   renameSession: (request: RenameRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.renameSession, request),
   renameProject: (request: RenameRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.renameProject, request),
