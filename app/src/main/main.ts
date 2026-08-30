@@ -26,95 +26,37 @@ import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
 
 const DEV_SERVER = "http://localhost:5273";
 const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as const;
-/** The strip the system draws its caption buttons in — our header is exactly this tall. */
-const TITLE_BAR_HEIGHT = 32;
 /** How long a drag has to stop before its new thickness is written down. */
 const DOCK_RESIZE_SETTLE_MS = 400;
 /** A band within this many pixels of what was asked for counts as "the platform agreed". */
 const FLOOR_SLACK_PX = 4;
-/** Page background and text, per theme, for the caption-button strip. */
-const OVERLAY = {
-  light: { color: "#faf9f7", symbolColor: "#1c1b1a" },
-  dark: { color: "#141413", symbolColor: "#eceae4" },
-} as const;
+/** Electron's indeterminate value for the taskbar progress; -1 clears it. */
+const TASKBAR_BUSY = 2;
+const TASKBAR_IDLE = -1;
+/** The page's own background, so the window is painted the instant it appears. */
+const WINDOW_BACKGROUND = { light: "#ffffff", dark: "#1c1b1a" } as const;
 
-/** Small enough to read at a glance, large enough for the longest step. */
-const SPLASH = { width: 380, height: 96 } as const;
-/**
- * How long start-up may take before it is worth explaining itself.
- *
- * A warm start puts the window up in about two seconds, and a splash that flashes for a moment is
- * worse than no splash at all; a cold start after an install took 23 s here, which is not.
- */
-const SPLASH_AFTER_MS = 450;
-
-/**
- * Open the splash, hidden, and show it only if the app is still starting a moment later.
- *
- * It is created straight away rather than after the delay because creating a window is itself work:
- * doing that at the moment the app is busiest is how a "loading" window arrives after the loading.
- */
-function openSplash(): void {
-  try {
-    splash = new BrowserWindow({
-      ...SPLASH,
-      show: false,
-      frame: false,
-      transparent: false,
-      resizable: false,
-      movable: true,
-      skipTaskbar: true,
-      alwaysOnTop: true,
-      center: true,
-      backgroundColor: resolvedTheme() === "dark" ? "#1c1b1a" : "#ffffff",
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
-    });
-    splash.setMenu(null);
-    const theme = resolvedTheme();
-    void splash.loadFile(join(__dirname, "..", "renderer", "splash.html"));
-    // Set from here rather than by a script in the page: the splash keeps a no-script CSP.
-    splash.webContents.once("did-finish-load", () => {
-      void splash?.webContents
-        .executeJavaScript(`document.documentElement.dataset.theme = ${JSON.stringify(theme)};`)
-        .catch(() => undefined);
-      splashSays(pendingStep);
-    });
-    splashTimer = setTimeout(() => {
-      splashTimer = null;
-      if (splash && !splash.isDestroyed() && !window?.isVisible()) splash.show();
-    }, SPLASH_AFTER_MS);
-  } catch (error) {
-    console.error("[hangar] splash unavailable:", (error as Error).message);
-    splash = null;
-  }
-}
-
-/** What the app is doing right now, in the splash and in the log. */
-function splashSays(step: string): void {
-  pendingStep = step;
-  if (!splash || splash.isDestroyed()) return;
-  // executeJavaScript runs in the page, so the splash needs no preload and no channel of its own.
-  void splash.webContents
-    .executeJavaScript(`document.getElementById("step").textContent = ${JSON.stringify(step)};`)
-    .catch(() => {
-      /* the page may not have loaded yet; the next step will say the same thing */
-    });
-}
-
-function closeSplash(): void {
-  if (splashTimer) {
-    clearTimeout(splashTimer);
-    splashTimer = null;
-  }
-  if (splash && !splash.isDestroyed()) splash.destroy();
-  splash = null;
-}
-
-/** Which palette the window is actually in, resolving "system" the way the page does. */
+/** Which palette the window is in, resolving "system" the way the page does. */
 function resolvedTheme(): "light" | "dark" {
   const mode = config.ui().theme;
   if (mode === "system") return nativeTheme.shouldUseDarkColors ? "dark" : "light";
   return mode;
+}
+
+/**
+ * What the app is doing, in the window's own loading panel.
+ *
+ * The panel is markup in index.html, so it is painted when the document parses — before the bundle
+ * is fetched, let alone run. A second window would have needed a second renderer starting up beside
+ * the app's own, which measured 800 ms and made the "loading" window arrive after the loading.
+ */
+function splashSays(step: string): void {
+  if (!window || window.isDestroyed()) return;
+  void window.webContents
+    .executeJavaScript(`{ const el = document.getElementById("boot-step"); if (el) el.textContent = ${JSON.stringify(step)}; }`)
+    .catch(() => {
+      /* the document may not be parsed yet, or React may already own the page */
+    });
 }
 
 /** What the caption buttons should show right now. */
@@ -137,10 +79,6 @@ let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
 let sampling: NodeJS.Timeout | null = null;
 let worker: Worker | null = null;
-let splash: BrowserWindow | null = null;
-let splashTimer: NodeJS.Timeout | null = null;
-/** The last step named before the page finished loading, so it is not lost. */
-let pendingStep = "Starting…";
 let lastProjects: ProjectInfo[] = [];
 
 function which(exe: string): string | null {
@@ -195,8 +133,11 @@ async function createWindow(): Promise<void> {
   window = new BrowserWindow({
     ...WINDOW,
     ...(onScreen && savedBounds ? savedBounds : {}),
-    show: false,
-    backgroundColor: resolvedTheme() === "dark" ? "#141413" : "#faf9f7",
+    // Shown at once, not on `ready-to-show`: a window with a background colour is painted by the
+    // compositor the moment it appears, and the loading panel in index.html follows a frame later.
+    // Waiting for the first React render is half a second of nothing after a double-click.
+    show: true,
+    backgroundColor: WINDOW_BACKGROUND[resolvedTheme()],
     title: "Hangar",
     autoHideMenuBar: true,
     // Docked, a title bar is a strip of the band that shows nothing. The caption buttons are drawn
@@ -212,6 +153,9 @@ async function createWindow(): Promise<void> {
       sandbox: false,
     },
   });
+  // The taskbar button says "working" from the moment the window exists — which is a few hundred
+  // milliseconds before the page inside it has painted anything of its own.
+  window.setProgressBar(TASKBAR_BUSY);
   dock = new Dock(window);
   window.on("maximize", () => {
     // setMaximizable(false) stops the caption button and the system menu, not the API or every
@@ -267,12 +211,6 @@ async function createWindow(): Promise<void> {
     window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
   };
 
-  // Subscribe BEFORE loading: `ready-to-show` fires during the load, and a listener attached
-  // afterwards misses it — the window then stays hidden forever with no error anywhere.
-  window.once("ready-to-show", () => {
-    window?.show();
-    closeSplash();
-  });
   // `close` and not `closed`: the reservation is removed while the window still exists, and
   // synchronously, because nothing waits for us once the process starts shutting down.
   window.on("close", () => {
@@ -287,14 +225,15 @@ async function createWindow(): Promise<void> {
   });
 
   const devUrl = process.env["HANGAR_DEV"] ? DEV_SERVER : null;
-  if (devUrl) await window.loadURL(devUrl);
-  else await window.loadFile(join(__dirname, "..", "renderer", "index.html"));
-  window.show();                                  // belt and braces: the load is done, so is the wait
+  const loaded = devUrl
+    ? window.loadURL(devUrl)
+    : window.loadFile(join(__dirname, "..", "renderer", "index.html"));
 
+  await loaded;
   const saved = config.dock(null, setupKey());
   if (saved.enabled) {
     const placement = await dock.apply(saved);
-    if (placement.note) window.webContents.send(CHANNEL.appInfo, placement.note);
+    if (placement.note) window?.webContents.send(CHANNEL.appInfo, placement.note);
   }
 }
 
@@ -376,6 +315,27 @@ async function reapplyDockForSetup(): Promise<void> {
   const placement = await dock.apply(wanted);
   if (placement.note) console.log(`[hangar] ${placement.note}`);
   window.webContents.send(CHANNEL.settingsPush, settingsPayload());
+}
+
+/** Put the window in the band `wanted` describes, and report what the platform actually gave. */
+async function applyDockConfig(wanted: DockConfig): Promise<ActionResult & { settings?: SettingsPayload }> {
+  if (!window || !dock) return { ok: false, message: "No window." };
+  const { display } = pickDisplay(wanted.device);
+  // Apply exactly what was asked for. Forcing the percentage up to a previously measured floor
+  // made the next measurement bigger again, and the floor climbed with it — 12 % became 26 %,
+  // then 35 %. The floor is what the slider stops at, not what the band is set to.
+  const applied: DockConfig = { ...wanted };
+  config.saveDock(applied, setupKey());
+  const placement = await dock.apply(applied);
+  // What the window really got is the floor for this axis: remember it so the slider can stop
+  // there. A band that came back the size it asked for proves there is no floor above it, which
+  // is what un-learns a floor measured when something else was wrong.
+  const got = bandThickness(placement.applied, applied.edge);
+  const asked = bandThickness(bandRect(dock.workArea(display), applied.edge, applied.percent), applied.edge);
+  if (got > asked + FLOOR_SLACK_PX) config.saveDockFloor(applied.edge, got);
+  else config.saveDockFloor(applied.edge, 0);   // it fitted, so nothing is stopping it here
+  pushWindowState();
+  return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
 }
 
 /** Tell the sampler which sessions to follow; called after every scan. */
@@ -540,8 +500,14 @@ function registerIpc(): void {
       // Docked IS the maximised state, so "restore" here means: be an ordinary window again.
       await dock.release();
       dock.onUserUndock?.();
-    } else if (window.isMaximized()) window.unmaximize();
-    else window.maximize();
+    } else if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      // ...and "maximise" means go back to the band, when this arrangement has one to go back to.
+      const saved = config.dock(null, setupKey());
+      if (saved.device || saved.percent) await applyDockConfig({ ...saved, enabled: true });
+      else window.maximize();
+    }
     pushWindowState();
     return windowState();
   });
@@ -566,25 +532,8 @@ function registerIpc(): void {
     return saved;
   });
 
-  ipcMain.handle(CHANNEL.applyDock, async (_event, wanted: DockConfig) => {
-    if (!window || !dock) return { ok: false, message: "No window." };
-    const { display } = pickDisplay(wanted.device);
-    // Apply exactly what was asked for. Forcing the percentage up to a previously measured floor
-    // made the next measurement bigger again, and the floor climbed with it — 12 % became 26 %,
-    // then 35 %. The floor is what the slider stops at, not what the band is set to.
-    const applied: DockConfig = { ...wanted };
-    config.saveDock(applied, setupKey());
-    const placement = await dock.apply(applied);
-    // What the window really got is the floor for this axis: remember it so the slider can stop
-    // there. A band that came back the size it asked for proves there is no floor above it, which
-    // is what un-learns a floor measured when something else was wrong.
-    const got = bandThickness(placement.applied, applied.edge);
-    const asked = bandThickness(bandRect(dock.workArea(display), applied.edge, applied.percent), applied.edge);
-    if (got > asked + FLOOR_SLACK_PX) config.saveDockFloor(applied.edge, got);
-    else config.saveDockFloor(applied.edge, 0);   // it fitted, so nothing is stopping it here
-    pushWindowState();
-    return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
-  });
+  ipcMain.handle(CHANNEL.applyDock, async (_event, wanted: DockConfig) => applyDockConfig(wanted));
+
 
   ipcMain.handle(CHANNEL.releaseDock, async () => {
     await dock?.release();
@@ -625,16 +574,14 @@ async function confirm(message: string, detail: string): Promise<boolean> {
 }
 
 app.whenReady().then(async () => {
-  openSplash();
-  splashSays("Reading settings…");
   registerIpc();
+  // The window first, and everything else while it is already on screen.
+  await createWindow();
   splashSays("Scanning projects…");
   scanProjects();
   splashSays(`Opening ${lastProjects.length} project${lastProjects.length === 1 ? "" : "s"}…`);
-  await createWindow();
-  splashSays("Starting the monitor…");
   startSampling();
-  closeSplash();
+  window?.setProgressBar(TASKBAR_IDLE);           // done: the window can speak for itself now
   console.log(`[hangar] window ready — ${lastProjects.length} projects from ${claudeHome()}`);
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
@@ -643,7 +590,6 @@ app.whenReady().then(async () => {
 
 process.on("uncaughtException", (error) => {
   console.error("[hangar] fatal:", error);
-  closeSplash();                                  // never leave a splash on screen with no app
 });
 
 // An app that disappears should say why. These are the three ways it can happen without anyone

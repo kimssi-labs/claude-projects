@@ -9,6 +9,7 @@ import { useEffect, useRef } from "react";
 import type { MetricSample, ProjectInfo, SessionInfo } from "@core/types";
 
 import { Sparkline } from "./Chart";
+import { Truncated } from "./Truncated";
 import { formatBytes, formatSince, formatTime } from "../format";
 
 function LiveDot({ live }: { live: boolean }) {
@@ -48,10 +49,16 @@ export function ProjectRow({
       <LiveDot live={project.liveCount > 0} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className={`truncate text-sm ${project.exists ? "text-bone-100" : "text-bad"}`}>{project.name}</span>
+          <Truncated
+            as="span"
+            title={project.cwd ?? project.dir}
+            className={`text-sm ${project.exists ? "text-bone-100" : "text-bad"}`}
+          >
+            {project.name}
+          </Truncated>
           {project.hasMemory ? <span className="chip">memory</span> : null}
         </div>
-        <div className="truncate text-[11px] text-bone-500">{project.cwd ?? "folder unknown"}</div>
+        <Truncated className="text-[11px] text-bone-500">{project.cwd ?? "folder unknown"}</Truncated>
       </div>
       <div className="text-right shrink-0">
         <div className="text-xs text-bone-300 tabular-nums">{project.sessions.length} sessions</div>
@@ -81,10 +88,10 @@ export function SessionRow({
     >
       <LiveDot live={session.live} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm text-bone-100">{session.title}</div>
-        <div className="truncate text-[11px] text-bone-500">
+        <Truncated className="text-sm text-bone-100">{session.title}</Truncated>
+        <Truncated className="text-[11px] text-bone-500">
           {session.named && session.prompt ? session.prompt : session.id}
-        </div>
+        </Truncated>
       </div>
       {session.live ? (
         <div className="flex items-center gap-2 shrink-0">

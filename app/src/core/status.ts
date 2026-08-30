@@ -71,10 +71,19 @@ export function mcpHealth(probe: Record<string, unknown>, selected: string[] | n
   const failing = chosen.filter((s) => s.verdict && s.verdict.ok === false).map((s) => s.name);
   const unknown = chosen.filter((s) => !s.verdict).map((s) => s.name);
   const ok = failing.length ? false : unknown.length ? null : true;
-  const detail = failing.length ? `${failing.join(", ")} failing`
-    : unknown.length ? `${unknown.join(", ")} not probed`
+  // The tooltip names every server and its verdict, one per line: "MCP ✔" alone does not say which
+  // servers were even asked, and that is the question anyone hovering is asking.
+  const summary = failing.length ? `${failing.length} failing`
+    : unknown.length ? `${unknown.length} not probed`
       : `${chosen.length} server${chosen.length > 1 ? "s" : ""} healthy`;
-  return { key: "mcp", label: selected ? names.join(", ") : "MCP", ok, detail };
+  const lines = chosen.map(({ name, verdict }) =>
+    `${verdict === undefined ? "?" : verdict.ok === false ? "✘" : "✔"}  ${name}`);
+  return {
+    key: "mcp",
+    label: selected ? names.join(", ") : "MCP",
+    ok,
+    detail: [summary, ...lines].join("\n"),
+  };
 }
 
 export function readStatus(

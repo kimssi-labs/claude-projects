@@ -311,6 +311,12 @@ test("a docked window that is dragged or maximised stays docked; restoring it un
     }, { timeout: 8000 }).toBe(true);
     expect((await settingsOf(page)).dock.enabled, "still docked after a drag").toBe(true);
 
+    // A docked window cannot be dragged off its edge at all — the window manager is told so.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMovable()),
+      "a band is not movable").toBe(false);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMaximizable()),
+      "a band is already the full state").toBe(false);
+
     // Maximising keeps it too — there is nothing to maximise into, so the band simply stays.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.maximize());
     await page.waitForTimeout(1200);
@@ -329,6 +335,14 @@ test("a docked window that is dragged or maximised stays docked; restoring it un
     await expect.poll(async () => (await settingsOf(page)).dock.enabled).toBe(false);
     // ...and the button goes back to offering the maximise it now means.
     await expect(page.getByRole("button", { name: "Maximise" })).toBeVisible();
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMovable()),
+      "an ordinary window moves again").toBe(true);
+
+    // And maximising from here goes back to the band this arrangement remembers.
+    await page.getByRole("button", { name: "Maximise" }).click();
+    await expect.poll(async () => (await settingsOf(page)).dock.enabled, { timeout: 8000 }).toBe(true);
+    await expect.poll(async () => (await workAreaOf(app, display.id)).height, { timeout: 8000 })
+      .toBeLessThan(before.height);
   } finally {
     await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
     await app.close();

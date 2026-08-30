@@ -319,11 +319,12 @@ export class Dock {
     // Before anything is placed: a 15 % band is thinner than the window's usual minimum height, and
     // Windows enforces that minimum, which would leave the window overlapping its own reservation.
     this.window.setMinimumSize(BAND_MINIMUM, BAND_MINIMUM);
-    // A band IS the window at its full extent, so there is nothing left to maximise into. Leaving
-    // maximise available means Windows resizes the band, we put it back, and Windows then reports
-    // an unmaximise — a gesture that used to give the edge away by accident.
+    // A band IS the window at its full extent: there is nothing left to maximise into, and it may
+    // not be dragged off its edge. Snapping it back on every move event fought the window manager's
+    // own drag loop; refusing the move outright is what actually keeps the band on its edge.
     if (this.window.isMaximized()) this.window.unmaximize();
     this.window.setMaximizable(false);
+    this.window.setMovable(false);
 
     // Move to the target monitor BEFORE reserving anything.
     //
@@ -376,6 +377,7 @@ export class Dock {
     if (this.window.isDestroyed()) return;
     this.window.setMinimumSize(this.minimum[0] ?? 1, this.minimum[1] ?? 1);
     this.window.setMaximizable(true);
+    this.window.setMovable(true);
   }
 
   /** Give the space back; safe to call when nothing was reserved. */

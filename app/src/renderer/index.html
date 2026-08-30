@@ -7,9 +7,65 @@
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'" />
     <title>Hangar</title>
+    <style>
+      /* The loading panel lives in the document, not in a second window: this is painted when the
+         HTML is parsed — before the bundle is fetched, let alone run — so the window has something
+         in it from the moment it appears. React replaces it on its first render. */
+      :root { --boot-panel: #ffffff; --boot-text: #1c1b1a; --boot-muted: #6b6862; --boot-line: #d6d3ca; }
+      @media (prefers-color-scheme: dark) {
+        :root { --boot-panel: #1c1b1a; --boot-text: #eceae4; --boot-muted: #8f8b81; --boot-line: #3d3b38; }
+      }
+      html[data-theme="light"] { --boot-panel: #ffffff; --boot-text: #1c1b1a; --boot-muted: #6b6862; --boot-line: #d6d3ca; }
+      html[data-theme="dark"] { --boot-panel: #1c1b1a; --boot-text: #eceae4; --boot-muted: #8f8b81; --boot-line: #3d3b38; }
+      html, body { height: 100%; margin: 0; }
+      #boot {
+        -webkit-app-region: drag;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 22px;
+        box-sizing: border-box;
+        background: var(--boot-panel);
+        color: var(--boot-text);
+        font: 13px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif;
+        user-select: none;
+      }
+      #boot .name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+      #boot .step { color: var(--boot-muted); margin-top: 2px; }
+      #boot .track {
+        position: fixed; left: 0; right: 0; top: 0; height: 3px;
+        background: color-mix(in srgb, var(--boot-line) 50%, transparent);
+        overflow: hidden;
+      }
+      #boot .track::after {
+        content: ""; position: absolute; top: 0; bottom: 0; width: 40%;
+        background: #d97757; animation: boot-sweep 1.1s ease-in-out infinite;
+      }
+      @keyframes boot-sweep { from { left: -40%; } to { left: 100%; } }
+      @media (prefers-reduced-motion: reduce) {
+        #boot .track::after { animation: none; left: 0; width: 100%; opacity: 0.5; }
+      }
+    </style>
   </head>
   <body class="h-full">
-    <div id="root" class="h-full"></div>
+    <div id="root" class="h-full">
+      <div id="boot">
+        <div class="track"></div>
+        <svg width="44" height="44" viewBox="0 0 512 512" aria-hidden="true" style="flex: none">
+          <rect x="16" y="50" width="210" height="98" rx="20" fill="#d97757" />
+          <rect x="16" y="104" width="480" height="392" rx="38" fill="#e99c81" />
+          <rect x="68" y="180" width="290" height="42" rx="21" fill="#faf9f7" />
+          <rect x="68" y="268" width="376" height="42" rx="21" fill="#faf9f7" opacity="0.7" />
+          <rect x="68" y="356" width="376" height="42" rx="21" fill="#faf9f7" opacity="0.7" />
+          <circle cx="413" cy="201" r="31" fill="#4ac878" />
+        </svg>
+        <div>
+          <div class="name">Hangar</div>
+          <div class="step" id="boot-step">Starting…</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="./main.tsx"></script>
   </body>
 </html>

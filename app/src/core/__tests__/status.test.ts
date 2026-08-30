@@ -103,3 +103,16 @@ describe("metrics", () => {
     expect(history.keys()).toEqual([SYSTEM_SERIES]);
   });
 });
+
+describe("the MCP tooltip", () => {
+  it("names every server it was asked about, with its verdict", () => {
+    const probe = { servers: { wiki: { ok: true }, github: { ok: false } } };
+    const item = mcpHealth(probe, ["wiki", "github", "never-probed"]);
+    expect(item).not.toBeNull();
+    const lines = item!.detail.split(String.fromCharCode(10));
+    expect(lines[0]).toContain("failing");
+    expect(lines).toContain("✔  wiki");
+    expect(lines).toContain("✘  github");
+    expect(lines).toContain("?  never-probed");
+  });
+});

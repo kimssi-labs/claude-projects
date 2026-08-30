@@ -16,6 +16,7 @@ import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./compone
 import { StatusBar } from "./components/StatusBar";
 import { formatBytes } from "./format";
 import { Splitter } from "./components/Splitter";
+import { Truncated } from "./components/Truncated";
 import { WindowControls } from "./components/WindowControls";
 import { useLayoutMode } from "./useLayoutMode";
 import { useTheme } from "./useTheme";
@@ -392,9 +393,13 @@ export function App() {
           ) : (
             <>
               <div className={`flex items-center gap-2 border-b border-ink-600 ${tight ? "px-2 py-1" : "px-4 py-2"}`}>
-                <h1 className="text-sm text-bone-200 truncate">
+                <Truncated
+                  as="span"
+                  title={screen === "sessions" && openProjectInfo ? openProjectInfo.cwd ?? undefined : undefined}
+                  className="text-sm text-bone-200"
+                >
                   {screen === "sessions" && openProjectInfo ? openProjectInfo.name : "Projects"}
-                </h1>
+                </Truncated>
                 <span className="chip">{screen === "sessions" ? `${sessions.length} sessions` : `${filtered.length} projects`}</span>
                 <div className="flex-1" />
                 {screen === "sessions" ? (
