@@ -164,6 +164,7 @@ export class ConfigStore {
       shell: SHELL_CHOICES.includes(shell as ShellChoice) ? (shell as ShellChoice) : "auto",
       permission: PERMISSION_MODES.includes(permission as PermissionMode) ? (permission as PermissionMode) : "default",
       terminal: typeof raw["terminal"] === "string" ? (raw["terminal"] as string) : "",
+      customShell: typeof raw["customShell"] === "string" ? (raw["customShell"] as string) : "",
     };
   }
 

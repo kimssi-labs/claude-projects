@@ -11,7 +11,7 @@ const CLAUDE = "C:\\Users\\me\\.local\\bin\\claude.EXE";
 const SESSION = "abc123";
 
 function request(overrides: Partial<LaunchRequest> = {}): LaunchRequest {
-  const config: Config = { shell: "auto", permission: "default", terminal: "" };
+  const config: Config = { shell: "auto", permission: "default", terminal: "", customShell: "" };
   return {
     cwd: "C:\\proj",
     claudeExe: CLAUDE,
@@ -26,7 +26,7 @@ function request(overrides: Partial<LaunchRequest> = {}): LaunchRequest {
 }
 
 function withConfig(overrides: Partial<Config>): Config {
-  return { shell: "auto", permission: "default", terminal: "", ...overrides };
+  return { shell: "auto", permission: "default", terminal: "", customShell: "", ...overrides };
 }
 
 describe("claude argv", () => {
@@ -120,5 +120,20 @@ describe("launch command", () => {
     expect(command.exe).toBe("gnome-terminal");
     expect(command.args.slice(0, 3)).toEqual(["--working-directory", "/home/me/src", "-e"]);
     expect(command.args).toContain("bash");
+  });
+});
+
+describe("a custom host program", () => {
+  it("is started with the claude command as its arguments", () => {
+    const custom = "C:\tools\my-terminal.exe";
+    const hosted = hostedCommand(["claude", "--resume", SESSION], "custom", "win32", true, custom);
+    expect(hosted.exe).toBe(custom);
+    expect(hosted.args).toEqual(["claude", "--resume", SESSION]);
+  });
+
+  it("falls back to the platform default when no path was given", () => {
+    // "custom" with an empty path is a half-finished setting, not a reason to fail to open.
+    const hosted = hostedCommand(["claude"], "custom", "win32", true, "   ");
+    expect(hosted.exe).toBe("pwsh.exe");
   });
 });

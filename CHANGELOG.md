@@ -3,6 +3,17 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.2.5
+
+- **A loading window, in the order you would expect**: it appears first and alone — measured at
+  340 ms from launch, which is as soon as Electron can draw anything — names each step while the app
+  starts hidden behind it, and is closed as the app's own window is shown, once that window has
+  actually rendered. Nothing half-drawn appears on the way.
+- **Each MCP server has its own indicator.** "MCP ✔" answered a question nobody asked; every checked
+  server now gets its own dot and its own tooltip — connected, not responding, or never probed.
+- **Launch · Custom program**: name the executable that hosts a session, and it is started with the
+  claude command as its arguments. Left empty it behaves as Auto, so a session still opens.
+
 ## v2.2.4
 
 - **Docked is the maximised state, and now behaves like one.** The maximise button docks — back to

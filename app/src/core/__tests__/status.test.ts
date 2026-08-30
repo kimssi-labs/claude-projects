@@ -39,16 +39,18 @@ describe("MCP health", () => {
     expect(installedMcpServers({ mcpServers: { wiki: {}, github: {} } }, probe)).toEqual(["chrome", "github", "wiki"]);
   });
 
-  it("lets a failure outrank a server the probe has not seen", () => {
-    expect(mcpHealth(probe, ["wiki"])?.ok).toBe(true);
-    expect(mcpHealth(probe, ["wiki", "chrome"])?.ok).toBe(false);
-    expect(mcpHealth(probe, ["wiki", "ghost"])?.ok).toBe(null);
-    expect(mcpHealth(probe, ["chrome", "ghost"])?.ok).toBe(false);
+  it("reports every checked server on its own, not one verdict for all of them", () => {
+    const items = mcpHealth(probe, ["wiki", "chrome", "ghost"]);
+    expect(items.map((i) => [i.label, i.ok])).toEqual([
+      ["wiki", true],       // the probe says it answered
+      ["chrome", false],    // the probe says it did not
+      ["ghost", null],      // the probe has never seen it
+    ]);
   });
 
   it("disappears when nothing is selected or installed", () => {
-    expect(mcpHealth(probe, [])).toBeNull();
-    expect(mcpHealth({}, null)).toBeNull();
+    expect(mcpHealth(probe, [])).toEqual([]);
+    expect(mcpHealth({}, null)).toEqual([]);
   });
 });
 
@@ -65,7 +67,7 @@ describe("readStatus", () => {
     writeFileSync(join(home, ".ponytail-active"), "full\n");
     const status = readStatus(home, { mcp: null, outlook: true, ponytail: true, usage: true }, NOW);
     expect(status.windows).toHaveLength(1);
-    expect(status.health.map((h) => h.key)).toEqual(["mcp"]);
+    expect(status.health.map((h) => h.key)).toEqual(["mcp:wiki"]);
     expect(status.ponytail).toBe("full");
   });
 });
@@ -104,15 +106,12 @@ describe("metrics", () => {
   });
 });
 
-describe("the MCP tooltip", () => {
-  it("names every server it was asked about, with its verdict", () => {
+describe("the MCP tooltips", () => {
+  it("says what each dot means, in words", () => {
     const probe = { servers: { wiki: { ok: true }, github: { ok: false } } };
-    const item = mcpHealth(probe, ["wiki", "github", "never-probed"]);
-    expect(item).not.toBeNull();
-    const lines = item!.detail.split(String.fromCharCode(10));
-    expect(lines[0]).toContain("failing");
-    expect(lines).toContain("✔  wiki");
-    expect(lines).toContain("✘  github");
-    expect(lines).toContain("?  never-probed");
+    const items = mcpHealth(probe, ["wiki", "github", "never-probed"]);
+    expect(items.find((i) => i.label === "wiki")?.detail).toContain("connected");
+    expect(items.find((i) => i.label === "github")?.detail).toContain("not responding");
+    expect(items.find((i) => i.label === "never-probed")?.detail).toContain("no verdict");
   });
 });

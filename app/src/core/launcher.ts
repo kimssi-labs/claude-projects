@@ -78,7 +78,13 @@ export function cmdQuote(value: string): string {
   return /[\s"&|<>^]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-function shellExe(shell: ShellChoice, platform: NodeJS.Platform, pwshAvailable: boolean): string {
+function shellExe(
+  shell: ShellChoice,
+  platform: NodeJS.Platform,
+  pwshAvailable: boolean,
+  customShell = "",
+): string {
+  if (shell === "custom" && customShell.trim()) return customShell.trim();
   if (shell === "pwsh") return "pwsh.exe";
   if (shell === "powershell") return "powershell.exe";
   if (shell === "cmd") return "cmd.exe";
@@ -96,9 +102,13 @@ export function hostedCommand(
   shell: ShellChoice,
   platform: NodeJS.Platform,
   pwshAvailable: boolean,
+  customShell = "",
 ): { exe: string; args: string[] } {
   if (shell === "none") return { exe: argv[0] as string, args: argv.slice(1) };
-  const exe = shellExe(shell, platform, pwshAvailable);
+  const exe = shellExe(shell, platform, pwshAvailable, customShell);
+  // A named executable is taken at its word: it is started with the claude command as its
+  // arguments, because its flags are its own and this app cannot guess them.
+  if (shell === "custom" && customShell.trim()) return { exe, args: argv };
   if (exe === "cmd.exe") return { exe, args: ["/k", argv.map(cmdQuote).join(" ")] };
   if (exe === "bash") return { exe, args: ["-lc", `${argv.map(shQuote).join(" ")}; exec bash`] };
   return { exe, args: ["-NoExit", "-EncodedCommand", psEncode(argv)] };
@@ -127,7 +137,9 @@ export function windowArgument(target: OpenTarget): string {
  */
 export function launchCommand(request: LaunchRequest, pwshAvailable = true): LaunchCommand {
   const argv = claudeArgv(request);
-  const hosted = hostedCommand(argv, request.config.shell, request.platform, pwshAvailable);
+  const hosted = hostedCommand(
+    argv, request.config.shell, request.platform, pwshAvailable, request.config.customShell,
+  );
   const title = request.displayName || "Claude";
 
   if (request.platform === "win32" && request.hasWindowsTerminal) {

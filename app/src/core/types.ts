@@ -84,11 +84,13 @@ export interface DockConfig {
   percent: number;
 }
 
-export type ShellChoice = "auto" | "pwsh" | "powershell" | "cmd" | "bash" | "none";
+export type ShellChoice = "auto" | "pwsh" | "powershell" | "cmd" | "bash" | "custom" | "none";
 export type PermissionMode = "default" | "bypass" | "accept" | "plan" | "auto";
 export type OpenTarget = "sessionsWindow" | "currentWindow" | "newWindow";
 
 export interface LaunchConfig {
+  /** Executable that hosts a session when `shell` is "custom" — a full path, or a name on PATH. */
+  customShell: string;
   shell: ShellChoice;
   permission: PermissionMode;
   /** Terminal command used on Linux; empty means "detect". */

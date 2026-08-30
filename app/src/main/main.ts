@@ -30,6 +30,12 @@ const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as co
 const DOCK_RESIZE_SETTLE_MS = 400;
 /** A band within this many pixels of what was asked for counts as "the platform agreed". */
 const FLOOR_SLACK_PX = 4;
+/** Small enough to read at a glance, large enough for the longest step. */
+const SPLASH = { width: 380, height: 96 } as const;
+/** How long the app waits for its own first paint before showing the window regardless. */
+const FIRST_PAINT_CAP_MS = 4000;
+/** How long the app waits for the loading window to paint before getting on with it. */
+const SPLASH_PAINT_CAP_MS = 450;
 /** Electron's indeterminate value for the taskbar progress; -1 clears it. */
 const TASKBAR_BUSY = 2;
 const TASKBAR_IDLE = -1;
@@ -44,19 +50,80 @@ function resolvedTheme(): "light" | "dark" {
 }
 
 /**
- * What the app is doing, in the window's own loading panel.
+ * The loading window: shown first, alone, and closed when the app is ready to take over.
  *
- * The panel is markup in index.html, so it is painted when the document parses — before the bundle
- * is fetched, let alone run. A second window would have needed a second renderer starting up beside
- * the app's own, which measured 800 ms and made the "loading" window arrive after the loading.
+ * Shown at construction rather than on its first paint — a window with a background colour is
+ * painted by the compositor as soon as it appears — and the app's own window is not created until
+ * this one has painted, because two renderers starting at once is what made the loading window
+ * arrive at the end of the loading it was meant to explain.
  */
-function splashSays(step: string): void {
-  if (!window || window.isDestroyed()) return;
-  void window.webContents
-    .executeJavaScript(`{ const el = document.getElementById("boot-step"); if (el) el.textContent = ${JSON.stringify(step)}; }`)
-    .catch(() => {
-      /* the document may not be parsed yet, or React may already own the page */
+function openSplash(): void {
+  try {
+    splash = new BrowserWindow({
+      ...SPLASH,
+      show: true,
+      frame: false,
+      resizable: false,
+      skipTaskbar: false,
+      alwaysOnTop: true,
+      center: true,
+      title: "Hangar",
+      icon: join(__dirname, "..", "..", "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
+      backgroundColor: WINDOW_BACKGROUND[resolvedTheme()],
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
+    splash.setMenu(null);
+    splash.setProgressBar(TASKBAR_BUSY);
+    const theme = resolvedTheme();
+    void splash.loadFile(join(__dirname, "..", "renderer", "splash.html"));
+    splash.webContents.once("did-finish-load", () => {
+      void splash?.webContents
+        .executeJavaScript(`document.documentElement.dataset.theme = ${JSON.stringify(theme)};`)
+        .catch(() => undefined);
+      splashSays(pendingStep);
+    });
+  } catch (error) {
+    console.error("[hangar] splash unavailable:", (error as Error).message);
+    splash = null;
+  }
+}
+
+/**
+ * Resolves when the loading window has its content, or after `capMs` if it is being slow.
+ *
+ * `dom-ready` rather than `did-finish-load`: the panel is painted from the parsed document, and
+ * waiting for the last subresource is time the app could have spent starting.
+ */
+function splashReady(capMs: number): Promise<void> {
+  if (!splash || splash.isDestroyed()) return Promise.resolve();
+  if (!splash.webContents.isLoading()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, capMs);
+    splash?.webContents.once("dom-ready", done);
+  });
+}
+
+/** What the app is doing, named in the loading window. */
+function splashSays(step: string): void {
+  pendingStep = step;
+  if (!splash || splash.isDestroyed()) return;
+  void splash.webContents
+    .executeJavaScript(`{ const el = document.getElementById("step"); if (el) el.textContent = ${JSON.stringify(step)}; }`)
+    .catch(() => {
+      /* the page may not have parsed yet; the next step will say the same thing */
+    });
+}
+
+function closeSplash(): void {
+  if (splash && !splash.isDestroyed()) {
+    splash.setProgressBar(TASKBAR_IDLE);
+    splash.destroy();
+  }
+  splash = null;
 }
 
 /** What the caption buttons should show right now. */
@@ -79,6 +146,9 @@ let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
 let sampling: NodeJS.Timeout | null = null;
 let worker: Worker | null = null;
+let splash: BrowserWindow | null = null;
+/** The step named before the loading page had parsed, so it is not lost. */
+let pendingStep = "Starting…";
 let lastProjects: ProjectInfo[] = [];
 
 function which(exe: string): string | null {
@@ -133,10 +203,9 @@ async function createWindow(): Promise<void> {
   window = new BrowserWindow({
     ...WINDOW,
     ...(onScreen && savedBounds ? savedBounds : {}),
-    // Shown at once, not on `ready-to-show`: a window with a background colour is painted by the
-    // compositor the moment it appears, and the loading panel in index.html follows a frame later.
-    // Waiting for the first React render is half a second of nothing after a double-click.
-    show: true,
+    // Hidden until it has something to show: the loading window is on screen meanwhile, and a
+    // half-drawn app appearing before it is ready is worse than a moment more of the splash.
+    show: false,
     backgroundColor: WINDOW_BACKGROUND[resolvedTheme()],
     title: "Hangar",
     autoHideMenuBar: true,
@@ -153,9 +222,6 @@ async function createWindow(): Promise<void> {
       sandbox: false,
     },
   });
-  // The taskbar button says "working" from the moment the window exists — which is a few hundred
-  // milliseconds before the page inside it has painted anything of its own.
-  window.setProgressBar(TASKBAR_BUSY);
   dock = new Dock(window);
   window.on("maximize", () => {
     // setMaximizable(false) stops the caption button and the system menu, not the API or every
@@ -224,12 +290,22 @@ async function createWindow(): Promise<void> {
     window = null;
   });
 
+  // Subscribed BEFORE loading: `ready-to-show` fires during the load, and a listener attached
+  // afterwards waits for an event that has already happened — which is start-up hanging forever.
+  const firstPaint = new Promise<void>((resolve) => window?.once("ready-to-show", () => resolve()));
+
   const devUrl = process.env["HANGAR_DEV"] ? DEV_SERVER : null;
   const loaded = devUrl
     ? window.loadURL(devUrl)
     : window.loadFile(join(__dirname, "..", "renderer", "index.html"));
 
   await loaded;
+  // `ready-to-show` is the renderer's first paint: React has run, so what appears is the app. The
+  // cap is a safety net — a window that never reports a paint must not keep the app behind a splash.
+  await Promise.race([
+    firstPaint,
+    new Promise<void>((resolve) => setTimeout(resolve, FIRST_PAINT_CAP_MS)),
+  ]);
   const saved = config.dock(null, setupKey());
   if (saved.enabled) {
     const placement = await dock.apply(saved);
@@ -574,14 +650,22 @@ async function confirm(message: string, detail: string): Promise<boolean> {
 }
 
 app.whenReady().then(async () => {
+  openSplash();
+  // Alone on the machine for its first frame: the app's renderer is a much heavier start.
+  await splashReady(SPLASH_PAINT_CAP_MS);
+
+  splashSays("Reading settings…");
   registerIpc();
-  // The window first, and everything else while it is already on screen.
-  await createWindow();
   splashSays("Scanning projects…");
   scanProjects();
   splashSays(`Opening ${lastProjects.length} project${lastProjects.length === 1 ? "" : "s"}…`);
+  await createWindow();
+  splashSays("Starting the monitor…");
   startSampling();
-  window?.setProgressBar(TASKBAR_IDLE);           // done: the window can speak for itself now
+
+  closeSplash();
+  window?.show();
+  window?.focus();
   console.log(`[hangar] window ready — ${lastProjects.length} projects from ${claudeHome()}`);
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
@@ -590,6 +674,8 @@ app.whenReady().then(async () => {
 
 process.on("uncaughtException", (error) => {
   console.error("[hangar] fatal:", error);
+  closeSplash();                                  // never leave a loading window with no app
+  window?.show();
 });
 
 // An app that disappears should say why. These are the three ways it can happen without anyone
