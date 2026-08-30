@@ -92,13 +92,47 @@ const monitors = (page: Page) => page.evaluate(() => window.hangar.displays());
  */
 async function reservesSpace(app: ElectronApplication, page: Page, key: string): Promise<boolean> {
   const before = await workAreaOf(app, key);
-  await page.evaluate((device) =>
-    window.hangar.applyDock({ enabled: true, device, edge: "top", percent: 12 }), key);
-  await page.waitForTimeout(1200);
-  const docked = await workAreaOf(app, key);
+  await dockTo(page, key, "top", 12);
+  const shrank = await settled(async () => (await workAreaOf(app, key)).height < before.height);
+  await undock(app, page, key, before);
+  return shrank;
+}
+
+/** Ask for a band and wait for the call itself to come back. */
+async function dockTo(page: Page, device: string, edge: string, percent: number): Promise<void> {
+  const result = await page.evaluate((arg) =>
+    window.hangar.applyDock({ enabled: true, device: arg.device, edge: arg.edge as "top", percent: arg.percent }),
+  { device, edge, percent });
+  expect(result.ok, `applyDock(${edge} ${percent}%)`).toBe(true);
+}
+
+/** Give the band back and wait until the desktop says so — the shell takes its time. */
+async function undock(
+  app: ElectronApplication,
+  page: Page,
+  key: string,
+  before: Electron.Rectangle,
+): Promise<void> {
   await page.evaluate(() => window.hangar.releaseDock());
-  await page.waitForTimeout(1200);
-  return docked.height < before.height;
+  await settled(async () => {
+    const now = await workAreaOf(app, key);
+    return now.height === before.height && now.width === before.width;
+  });
+}
+
+/**
+ * Poll a condition for a few seconds.
+ *
+ * Every one of these waits on the shell rearranging the desktop, which is not instant and is not a
+ * fixed duration either — a fixed sleep is how these tests became flaky in the first place.
+ */
+async function settled(check: () => Promise<boolean>, timeoutMs = 6000): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    if (await check()) return true;
+    if (Date.now() > until) return false;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
 }
 
 /**
@@ -164,36 +198,27 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
     for (const display of displays) {
       const label = `${display.label} ${display.bounds.width}x${display.bounds.height}`;
-      const reserves = await reservesSpace(app, page, display.id);
       const before = await workAreaOf(app, display.id);
+      await dockTo(page, display.id, "top", 12);
+      const shrank = await settled(async () => (await workAreaOf(app, display.id)).height < before.height);
 
-      const result = await page.evaluate((device) =>
-        window.hangar.applyDock({ enabled: true, device, edge: "top", percent: 12 }), display.id);
-      expect(result.ok, label).toBe(true);
-      await page.waitForTimeout(1200);
-
-      if (!reserves) {
-        // No reservation here, but the band must still be a band: the width of the monitor.
+      if (!shrank) {
+        // No window manager to honour the reservation; the band must still be a band.
         const placed = await bounds(app);
         samePixels(placed.width, before.width, `${label}: spans the monitor even unreserved`);
-        await page.evaluate(() => window.hangar.releaseDock());
-        await page.waitForTimeout(600);
+        await undock(app, page, display.id, before);
         continue;
       }
 
-      const docked = await workAreaOf(app, display.id);
-      expect(docked.height, `${label}: the desktop should shrink`).toBeLessThan(before.height);
-
       // The window is the band on THIS monitor: same rectangle, not a window beside it.
+      const docked = await workAreaOf(app, display.id);
       const rect = await bounds(app);
       samePixels(rect.x, before.x, `${label}: starts at the monitor edge`);
       samePixels(rect.y, before.y, `${label}: starts at the top of the work area`);
       samePixels(rect.width, before.width, `${label}: spans the monitor`);
       samePixels(rect.height, docked.y - before.y, `${label}: fills what was reserved`);
 
-      await page.evaluate(() => window.hangar.releaseDock());
-      await page.waitForTimeout(1200);
-      expect(await workAreaOf(app, display.id), `${label}: released`)
+      expect(await undock(app, page, display.id, before).then(() => workAreaOf(app, display.id)), `${label}: released`)
         .toMatchObject({ y: before.y, height: before.height });
     }
   } finally {
@@ -206,6 +231,7 @@ test("every monitor: a percentage means the same thing however often it is appli
   const { app, page } = await launch(fixture());
   try {
     for (const display of await monitors(page)) {
+      const before = await workAreaOf(app, display.id);
       if (!(await reservesSpace(app, page, display.id))) continue;   // the band is not sized here
       const label = `${display.label} ${display.bounds.width}x${display.bounds.height}`;
       const heights: number[] = [];
@@ -213,17 +239,14 @@ test("every monitor: a percentage means the same thing however often it is appli
       // The bug this guards: the band was measured against a work area it had already shrunk, so
       // re-applying the same percentage kept making it smaller.
       for (const percent of [12, 20, 12]) {
-        await page.evaluate((arg) =>
-          window.hangar.applyDock({ enabled: true, device: arg.device, edge: "top", percent: arg.percent }),
-        { device: display.id, percent });
-        await page.waitForTimeout(1000);
+        await dockTo(page, display.id, "top", percent);
+        await settled(async () => (await workAreaOf(app, display.id)).height < before.height);
         heights.push((await bounds(app)).height);
       }
       samePixels(heights[0]!, heights[2]!, `${label}: same request, same band`);
       expect(heights[1]!, `${label}: a bigger percentage is a bigger band`).toBeGreaterThan(heights[0]!);
 
-      await page.evaluate(() => window.hangar.releaseDock());
-      await page.waitForTimeout(900);
+      await undock(app, page, display.id, before);
     }
   } finally {
     await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
@@ -239,22 +262,19 @@ test("every monitor: each edge reserves on the axis it belongs to", async () => 
       for (const edge of ["top", "bottom", "left", "right"] as const) {
         const label = `${display.label} ${edge}`;
         const before = await workAreaOf(app, display.id);
-        await page.evaluate((arg) =>
-          window.hangar.applyDock({ enabled: true, device: arg.device, edge: arg.edge, percent: 12 }),
-        { device: display.id, edge });
-        await page.waitForTimeout(1100);
+        const sideways = edge === "left" || edge === "right";
+        await dockTo(page, display.id, edge, 12);
+        const took = await settled(async () => {
+          const now = await workAreaOf(app, display.id);
+          return sideways ? now.width < before.width : now.height < before.height;
+        });
+        expect(took, `${label}: takes ${sideways ? "width" : "height"}`).toBe(true);
 
         const docked = await workAreaOf(app, display.id);
-        if (edge === "left" || edge === "right") {
-          expect(docked.width, `${label}: takes width`).toBeLessThan(before.width);
-          expect(docked.height, `${label}: leaves height alone`).toBe(before.height);
-        } else {
-          expect(docked.height, `${label}: takes height`).toBeLessThan(before.height);
-          expect(docked.width, `${label}: leaves width alone`).toBe(before.width);
-        }
+        if (sideways) expect(docked.height, `${label}: leaves height alone`).toBe(before.height);
+        else expect(docked.width, `${label}: leaves width alone`).toBe(before.width);
 
-        await page.evaluate(() => window.hangar.releaseDock());
-        await page.waitForTimeout(1100);
+        await undock(app, page, display.id, before);
         expect(await workAreaOf(app, display.id), `${label}: released`)
           .toMatchObject({ x: before.x, y: before.y, width: before.width, height: before.height });
       }
@@ -272,10 +292,9 @@ test("dragging a docked window off its edge undocks it", async () => {
     const display = displays.find((d) => d.primary) ?? displays[0]!;
     test.skip(!(await reservesSpace(app, page, display.id)), "no window manager to reserve space");
     const before = await workAreaOf(app, display.id);
-    await page.evaluate((id) =>
-      window.hangar.applyDock({ enabled: true, device: id, edge: "top", percent: 12 }), display.id);
+    await dockTo(page, display.id, "top", 12);
+    expect(await settled(async () => (await workAreaOf(app, display.id)).height < before.height)).toBe(true);
     await page.waitForTimeout(1600);                          // past the settle window
-    expect((await workAreaOf(app, display.id)).height).toBeLessThan(before.height);
 
     // Somewhere else entirely: not a thickness change, so the edge goes back.
     await app.evaluate(({ BrowserWindow }) =>

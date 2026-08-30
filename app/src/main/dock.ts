@@ -205,6 +205,8 @@ export class Dock {
   private readonly minimum: number[];
   /** Set while we are the ones moving the window, so re-asserting the band cannot recurse. */
   private placing = false;
+  /** Undocked work area per display, captured while nothing of ours was reserved. */
+  private readonly baseAreas = new Map<string, Rectangle>();
   /**
    * How long after a placement a move still counts as the system's doing rather than the user's.
    *
@@ -225,6 +227,13 @@ export class Dock {
 
   constructor(private readonly window: BrowserWindow) {
     this.minimum = window.getMinimumSize();
+    // NOT on a work-area change: that is usually our own band, and forgetting the undocked area
+    // because we just docked is how a 12 % band became a 26 % one.
+    screen.on("display-metrics-changed", (_event, _display, changed) => {
+      if (changed.some((metric) => metric !== "workArea")) this.baseAreas.clear();
+    });
+    screen.on("display-added", () => this.baseAreas.clear());
+    screen.on("display-removed", () => this.baseAreas.clear());
     // Windows moves an appbar out of the work area it just shrank — and does it after the call
     // returns, so the only reliable answer is to put the band back whenever something moves it.
     const reassert = (): void => {
@@ -271,25 +280,29 @@ export class Dock {
   /**
    * The display's work area as if we were not docked to it.
    *
-   * `display.workArea` already excludes our own band, so sizing the band from it shrinks the band
-   * every time it is applied: 20 % of a work area that is itself 20 % smaller. Adding our own
-   * reservation back gives a percentage that always means the same thing.
+   * `display.workArea` already excludes our own band, so sizing a band from it shrinks the band
+   * every time it is applied: 20 % of a work area that is itself 20 % smaller.
+   *
+   * The undocked area is REMEMBERED rather than reconstructed. Reconstructing it — adding our own
+   * band back — races the shell: Electron's copy of the work area updates a moment after SETPOS, so
+   * a second apply could add a new band back to an area that still had the old one taken out. On a
+   * 125 % display that turned a 12 % band into a 132 px one where 112 px was right.
    */
   workArea(display: Electron.Display): Rectangle {
-    const area = display.workArea;
-    const edge = this.current?.edge;
-    if (!this.registered || !this.reserved || !edge) return area;
-    const band = screen.screenToDipRect(null, this.reserved);
-    const onThisDisplay = band.x < display.bounds.x + display.bounds.width
-      && display.bounds.x < band.x + band.width
-      && band.y < display.bounds.y + display.bounds.height
-      && display.bounds.y < band.y + band.height;
-    if (!onThisDisplay) return area;
-    const thickness = bandThickness(band, edge);
-    if (edge === "top") return { x: area.x, y: area.y - thickness, width: area.width, height: area.height + thickness };
-    if (edge === "bottom") return { ...area, height: area.height + thickness };
-    if (edge === "left") return { x: area.x - thickness, y: area.y, width: area.width + thickness, height: area.height };
-    return { ...area, width: area.width + thickness };
+    const key = displayKey(display);
+    const seen = this.baseAreas.get(key);
+    if (!this.registered) {
+      // Nothing of ours is reserved, so what the display reports is the undocked area — unless it
+      // is smaller than something already seen, which means Electron has not caught up with a
+      // release yet. A work area only shrinks because something reserved space, so the largest
+      // reading is the honest one, and a stale small reading heals itself on the next look.
+      const area = display.workArea;
+      if (!seen || area.width * area.height >= seen.width * seen.height) {
+        this.baseAreas.set(key, area);
+        return area;
+      }
+    }
+    return seen ?? display.workArea;
   }
 
   /** Place the window in its band and reserve that space; returns what actually happened. */

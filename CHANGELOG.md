@@ -18,6 +18,12 @@ notes. Add the section **before** tagging.
   the height is remembered like every other size.
 - **Status line: every segment is a choice** — usage bars, Outlook, ponytail — beside the MCP list.
 - The usage strip's spacing was uneven and started hard against the window edge.
+- **The dock size stayed the size you asked for.** Three faults compounded into a band that grew on
+  its own: the remembered undocked work area was thrown away every time our own band changed it,
+  the measured "smallest band this window manager allows" was then applied on top of the next
+  request, and each application made that measurement larger again — 12 % became 26 %, then 35 %,
+  then 53 %. A band is now applied exactly as asked, and the measured floor only decides where the
+  slider stops.
 - **Docking is remembered per monitor arrangement**, not only per monitor: the screen you dock to at
   a desk with two externals is not the one you dock to on the laptop alone, and plugging a monitor
   in or out now re-reads that arrangement's setting and follows it.
