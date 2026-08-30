@@ -3,6 +3,14 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.2.2
+
+- **A band stays on its edge when you resize it.** Dragging the outer edge of a right- or
+  bottom-docked window changed its size without moving it, leaving a strip of desktop between the
+  band and the screen edge. A resized band is re-applied, and a band is always anchored to its edge.
+- The usage strip reads as one thing again: the percentage sits beside the bar it measures, and the
+  reset time beside the name it belongs to.
+
 ## v2.2.1
 
 - **Dock settings changed in Settings stick.** Saving the dock section did not carry the monitor
