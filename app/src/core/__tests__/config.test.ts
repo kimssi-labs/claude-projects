@@ -70,7 +70,7 @@ describe("ConfigStore", () => {
     writeFileSync(join(home, "config", "manager.json"), "not json at all");
     expect(config.dock().edge).toBe("top");
     expect(config.launch()).toEqual({ shell: "auto", permission: "default", terminal: "" });
-    expect(config.status()).toEqual({ mcp: null });
+    expect(config.status()).toEqual({ mcp: null, outlook: true, ponytail: true, usage: true });
     expect(config.ui()).toEqual({ project: null, cursor: 0, theme: "system", monitor: true, layout: "auto", stackBelow: 520, window: null, navWidth: 0, asideWidth: 0, stackTop: 0 });
   });
 
