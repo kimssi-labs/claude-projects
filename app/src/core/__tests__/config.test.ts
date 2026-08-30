@@ -37,6 +37,19 @@ describe("ConfigStore", () => {
     expect(Object.keys(written).sort()).toEqual(["dock", "launch", "status", "ui"]);
   });
 
+  it("remembers the dock per monitor arrangement, not just per monitor", () => {
+    const desk = "0,0 2560x1440 + -1536,706 1536x961";
+    const laptop = "0,0 1536x961";
+    config.saveDock({ enabled: true, device: "-1536,706 1536x961", edge: "left", percent: 25 }, desk);
+    config.saveDock({ enabled: true, device: "0,0 1536x961", edge: "top", percent: 15 }, laptop);
+
+    // Each set of screens brings back the monitor it was docked to, and how.
+    expect(config.dock(null, desk)).toMatchObject({ device: "-1536,706 1536x961", edge: "left", percent: 25 });
+    expect(config.dock(null, laptop)).toMatchObject({ device: "0,0 1536x961", edge: "top", percent: 15 });
+    // An arrangement never seen before falls back to the last thing used.
+    expect(config.dock(null, "0,0 1024x768")).toMatchObject({ edge: "top", percent: 15 });
+  });
+
   it("remembers the dock per monitor and keeps the last one used", () => {
     config.saveDock({ enabled: true, device: "\\\\.\\DISPLAY1", edge: "left", percent: 30 });
     config.saveDock({ enabled: false, device: "\\\\.\\DISPLAY2", edge: "top", percent: 15 });

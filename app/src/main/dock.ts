@@ -63,6 +63,17 @@ export function displayKey(display: Electron.Display): string {
   return `${x},${y} ${width}x${height}`;
 }
 
+/**
+ * A name for the whole set of attached monitors.
+ *
+ * Sorted, so the same three screens are the same setup whichever order Windows enumerates them in.
+ * Docking is remembered against this as well as against each monitor: the screen you dock to at
+ * your desk is not the one you dock to on the laptop alone.
+ */
+export function setupKey(displays: Electron.Display[] = screen.getAllDisplays()): string {
+  return displays.map(displayKey).sort().join(" + ");
+}
+
 /** Where a display sits, as a looser fallback for a monitor that was resized but not moved. */
 export function displayOrigin(display: Electron.Display): string {
   return `${display.bounds.x},${display.bounds.y}`;

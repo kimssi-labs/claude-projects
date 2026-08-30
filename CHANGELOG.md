@@ -18,6 +18,9 @@ notes. Add the section **before** tagging.
   the height is remembered like every other size.
 - **Status line: every segment is a choice** — usage bars, Outlook, ponytail — beside the MCP list.
 - The usage strip's spacing was uneven and started hard against the window edge.
+- **Docking is remembered per monitor arrangement**, not only per monitor: the screen you dock to at
+  a desk with two externals is not the one you dock to on the laptop alone, and plugging a monitor
+  in or out now re-reads that arrangement's setting and follows it.
 
 Docking is now tested on **every connected monitor**, on all four edges, for reserve / fill /
 release, and for a percentage meaning the same thing however often it is applied.

@@ -136,7 +136,8 @@ so maximised windows stop at the band. Wayland has no equivalent an ordinary app
 there the window is positioned but nothing is reserved, and the screen says so.
 
 Every monitor keeps its own edge, size and on/off — a band that suits a portrait display is wrong on
-a wide one — and displays with saved settings are marked `(saved)`. A window manager may refuse to
+a wide one — and displays with saved settings are marked `(saved)`. Each **arrangement** of monitors
+also remembers which of them was docked, so plugging a screen in or out brings back that setup. A window manager may refuse to
 shrink below some minimum; the first refusal is measured and becomes the lower bound of the size
 setting, so what the screen shows is what docking will give you.
 
