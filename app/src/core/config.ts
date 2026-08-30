@@ -13,6 +13,7 @@ import type { DockConfig, DockEdge, LaunchConfig, LayoutMode, PermissionMode, Sh
 
 export const SECTION = { dock: "dock", status: "status", launch: "launch", ui: "ui" } as const;
 export const DOCK_MONITORS_KEY = "monitors";
+export const DOCK_SETUPS_KEY = "setups";
 export const DOCK_FLOOR_KEY = "floor";
 export { DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
 
@@ -77,14 +78,21 @@ export class ConfigStore {
 
   // -- dock -------------------------------------------------------------------------------------
   /**
-   * Dock settings for `device` (default: the last one used). Each monitor keeps its own edge, size
-   * and on/off, because a band that suits a portrait panel is wrong on a wide one.
+   * Dock settings for `device`, or for the monitors currently attached.
+   *
+   * Two levels, because both questions matter. Each monitor keeps its own edge, size and on/off —
+   * a band that suits a portrait panel is wrong on a wide one. And each ARRANGEMENT of monitors
+   * (`setup`: every attached monitor, sorted) remembers which of them was docked, so plugging the
+   * laptop into its two screens brings back the screen you had it on, not just its size.
    */
-  dock(device?: string | null): DockConfig {
+  dock(device?: string | null, setup?: string | null): DockConfig {
     const raw = this.section(SECTION.dock);
     const perDevice = asRecord(raw[DOCK_MONITORS_KEY]);
-    const chosen = device ?? (typeof raw["device"] === "string" ? (raw["device"] as string) : null);
-    const merged = { ...raw, ...(chosen ? asRecord(perDevice[chosen]) : {}) };
+    const perSetup = setup ? asRecord(asRecord(raw[DOCK_SETUPS_KEY])[setup]) : {};
+    const chosen = device
+      ?? (typeof perSetup["device"] === "string" ? (perSetup["device"] as string) : null)
+      ?? (typeof raw["device"] === "string" ? (raw["device"] as string) : null);
+    const merged = { ...raw, ...(chosen ? asRecord(perDevice[chosen]) : {}), ...perSetup };
     const percent = Number(merged["percent"]);
     const edge = merged["edge"];
     return {
@@ -95,13 +103,19 @@ export class ConfigStore {
     };
   }
 
-  saveDock(config: DockConfig): void {
+  saveDock(config: DockConfig, setup?: string | null): void {
     const raw = this.section(SECTION.dock);
     const perDevice = asRecord(raw[DOCK_MONITORS_KEY]);
+    const setups = asRecord(raw[DOCK_SETUPS_KEY]);
     if (config.device) {
       perDevice[config.device] = { edge: config.edge, percent: config.percent, enabled: config.enabled };
     }
-    this.saveSection(SECTION.dock, { ...raw, ...config, [DOCK_MONITORS_KEY]: perDevice });
+    if (setup) {
+      setups[setup] = { device: config.device, edge: config.edge, percent: config.percent, enabled: config.enabled };
+    }
+    this.saveSection(SECTION.dock, {
+      ...raw, ...config, [DOCK_MONITORS_KEY]: perDevice, [DOCK_SETUPS_KEY]: setups,
+    });
   }
 
   /** Monitors with remembered settings — shown as "saved" so the list is not a guess. */

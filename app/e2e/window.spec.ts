@@ -84,6 +84,24 @@ const workAreaOf = (app: ElectronApplication, key: string) =>
 const monitors = (page: Page) => page.evaluate(() => window.hangar.displays());
 
 /**
+ * Can this desktop actually reserve space?
+ *
+ * Windows always can. X11 needs a window manager to honour `_NET_WM_STRUT_PARTIAL`, and CI runs
+ * under a bare Xvfb with none — there the app still places its window, but the work area cannot
+ * change, and asserting that it does would be testing the runner, not the app.
+ */
+async function reservesSpace(app: ElectronApplication, page: Page, key: string): Promise<boolean> {
+  const before = await workAreaOf(app, key);
+  await page.evaluate((device) =>
+    window.hangar.applyDock({ enabled: true, device, edge: "top", percent: 12 }), key);
+  await page.waitForTimeout(1200);
+  const docked = await workAreaOf(app, key);
+  await page.evaluate(() => window.hangar.releaseDock());
+  await page.waitForTimeout(1200);
+  return docked.height < before.height;
+}
+
+/**
  * Equal, allowing one pixel.
  *
  * On a 125 % display a band is a whole number of physical pixels that is not a whole number of
@@ -146,12 +164,22 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
     for (const display of displays) {
       const label = `${display.label} ${display.bounds.width}x${display.bounds.height}`;
+      const reserves = await reservesSpace(app, page, display.id);
       const before = await workAreaOf(app, display.id);
 
       const result = await page.evaluate((device) =>
         window.hangar.applyDock({ enabled: true, device, edge: "top", percent: 12 }), display.id);
       expect(result.ok, label).toBe(true);
       await page.waitForTimeout(1200);
+
+      if (!reserves) {
+        // No reservation here, but the band must still be a band: the width of the monitor.
+        const placed = await bounds(app);
+        samePixels(placed.width, before.width, `${label}: spans the monitor even unreserved`);
+        await page.evaluate(() => window.hangar.releaseDock());
+        await page.waitForTimeout(600);
+        continue;
+      }
 
       const docked = await workAreaOf(app, display.id);
       expect(docked.height, `${label}: the desktop should shrink`).toBeLessThan(before.height);
@@ -178,6 +206,7 @@ test("every monitor: a percentage means the same thing however often it is appli
   const { app, page } = await launch(fixture());
   try {
     for (const display of await monitors(page)) {
+      if (!(await reservesSpace(app, page, display.id))) continue;   // the band is not sized here
       const label = `${display.label} ${display.bounds.width}x${display.bounds.height}`;
       const heights: number[] = [];
 
@@ -206,6 +235,7 @@ test("every monitor: each edge reserves on the axis it belongs to", async () => 
   const { app, page } = await launch(fixture());
   try {
     for (const display of await monitors(page)) {
+      if (!(await reservesSpace(app, page, display.id))) continue;   // nothing to assert without a WM
       for (const edge of ["top", "bottom", "left", "right"] as const) {
         const label = `${display.label} ${edge}`;
         const before = await workAreaOf(app, display.id);
@@ -240,6 +270,7 @@ test("dragging a docked window off its edge undocks it", async () => {
   try {
     const displays = await monitors(page);
     const display = displays.find((d) => d.primary) ?? displays[0]!;
+    test.skip(!(await reservesSpace(app, page, display.id)), "no window manager to reserve space");
     const before = await workAreaOf(app, display.id);
     await page.evaluate((id) =>
       window.hangar.applyDock({ enabled: true, device: id, edge: "top", percent: 12 }), display.id);

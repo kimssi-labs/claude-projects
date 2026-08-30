@@ -17,7 +17,7 @@ import { claudeHome } from "../core/paths.js";
 import { readStatus, installedMcpServers } from "../core/status.js";
 import { Store } from "../core/store.js";
 import type { DockConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
-import { bandRect, bandThickness, displayKey, Dock, pickDisplay } from "./dock.js";
+import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
 import { DOCK_PERCENT } from "../core/constants.js";
 import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type SettingsPayload } from "./ipc.js";
 import { Worker } from "node:worker_threads";
@@ -210,6 +210,11 @@ async function createWindow(): Promise<void> {
   });
   dock = new Dock(window);
   nativeTheme.on("updated", paintTitleBar);
+  // Plugging a monitor in or out is a different arrangement, with its own remembered dock.
+  const rearranged = (): void => void reapplyDockForSetup();
+  screen.on("display-added", rearranged);
+  screen.on("display-removed", rearranged);
+  screen.on("display-metrics-changed", rearranged);
   // Dragging a docked window out of its band is how you undock it; the saved setting follows.
   // Applying a band talks to the shell, so a drag must not do it per mouse-move: settle first.
   let resizeTimer: NodeJS.Timeout | null = null;
@@ -217,20 +222,20 @@ async function createWindow(): Promise<void> {
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
-      const current = config.dock();
+      const current = config.dock(null, setupKey());
       if (!current.enabled || !window) return;
       const { display } = pickDisplay(current.device);
       const span = bandThickness(dock?.workArea(display) ?? display.workArea, current.edge);
       const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
       if (percent === current.percent) return;
-      config.saveDock({ ...current, percent });
+      config.saveDock({ ...current, percent }, setupKey());
       window.webContents.send(CHANNEL.settingsPush, settingsPayload());
     }, DOCK_RESIZE_SETTLE_MS);
   };
   dock.onUserUndock = () => {
-    const current = config.dock();
+    const current = config.dock(null, setupKey());
     if (!current.enabled) return;
-    config.saveDock({ ...current, enabled: false });
+    config.saveDock({ ...current, enabled: false }, setupKey());
     window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
   };
 
@@ -258,7 +263,7 @@ async function createWindow(): Promise<void> {
   else await window.loadFile(join(__dirname, "..", "renderer", "index.html"));
   window.show();                                  // belt and braces: the load is done, so is the wait
 
-  const saved = config.dock();
+  const saved = config.dock(null, setupKey());
   if (saved.enabled) {
     const placement = await dock.apply(saved);
     if (placement.note) window.webContents.send(CHANNEL.appInfo, placement.note);
@@ -327,13 +332,31 @@ function startSampling(): void {
   }
 }
 
+/**
+ * Re-read the dock for the monitors attached right now, and do what it says.
+ *
+ * The band is released either way first: the monitor it was on may be the one that just left.
+ */
+async function reapplyDockForSetup(): Promise<void> {
+  if (!window || !dock) return;
+  const wanted = config.dock(null, setupKey());
+  await dock.release();
+  if (!wanted.enabled) {
+    window.webContents.send(CHANNEL.settingsPush, settingsPayload());
+    return;
+  }
+  const placement = await dock.apply(wanted);
+  if (placement.note) console.log(`[hangar] ${placement.note}`);
+  window.webContents.send(CHANNEL.settingsPush, settingsPayload());
+}
+
 /** Tell the sampler which sessions to follow; called after every scan. */
 function pushTargets(): void {
   worker?.postMessage({ targets: sampleTargets() });
 }
 
 function settingsPayload(): SettingsPayload {
-  const dockConfig = config.dock();
+  const dockConfig = config.dock(null, setupKey());
   const { display } = pickDisplay(dockConfig.device);
   const span = bandThickness(display.workArea, dockConfig.edge);
   const probe = readStatus(undefined, config.status()).health;
@@ -506,7 +529,7 @@ function registerIpc(): void {
     const floor = config.dockFloor(wanted.edge);
     const percent = Math.max(wanted.percent, percentFloor(floor, span));
     const applied: DockConfig = { ...wanted, percent };
-    config.saveDock(applied);
+    config.saveDock(applied, setupKey());
     const placement = await dock.apply(applied);
     // What the window really got is the floor for this axis: remember it so the slider can stop there.
     const got = bandThickness(placement.applied, applied.edge);
@@ -517,8 +540,8 @@ function registerIpc(): void {
 
   ipcMain.handle(CHANNEL.releaseDock, async () => {
     await dock?.release();
-    const current = config.dock();
-    config.saveDock({ ...current, enabled: false });
+    const current = config.dock(null, setupKey());
+    config.saveDock({ ...current, enabled: false }, setupKey());
     return settingsPayload();
   });
 
