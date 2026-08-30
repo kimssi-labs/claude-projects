@@ -7,14 +7,14 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, PERMISSION_MODES, SHELL_CHOICES, THEME_MODES } from "./constants.js";
+import { DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
 import { homePaths } from "./paths.js";
-import type { DockConfig, DockEdge, LaunchConfig, PermissionMode, ShellChoice, StatusConfig, ThemeMode, UiConfig } from "./types.js";
+import type { DockConfig, DockEdge, LaunchConfig, LayoutMode, PermissionMode, ShellChoice, StatusConfig, ThemeMode, UiConfig } from "./types.js";
 
 export const SECTION = { dock: "dock", status: "status", launch: "launch", ui: "ui" } as const;
 export const DOCK_MONITORS_KEY = "monitors";
 export const DOCK_FLOOR_KEY = "floor";
-export { DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, PERMISSION_MODES, SHELL_CHOICES, THEME_MODES } from "./constants.js";
+export { DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
 
 type Json = Record<string, unknown>;
 
@@ -159,6 +159,10 @@ export class ConfigStore {
       cursor: Number.isFinite(cursor) && cursor > 0 ? Math.round(cursor) : 0,
       theme: THEME_MODES.includes(theme as ThemeMode) ? (theme as ThemeMode) : "system",
       monitor: raw["monitor"] !== false,          // on unless it was explicitly turned off
+      layout: LAYOUT_MODES.includes(raw["layout"] as LayoutMode) ? (raw["layout"] as LayoutMode) : "auto",
+      stackBelow: Number.isFinite(Number(raw["stackBelow"])) && Number(raw["stackBelow"]) > 0
+        ? clamp(Math.round(Number(raw["stackBelow"])), STACK_BELOW.min, STACK_BELOW.max)
+        : STACK_BELOW.default,
       window: windowBounds(raw["window"]),
       navWidth: pixels(raw["navWidth"]),
       asideWidth: pixels(raw["asideWidth"]),

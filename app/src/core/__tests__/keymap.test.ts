@@ -6,7 +6,8 @@ describe("resolveAction", () => {
   it("keeps the terminal keys doing the terminal things", () => {
     expect(resolveAction({ key: "ArrowDown" }, "projects")).toBe("moveDown");
     expect(resolveAction({ key: "Enter" }, "projects")).toBe("enter");
-    expect(resolveAction({ key: "t" }, "sessions")).toBe("openHere");
+    // T is gone: as its own program, "open here" and Enter do the same thing.
+    expect(resolveAction({ key: "t" }, "sessions")).toBe(null);
     expect(resolveAction({ key: "O" }, "sessions")).toBe("openNewWindow");
     expect(resolveAction({ key: "F2" }, "sessions")).toBe("rename");
     expect(resolveAction({ key: "Delete" }, "projects")).toBe("delete");
@@ -41,7 +42,7 @@ describe("resolveAction", () => {
 
   it("documents every action it can produce", () => {
     const documented = new Set(SHORTCUTS.flatMap((s) => [s.action]));
-    for (const action of ["enter", "openHere", "openNewWindow", "rename", "delete", "refresh", "settings", "quit"]) {
+    for (const action of ["enter", "openNewWindow", "rename", "delete", "refresh", "settings", "quit"]) {
       expect(documented.has(action as never)).toBe(true);
     }
   });

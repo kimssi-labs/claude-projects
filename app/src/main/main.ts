@@ -8,7 +8,7 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
 
 import { ConfigStore, percentFloor } from "../core/config.js";
 import { launchCommand, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
@@ -16,13 +16,42 @@ import { MetricsHistory, SYSTEM_SERIES } from "../core/metrics.js";
 import { claudeHome } from "../core/paths.js";
 import { readStatus, installedMcpServers } from "../core/status.js";
 import { Store } from "../core/store.js";
-import type { DockConfig, LaunchConfig, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
-import { bandRect, bandThickness, Dock, pickDisplay } from "./dock.js";
+import type { DockConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
+import { bandRect, bandThickness, displayKey, Dock, pickDisplay } from "./dock.js";
+import { DOCK_PERCENT } from "../core/constants.js";
 import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type SettingsPayload } from "./ipc.js";
-import { sample, SAMPLE_INTERVAL_MS } from "./sampler.js";
+import { Worker } from "node:worker_threads";
+
+import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
 
 const DEV_SERVER = "http://localhost:5273";
 const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as const;
+/** The strip the system draws its caption buttons in — our header is exactly this tall. */
+const TITLE_BAR_HEIGHT = 32;
+/** How long a drag has to stop before its new thickness is written down. */
+const DOCK_RESIZE_SETTLE_MS = 400;
+/** Page background and text, per theme, for the caption-button strip. */
+const OVERLAY = {
+  light: { color: "#faf9f7", symbolColor: "#1c1b1a" },
+  dark: { color: "#141413", symbolColor: "#eceae4" },
+} as const;
+
+/** Which palette the window is actually in, resolving "system" the way the page does. */
+function resolvedTheme(): "light" | "dark" {
+  const mode = config.ui().theme;
+  if (mode === "system") return nativeTheme.shouldUseDarkColors ? "dark" : "light";
+  return mode;
+}
+
+/** Keep the caption buttons on the same background as the page under them. */
+function paintTitleBar(): void {
+  if (!window || window.isDestroyed() || process.platform === "darwin") return;
+  try {
+    window.setTitleBarOverlay({ ...OVERLAY[resolvedTheme()], height: TITLE_BAR_HEIGHT });
+  } catch {
+    /* only Windows has an overlay to paint */
+  }
+}
 
 const store = new Store();
 const config = new ConfigStore();
@@ -30,6 +59,7 @@ const history = new MetricsHistory();
 let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
 let sampling: NodeJS.Timeout | null = null;
+let worker: Worker | null = null;
 let lastProjects: ProjectInfo[] = [];
 
 function which(exe: string): string | null {
@@ -65,7 +95,11 @@ function rectsOverlap(a: Electron.Rectangle, b: Electron.Rectangle): boolean {
 }
 
 function scanProjects(): ProjectInfo[] {
+  const t0 = Date.now();
   lastProjects = store.scan();
+  const ms = Date.now() - t0;
+  if (ms > 200) console.log(`[hangar] scan took ${ms} ms for ${lastProjects.length} projects`);
+  pushTargets();                                  // the running set may have changed
   return lastProjects;
 }
 
@@ -81,9 +115,15 @@ async function createWindow(): Promise<void> {
     ...WINDOW,
     ...(onScreen && savedBounds ? savedBounds : {}),
     show: false,
-    backgroundColor: "#141413",
+    backgroundColor: resolvedTheme() === "dark" ? "#141413" : "#faf9f7",
     title: "Hangar",
     autoHideMenuBar: true,
+    // Docked, a title bar is a strip of the band that shows nothing. The caption buttons are drawn
+    // over our own header instead, so the window fills its reservation edge to edge.
+    titleBarStyle: "hidden",
+    ...(process.platform === "win32"
+      ? { titleBarOverlay: { ...OVERLAY[resolvedTheme()], height: TITLE_BAR_HEIGHT } }
+      : {}),
     icon: join(__dirname, "..", "..", "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
     webPreferences: {
       preload: join(__dirname, "..", "preload", "preload.js"),
@@ -93,7 +133,24 @@ async function createWindow(): Promise<void> {
     },
   });
   dock = new Dock(window);
+  nativeTheme.on("updated", paintTitleBar);
   // Dragging a docked window out of its band is how you undock it; the saved setting follows.
+  // Applying a band talks to the shell, so a drag must not do it per mouse-move: settle first.
+  let resizeTimer: NodeJS.Timeout | null = null;
+  dock.onUserResize = (thickness) => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      const current = config.dock();
+      if (!current.enabled || !window) return;
+      const { display } = pickDisplay(current.device);
+      const span = bandThickness(display.workArea, current.edge);
+      const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
+      if (percent === current.percent) return;
+      config.saveDock({ ...current, percent });
+      window.webContents.send(CHANNEL.settingsPush, settingsPayload());
+    }, DOCK_RESIZE_SETTLE_MS);
+  };
   dock.onUserUndock = () => {
     const current = config.dock();
     if (!current.enabled) return;
@@ -129,28 +186,71 @@ async function createWindow(): Promise<void> {
   }
 }
 
+/** Sessions worth measuring right now: the running ones, from the last scan. */
+function sampleTargets(): SessionTarget[] {
+  return lastProjects.flatMap((project) =>
+    project.sessions.filter((s) => s.live && s.pid).map((s) => ({ sessionId: s.id, pid: s.pid as number })));
+}
+
+function acceptSnapshot(snapshot: MetricsSnapshot): void {
+  history.push(snapshot);
+  history.keepOnly(Object.keys(snapshot.sessions));
+  window?.webContents.send(CHANNEL.metricsPush, snapshot);
+}
+
 function stopSampling(): void {
-  if (!sampling) return;
-  clearInterval(sampling);
-  sampling = null;
+  if (worker) {
+    worker.postMessage({ stop: true });
+    void worker.terminate();
+    worker = null;
+  }
+  if (sampling) {
+    clearInterval(sampling);
+    sampling = null;
+  }
+}
+
+/**
+ * The in-process sampler, used only if the worker cannot start.
+ *
+ * Packaging can put the worker script somewhere `new Worker()` will not follow; measuring on the
+ * main thread is worse than measuring off it, but far better than not measuring at all.
+ */
+function startInlineSampling(): void {
+  if (sampling) return;
+  sampling = setInterval(() => {
+    void sample(sampleTargets())
+      .then(acceptSnapshot)
+      .catch(() => {
+        /* a sampling hiccup must never take the app down */
+      });
+  }, SAMPLE_INTERVAL_MS);
 }
 
 /** Runs only when the setting says so — the whole point of the setting is that off costs nothing. */
+/** Runs only when the setting says so — the whole point of the setting is that off costs nothing. */
 function startSampling(): void {
-  if (sampling) return;
+  if (worker || sampling) return;
   if (!config.ui().monitor) return;
-  sampling = setInterval(async () => {
-    const targets = lastProjects.flatMap((project) =>
-      project.sessions.filter((s) => s.live && s.pid).map((s) => ({ sessionId: s.id, pid: s.pid as number })));
-    try {
-      const snapshot = await sample(targets);
-      history.push(snapshot);
-      history.keepOnly(targets.map((t) => t.sessionId));
-      window?.webContents.send(CHANNEL.metricsPush, snapshot);
-    } catch {
-      /* a sampling hiccup must never take the app down */
-    }
-  }, SAMPLE_INTERVAL_MS);
+  try {
+    worker = new Worker(join(__dirname, "samplerWorker.js"), { workerData: { intervalMs: SAMPLE_INTERVAL_MS } });
+    worker.on("message", (snapshot: MetricsSnapshot) => acceptSnapshot(snapshot));
+    worker.on("error", (error) => {
+      console.error("[hangar] sampler worker failed, measuring in-process:", error.message);
+      worker = null;
+      startInlineSampling();
+    });
+    worker.unref();                               // a sampler must never hold the app open
+    pushTargets();
+  } catch (error) {
+    console.error("[hangar] sampler worker unavailable:", (error as Error).message);
+    startInlineSampling();
+  }
+}
+
+/** Tell the sampler which sessions to follow; called after every scan. */
+function pushTargets(): void {
+  worker?.postMessage({ targets: sampleTargets() });
 }
 
 function settingsPayload(): SettingsPayload {
@@ -186,13 +286,19 @@ function safeJson(file: string): Record<string, unknown> {
 function displays(): DisplayInfo[] {
   const saved = new Set(config.dockDevices());
   const primary = screen.getPrimaryDisplay();
-  return screen.getAllDisplays().map((display) => ({
-    id: String(display.id),
-    label: display.label || `Display ${display.id}`,
-    bounds: display.bounds,
-    primary: display.id === primary.id,
-    saved: saved.has(String(display.id)),
-  }));
+  const all = screen.getAllDisplays();
+  return all.map((display, index) => {
+    const key = displayKey(display);
+    return {
+      // The key, not the id: ids are reshuffled between runs, and the saved dock has to survive.
+      id: key,
+      // Windows leaves `label` empty for some monitors, and "" is not something to pick from a list.
+      label: display.label || `Monitor ${index + 1}`,
+      bounds: display.bounds,
+      primary: display.id === primary.id,
+      saved: saved.has(key) || saved.has(String(display.id)),
+    };
+  });
 }
 
 function registerIpc(): void {
@@ -303,6 +409,7 @@ function registerIpc(): void {
     // The theme lives with the rest of the remembered position, so it comes back with it.
     if (payload.ui) {
       config.saveUi({ ...config.ui(), ...payload.ui });
+      paintTitleBar();                            // the theme may have just changed
       if (config.ui().monitor) startSampling();
       else stopSampling();
     }

@@ -121,3 +121,23 @@ describe("Store.scan", () => {
     expect(missing.scan()[0]?.exists).toBe(false);
   });
 });
+
+describe("reading transcripts", () => {
+  it("finds the cwd without reading the whole file", () => {
+    const { home } = makeHome();
+    const dir = join(home, "projects", "C--big");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "11111111-2222-3333-4444-555555555555.jsonl");
+    // A first line with the cwd, then far more than any head-read would cover.
+    const filler = `${JSON.stringify({ type: "assistant", text: "x".repeat(2000) })}
+`;
+    writeFileSync(file, `${JSON.stringify({ type: "user", cwd: "C:\big" })}
+${filler.repeat(4000)}`);
+
+    const store = new Store(home, { isAlive: () => false, folderExists: () => true });
+    const started = Date.now();
+    expect(store.transcriptCwd(file)).toBe("C:\big");
+    // Generous, but a full read of an 8 MB file cannot make it: this is about the shape, not speed.
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+});

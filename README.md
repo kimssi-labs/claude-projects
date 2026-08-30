@@ -58,7 +58,6 @@ Everything is reachable from the keyboard; `?` shows this list in the app.
 |---|---|---|
 | `↑` `↓` `PgUp` `PgDn` `Home` `End` | move | move |
 | `Enter` | open the project's sessions | resume in a new terminal |
-| `T` | new session here (current terminal window) | resume here |
 | `O` | new session in a new window | resume in a new window |
 | `F2` | set a display alias | rename the session |
 | `Del` | delete the project folder | delete the session |
@@ -78,10 +77,11 @@ process — and drawn as a sparkline in its row; the machine's own CPU, clock sp
 drawn beside the list. Five minutes of history is kept, which is enough to see whether a session is
 working or stuck.
 
-A monitor may not be the reason a machine is busy, so every reading is taken in-process: a toolhelp
-snapshot plus `GetProcessTimes` on Windows, `/proc` on Linux, and `os.cpus()` for the machine
-itself. Sampling costs about 3 % of one core, and **Settings · Monitoring** turns it off entirely —
-which stops the timer, not just the drawing.
+A monitor may not be the reason a machine is busy, so every reading is taken in-process — a toolhelp
+snapshot plus `GetProcessTimes` on Windows, `/proc` on Linux, `os.cpus()` for the machine itself —
+and on a worker thread, so none of it lands on the thread that draws the window. Sampling costs
+about 3 % of one core, and **Settings · Monitoring** turns it off entirely, stopping the timer
+rather than just the drawing.
 
 ## Layout
 
@@ -93,7 +93,10 @@ edge without a scrollbar:
 | Full | wide and tall | project list, session list, detail panel, machine graphs |
 | Compact | narrow | list and graphs, no detail panel |
 | Band | short (top/bottom dock) | one strip: list plus graphs |
-| Column | narrow (left/right dock) | one list at a time, graphs underneath |
+| Stacked | narrower than the width you set | project list, its sessions and the graphs, one under the other |
+
+**Settings · Layout** decides: side by side, stacked, or stacked below a width of your choosing.
+The three panes can also be dragged to any width; double-click a divider for the default back.
 
 ## What it reads
 
@@ -115,16 +118,19 @@ health from its status cache. On a machine without them the segment is not drawn
 
 ## Settings (`S`)
 
-One screen of cards — **Appearance**, **Monitoring**, **Dock**, **Status line**, **Launch**,
-**Permissions**. `Tab`
-moves between them, `Esc` closes. Every choice, and the project and row you were last on, is kept in
+One screen of cards — **Appearance**, **Layout**, **Monitoring**, **Dock**, **Status line**,
+**Launch**, **Permissions**. `Tab` moves between them, `Esc` closes. Every choice, and the project and row you were last on, is kept in
 `config/manager.json`.
 
 **Appearance** — light, dark, or system. System follows the OS setting and changes with it, without
 a restart.
 
 **Dock** places the manager as a reserved band on a monitor edge — pick the monitor, then the edge,
-size and on/off. The space is genuinely reserved: on Windows through an application desktop toolbar
+size and on/off. Dragging the band's inner edge sets its size; dragging the window anywhere else
+undocks it. Monitors are remembered by where they are and how big they are, because Electron's
+display ids are not the same from one run to the next.
+
+The space is genuinely reserved: on Windows through an application desktop toolbar
 (`SHAppBarMessage`), on Linux/X11 through `_NET_WM_STRUT_PARTIAL`, both of which shrink the work area
 so maximised windows stop at the band. Wayland has no equivalent an ordinary application may use, so
 there the window is positioned but nothing is reserved, and the screen says so.
@@ -135,7 +141,9 @@ shrink below some minimum; the first refusal is measured and becomes the lower b
 setting, so what the screen shows is what docking will give you.
 
 **Status line** lists the MCP servers this machine has — from `~/.claude.json` and from the probe
-cache — and lets you check the ones the segment should report. Uncheck everything and it disappears.
+cache — and lets you check the ones the segment should report, with **Select all** / **Select none**
+and an "Every server, always" mode that follows the list as it changes. Uncheck everything and the
+segment disappears.
 
 **Launch** picks the terminal and shell that host an opened session: PowerShell 7, Windows
 PowerShell, Command Prompt or none on Windows; on Linux the first terminal emulator found, or a named

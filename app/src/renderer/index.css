@@ -34,6 +34,9 @@
 }
 
 @layer components {
+  /* The window has no title bar of its own: this strip is what you drag it by. */
+  .drag { -webkit-app-region: drag; }
+  .no-drag { -webkit-app-region: no-drag; }
   /* Scrollable, but without a visible bar: in a 32 px strip the bar is taller than the content. */
   .no-bar { scrollbar-width: none; }
   .no-bar::-webkit-scrollbar { display: none; }

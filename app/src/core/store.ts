@@ -5,7 +5,8 @@
  * real folder only exists inside its transcripts, a session's title can come from three places, and
  * a "live" session is a pid that still exists — the registry file outlives the process.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 
 import { ConfigStore } from "./config.js";
@@ -18,6 +19,13 @@ const MEMORY_DIR = "memory";
 const CUSTOM_TITLE_TYPE = "custom-title";
 /** Lines of a transcript scanned for `cwd`; it is written near the top or not at all. */
 const HEAD_LINES = 20;
+/**
+ * How much of a transcript is read to find that `cwd`.
+ *
+ * These files reach tens of megabytes — the largest here is 48 MB — and reading one whole just to
+ * look at its first line is what made a scan take twenty seconds and the window go grey with it.
+ */
+const HEAD_BYTES = 64 * 1024;
 const NO_PROMPT = "(no prompt)";
 
 interface CacheEntry<T> { signature: string; value: T }
@@ -38,6 +46,42 @@ function readLines(file: string, limit?: number): unknown[] {
       continue;                                   // a partially written line is normal while a session runs
     }
     if (limit && out.length >= limit) break;
+  }
+  return out;
+}
+
+/** The first `bytes` of a file as text, without reading (or decoding) the rest of it. */
+function readHead(file: string, bytes: number): string {
+  let handle: number | null = null;
+  try {
+    handle = openSync(file, "r");
+    const buffer = Buffer.allocUnsafe(bytes);
+    const read = readSync(handle, buffer, 0, bytes, 0);
+    return buffer.subarray(0, read).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (handle !== null) {
+      try {
+        closeSync(handle);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+}
+
+/** Objects from the first lines of `text`; a trailing partial line is dropped. */
+function parseLines(text: string, limit: number): unknown[] {
+  const out: unknown[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      continue;                                   // the cut-off last line, or a half-written one
+    }
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -73,12 +117,17 @@ export class Store {
   private readonly folderExists: (path: string) => boolean;
   private titles: CacheEntry<Map<string, string>> | null = null;
   private cwds = new Map<string, CacheEntry<string | null>>();
+  /** Answers for `folderExists`, filled in by a background probe — see `folderReachable`. */
+  private folders = new Map<string, boolean>();
+  private probing = new Set<string>();
 
   constructor(home?: string, options: StoreOptions = {}) {
     this.paths = homePaths(home);
     this.config = new ConfigStore(home);
     this.isAlive = options.isAlive ?? defaultIsAlive;
-    this.folderExists = options.folderExists ?? ((path) => existsSync(path));
+    // The default is deliberately NOT existsSync: a project on an unreachable network share makes
+    // it wait for the SMB timeout — measured at 10.9 s here, on the thread that draws the window.
+    this.folderExists = options.folderExists ?? ((path) => this.folderReachable(path));
   }
 
   /** Session ids with a living process behind them, from the registry Claude Code writes. */
@@ -113,18 +162,42 @@ export class Store {
     return titles;
   }
 
-  /** Real folder of a transcript, cached per file: a session's cwd cannot change. */
+  /**
+   * Real folder of a transcript.
+   *
+   * Cached by path with no signature on purpose: a session's cwd cannot change, so a transcript
+   * that is being appended to right now — the one session that would otherwise be re-read on every
+   * single scan — is read exactly once.
+   */
   transcriptCwd(file: string): string | null {
-    const sig = signature(file);
     const hit = this.cwds.get(file);
-    if (hit?.signature === sig) return hit.value;
+    if (hit) return hit.value;
     let cwd: string | null = null;
-    for (const entry of readLines(file, HEAD_LINES)) {
+    for (const entry of parseLines(readHead(file, HEAD_BYTES), HEAD_LINES)) {
       const row = entry as { cwd?: string };
       if (row.cwd) { cwd = row.cwd; break; }
     }
-    this.cwds.set(file, { signature: sig, value: cwd });
+    this.cwds.set(file, { signature: "", value: cwd });
     return cwd;
+  }
+
+  /**
+   * Whether a folder is there, answered from the last background probe.
+   *
+   * A local path answers on the first probe, microseconds later. A dead UNC path takes its ten
+   * seconds on a worker thread, where nobody is waiting: until it answers the folder is reported as
+   * present, which is the harmless guess — the row simply is not greyed out yet.
+   */
+  private folderReachable(path: string): boolean {
+    const known = this.folders.get(path);
+    if (!this.probing.has(path)) {
+      this.probing.add(path);
+      void access(path)
+        .then(() => this.folders.set(path, true))
+        .catch(() => this.folders.set(path, false))
+        .finally(() => this.probing.delete(path));
+    }
+    return known ?? true;
   }
 
   /** Folders known to Claude Code, keyed by their encoded name — the fallback for empty projects. */
@@ -167,10 +240,16 @@ export class Store {
     aliases: Record<string, string>,
   ): ProjectInfo {
     const dir = join(this.paths.projects, dirName);
-    const files = readdirSync(dir, { withFileTypes: true })
+    // Stat once per file and sort on that: comparing with statSync() inside the comparator asks
+    // the filesystem O(n log n) times for numbers that do not change during a scan.
+    const stats = readdirSync(dir, { withFileTypes: true })
       .filter((e) => e.isFile() && e.name.endsWith(TRANSCRIPT_EXT))
-      .map((e) => join(dir, e.name))
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+      .map((e) => {
+        const file = join(dir, e.name);
+        return { file, stat: statSync(file) };
+      })
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+    const files = stats.map((entry) => entry.file);
 
     let cwd: string | null = null;
     for (const file of files) {
@@ -179,9 +258,8 @@ export class Store {
     }
     cwd = cwd ?? known.get(dirName) ?? null;
 
-    const sessions: SessionInfo[] = files.map((file) => {
+    const sessions: SessionInfo[] = stats.map(({ file, stat: st }) => {
       const id = file.slice(file.lastIndexOf(sep()) + 1, -TRANSCRIPT_EXT.length);
-      const st = statSync(file);
       const custom = this.customTitle(dir, id);
       const prompt = titles.get(id) ?? "";
       return {
