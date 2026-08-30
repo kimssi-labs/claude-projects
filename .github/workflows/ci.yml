@@ -8,60 +8,96 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write        # needed only by the release job
+  contents: write        # needed only by the publish job
+
+defaults:
+  run:
+    working-directory: app
 
 jobs:
   test:
-    # Windows-only tool (console input records, AppBar docking), so it is tested where it runs.
-    runs-on: windows-latest
+    # The app ships for both, and the parts that differ most (docking, terminal launch) are the
+    # parts worth testing on both.
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.10", "3.12"]
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: ${{ matrix.python }}
-      - name: Compile
-        run: python -m compileall -q claude_projects.py
-      - name: Self-test
-        run: python claude_projects.py --self-test
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # Electron needs a display. Windows has one; the Linux runner does not.
+      - name: End-to-end (Windows)
+        if: runner.os == 'Windows'
+        run: npx playwright test
+      - name: End-to-end (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npx playwright test
+      - name: Tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(node -p "require('./package.json').version")
+          [ "$tagged" = "$declared" ] || { echo "tag $GITHUB_REF_NAME != package.json $declared"; exit 1; }
       - name: Changelog has a section for this tag
         if: startsWith(github.ref, 'refs/tags/v')
-        run: python tools/release_notes.py "$env:GITHUB_REF_NAME"
-      - name: Tag matches __version__ and pyproject
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: python tools/version_info.py --check "$env:GITHUB_REF_NAME"
-      - name: Smoke test (--list against an empty home)
-        run: |
-          New-Item -ItemType Directory -Force -Path empty-home\projects, empty-home\sessions | Out-Null
-          python claude_projects.py --home empty-home --list
+        working-directory: .
+        run: python tools/release_notes.py "${{ github.ref_name }}"
 
-  release:
-    # Tag a commit (`git tag v1.0.0 && git push --tags`) to publish the standalone exe.
+  package:
+    # Installers are built where they run: electron-builder cannot cross-build these targets.
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-      - name: Build single-file exe
-        run: |
-          pip install pyinstaller
-          python tools/version_info.py build/version_info.txt
-          pyinstaller --onefile --console --name ClaudeProjects --icon assets/icon.ico `
-                      --version-file build/version_info.txt claude_projects.py
-      - name: Verify the exe runs and is stamped
-        run: |
-          dist\ClaudeProjects.exe --self-test
-          $info = (Get-Item dist\ClaudeProjects.exe).VersionInfo
-          $info | Format-List CompanyName, FileVersion, ProductVersion, LegalCopyright
-          if ($info.FileVersion -ne $env:GITHUB_REF_NAME.TrimStart('v')) { throw 'exe version resource does not match the tag' }
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Build installers
+        run: npx electron-builder --publish never
+        env:
+          GH_TOKEN: ${{ github.token }}       # electron-builder looks for it even when not publishing
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            app/release/*.exe
+            app/release/*.AppImage
+            app/release/*.deb
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
       - name: Release notes from CHANGELOG.md
-        run: python tools/release_notes.py "$env:GITHUB_REF_NAME" | Out-File -FilePath notes.md -Encoding utf8
-      - name: Publish release asset
+        working-directory: .
+        run: python tools/release_notes.py "${{ github.ref_name }}" > notes.md
+      - name: Publish
+        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" dist\ClaudeProjects.exe --notes-file notes.md --title "$env:GITHUB_REF_NAME"
+        run: gh release create "${{ github.ref_name }}" artifacts/* --notes-file notes.md --title "${{ github.ref_name }}"

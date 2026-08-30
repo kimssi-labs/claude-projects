@@ -1,0 +1,38 @@
+appId: dev.kimssilabs.hangar
+productName: Hangar
+copyright: Copyright (c) 2026 kimssi-labs. MIT License.
+directories:
+  output: release
+  buildResources: build
+# Only what the app runs: the TypeScript sources and the tests stay out of the package.
+files:
+  - dist/**
+  - package.json
+  - "!**/*.map"
+extraMetadata:
+  main: dist/main/main.js
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: false        # the Start entry is enough; a desktop icon is clutter
+  createStartMenuShortcut: true          # the Start entry is what Windows pins to the taskbar from
+  shortcutName: Hangar
+linux:
+  icon: build/icon.png
+  category: Development
+  target:
+    - AppImage
+    - deb
+  desktop:
+    entry:
+      Name: Hangar
+      Comment: Session manager for Claude Code
+      Keywords: claude;ai;sessions;projects;
