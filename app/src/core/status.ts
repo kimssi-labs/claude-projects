@@ -63,27 +63,30 @@ export function installedMcpServers(claudeJson: Record<string, unknown>, probe: 
  * One health verdict for the selected MCP servers: a failure outranks a server the probe has said
  * nothing about, which outranks all-good.
  */
-export function mcpHealth(probe: Record<string, unknown>, selected: string[] | null): HealthItem | null {
+/**
+ * One item per MCP server, not one verdict for all of them.
+ *
+ * "MCP ✔" answers a question nobody asked: with three servers checked, what a reader wants to know
+ * is which of them is up. Each server gets its own dot, and its own tooltip saying what that dot
+ * means — reachable, failing, or never probed.
+ */
+export function mcpHealth(probe: Record<string, unknown>, selected: string[] | null): HealthItem[] {
   const servers = (probe["servers"] as Record<string, { ok?: boolean }>) ?? {};
   const names = selected ?? Object.keys(servers);
-  if (!names.length) return null;
-  const chosen = names.map((name) => ({ name, verdict: servers[name] }));
-  const failing = chosen.filter((s) => s.verdict && s.verdict.ok === false).map((s) => s.name);
-  const unknown = chosen.filter((s) => !s.verdict).map((s) => s.name);
-  const ok = failing.length ? false : unknown.length ? null : true;
-  // The tooltip names every server and its verdict, one per line: "MCP ✔" alone does not say which
-  // servers were even asked, and that is the question anyone hovering is asking.
-  const summary = failing.length ? `${failing.length} failing`
-    : unknown.length ? `${unknown.length} not probed`
-      : `${chosen.length} server${chosen.length > 1 ? "s" : ""} healthy`;
-  const lines = chosen.map(({ name, verdict }) =>
-    `${verdict === undefined ? "?" : verdict.ok === false ? "✘" : "✔"}  ${name}`);
-  return {
-    key: "mcp",
-    label: selected ? names.join(", ") : "MCP",
-    ok,
-    detail: [summary, ...lines].join("\n"),
-  };
+  return names.map((name) => {
+    const verdict = servers[name];
+    const ok = verdict === undefined ? null : verdict.ok !== false;
+    return {
+      key: `mcp:${name}`,
+      label: name,
+      ok,
+      detail: ok === null
+        ? `${name}: no verdict in the probe cache`
+        : ok
+          ? `${name}: connected`
+          : `${name}: not responding`,
+    };
+  });
 }
 
 export function readStatus(
@@ -97,8 +100,7 @@ export function readStatus(
     : rateWindows(readJson<Record<string, unknown>>(paths.rateLimits, {}), now);
   const health: HealthItem[] = [];
 
-  const mcp = mcpHealth(readJson<Record<string, unknown>>(paths.mcpStatus, {}), config.mcp);
-  if (mcp) health.push(mcp);
+  health.push(...mcpHealth(readJson<Record<string, unknown>>(paths.mcpStatus, {}), config.mcp));
 
   const outlook = config.outlook === false
     ? {}

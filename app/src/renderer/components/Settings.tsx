@@ -34,6 +34,7 @@ const SHELLS: { key: ShellChoice; label: string; note: string }[] = [
   { key: "powershell", label: "Windows PowerShell", note: "powershell.exe" },
   { key: "cmd", label: "Command Prompt", note: "cmd.exe /k" },
   { key: "bash", label: "bash", note: "bash -lc" },
+  { key: "custom", label: "Custom program", note: "a path you name, started with the claude command" },
   { key: "none", label: "No shell", note: "claude directly — the window closes when it exits" },
 ];
 
@@ -344,6 +345,25 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
               onSelect={() => update({ ...draft, launch: { ...draft.launch, shell: shell.key } })}
             />
           ))}
+
+          <div className={`flex items-center gap-2 pt-1 ${draft.launch.shell === "custom" ? "" : "opacity-40"}`}>
+            <span className="text-[11px] text-bone-500 shrink-0">Program</span>
+            <input
+              type="text"
+              spellCheck={false}
+              value={draft.launch.customShell}
+              disabled={draft.launch.shell !== "custom"}
+              placeholder="C:\tools\my-terminal.exe   (or a name on PATH)"
+              onChange={(event) =>
+                update({ ...draft, launch: { ...draft.launch, customShell: event.target.value } })}
+              className="flex-1 min-w-0 bg-ink-800 border border-ink-600 rounded-lg px-2 py-1 text-xs placeholder:text-bone-500 focus:border-accent/60"
+            />
+          </div>
+          {draft.launch.shell === "custom" && !draft.launch.customShell.trim() ? (
+            <div className="text-[11px] text-warn">
+              Without a path this behaves as Auto, so a session still opens.
+            </div>
+          ) : null}
         </div>
       </Card>
 
