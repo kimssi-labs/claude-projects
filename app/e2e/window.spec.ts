@@ -60,8 +60,11 @@ async function launch(home: string): Promise<{ app: ElectronApplication; page: P
   return { app, page };
 }
 
-const bounds = (app: ElectronApplication) =>
-  app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getBounds());
+async function bounds(app: ElectronApplication): Promise<Electron.Rectangle> {
+  const rect = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getBounds());
+  if (!rect) throw new Error("the app has no window");
+  return rect;
+}
 const settingsOf = (page: Page) => page.evaluate(() => window.hangar.loadSettings());
 
 /**
@@ -97,10 +100,8 @@ test("opens one window, with no title bar above the content", async () => {
     await expect.poll(() => app.windows().length).toBe(1);
 
     // Frameless: the page is exactly as tall as the window's content, and the header is draggable.
-    const [win, inner] = await Promise.all([
-      bounds(app),
-      page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight })),
-    ]);
+    const win = await bounds(app);
+    const inner = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
     expect(inner.w).toBe(win.width);
     expect(inner.h).toBe(win.height);
     const draggable = await page.evaluate(() =>
@@ -190,7 +191,7 @@ test("every monitor: a percentage means the same thing however often it is appli
         heights.push((await bounds(app)).height);
       }
       samePixels(heights[0]!, heights[2]!, `${label}: same request, same band`);
-      expect(heights[1], `${label}: a bigger percentage is a bigger band`).toBeGreaterThan(heights[0]!);
+      expect(heights[1]!, `${label}: a bigger percentage is a bigger band`).toBeGreaterThan(heights[0]!);
 
       await page.evaluate(() => window.hangar.releaseDock());
       await page.waitForTimeout(900);
@@ -270,7 +271,8 @@ test("the layout setting decides the shape, and the panes remember their sizes",
     expect(saved.ui).toMatchObject({ layout: "vertical", navWidth: 300, asideWidth: 260, stackTop: 200 });
 
     // Switching to side-by-side brings the sidebar back without a restart.
-    await page.evaluate((ui) => window.hangar.saveSettings({ ui }), { ...saved.ui, layout: "horizontal" });
+    const horizontal: typeof saved.ui = { ...saved.ui, layout: "horizontal" };
+    await page.evaluate((ui) => window.hangar.saveSettings({ ui }), horizontal);
     await expect.poll(() => page.evaluate(() => document.querySelector("nav") !== null)).toBe(true);
   } finally {
     await app.close();
