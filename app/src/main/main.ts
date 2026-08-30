@@ -30,6 +30,8 @@ const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as co
 const TITLE_BAR_HEIGHT = 32;
 /** How long a drag has to stop before its new thickness is written down. */
 const DOCK_RESIZE_SETTLE_MS = 400;
+/** A band within this many pixels of what was asked for counts as "the platform agreed". */
+const FLOOR_SLACK_PX = 4;
 /** Page background and text, per theme, for the caption-button strip. */
 const OVERLAY = {
   light: { color: "#faf9f7", symbolColor: "#1c1b1a" },
@@ -214,7 +216,12 @@ async function createWindow(): Promise<void> {
   const rearranged = (): void => void reapplyDockForSetup();
   screen.on("display-added", rearranged);
   screen.on("display-removed", rearranged);
-  screen.on("display-metrics-changed", rearranged);
+  screen.on("display-metrics-changed", (_event, _display, changed) => {
+    // A work-area change is usually OUR band being applied or released; reacting to it would
+    // re-dock the window the moment the user undocked it. Resolution and scaling are real changes.
+    if (changed.every((metric) => metric === "workArea")) return;
+    rearranged();
+  });
   // Dragging a docked window out of its band is how you undock it; the saved setting follows.
   // Applying a band talks to the shell, so a drag must not do it per mouse-move: settle first.
   let resizeTimer: NodeJS.Timeout | null = null;
@@ -222,6 +229,8 @@ async function createWindow(): Promise<void> {
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
+      // The same drag can end in an undock; by the time this fires there may be no band to size.
+      if (!dock?.isDocked) return;
       const current = config.dock(null, setupKey());
       if (!current.enabled || !window) return;
       const { display } = pickDisplay(current.device);
@@ -233,6 +242,10 @@ async function createWindow(): Promise<void> {
     }, DOCK_RESIZE_SETTLE_MS);
   };
   dock.onUserUndock = () => {
+    if (resizeTimer) {                            // a pending size for a band that no longer exists
+      clearTimeout(resizeTimer);
+      resizeTimer = null;
+    }
     const current = config.dock(null, setupKey());
     if (!current.enabled) return;
     config.saveDock({ ...current, enabled: false }, setupKey());
@@ -524,17 +537,19 @@ function registerIpc(): void {
   ipcMain.handle(CHANNEL.applyDock, async (_event, wanted: DockConfig) => {
     if (!window || !dock) return { ok: false, message: "No window." };
     const { display } = pickDisplay(wanted.device);
-    // The same undocked measure the band itself uses; see Dock.workArea.
-    const span = bandThickness(dock.workArea(display), wanted.edge);
-    const floor = config.dockFloor(wanted.edge);
-    const percent = Math.max(wanted.percent, percentFloor(floor, span));
-    const applied: DockConfig = { ...wanted, percent };
+    // Apply exactly what was asked for. Forcing the percentage up to a previously measured floor
+    // made the next measurement bigger again, and the floor climbed with it — 12 % became 26 %,
+    // then 35 %. The floor is what the slider stops at, not what the band is set to.
+    const applied: DockConfig = { ...wanted };
     config.saveDock(applied, setupKey());
     const placement = await dock.apply(applied);
-    // What the window really got is the floor for this axis: remember it so the slider can stop there.
+    // What the window really got is the floor for this axis: remember it so the slider can stop
+    // there. A band that came back the size it asked for proves there is no floor above it, which
+    // is what un-learns a floor measured when something else was wrong.
     const got = bandThickness(placement.applied, applied.edge);
     const asked = bandThickness(bandRect(dock.workArea(display), applied.edge, applied.percent), applied.edge);
-    if (got > asked + 2) config.saveDockFloor(applied.edge, got);
+    if (got > asked + FLOOR_SLACK_PX) config.saveDockFloor(applied.edge, got);
+    else config.saveDockFloor(applied.edge, 0);   // it fitted, so nothing is stopping it here
     return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
   });
 
