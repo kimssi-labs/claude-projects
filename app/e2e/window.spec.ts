@@ -195,6 +195,10 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
   try {
     const displays = await monitors(page);
     expect(displays.length).toBeGreaterThan(0);
+    // Said out loud because it decides what this run actually proved: a CI runner has one screen,
+    // so the "different scale factor on the second monitor" faults are only caught on a real desk.
+    console.log(`  docking checked on ${displays.length} monitor(s): `
+      + displays.map((d) => `${d.label} ${d.bounds.width}x${d.bounds.height}`).join(", "));
 
     for (const display of displays) {
       const label = `${display.label} ${display.bounds.width}x${display.bounds.height}`;
@@ -304,6 +308,27 @@ test("dragging a docked window off its edge undocks it", async () => {
     await expect.poll(async () => (await settingsOf(page)).dock.enabled).toBe(false);
   } finally {
     await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
+    await app.close();
+  }
+});
+
+test("a dock change made in settings sticks", async () => {
+  const home = fixture();
+  const { app, page } = await launch(home);
+  try {
+    const displays = await monitors(page);
+    const device = (displays.find((d) => d.primary) ?? displays[0]!).id;
+
+    // Exactly what the Settings screen does: save the section, then read it back.
+    for (const [edge, percent] of [["left", 25], ["bottom", 18], ["top", 30]] as const) {
+      const saved = await page.evaluate((dock) => window.hangar.saveSettings({ dock }),
+        { enabled: false, device, edge, percent });
+      expect(saved.dock, `saving ${edge} ${percent}%`).toMatchObject({ device, edge, percent });
+
+      const readBack = await settingsOf(page);
+      expect(readBack.dock, `reading back ${edge} ${percent}%`).toMatchObject({ device, edge, percent });
+    }
+  } finally {
     await app.close();
   }
 });

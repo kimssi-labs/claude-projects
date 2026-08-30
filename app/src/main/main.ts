@@ -518,7 +518,9 @@ function registerIpc(): void {
   ipcMain.handle(CHANNEL.saveSettings, (_event, payload: {
     dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: UiConfig;
   }) => {
-    if (payload.dock) config.saveDock(payload.dock);
+    // With the arrangement key: without it the per-arrangement entry keeps the old edge and size
+    // and wins on the next read, so changing the dock in Settings looked like it did nothing.
+    if (payload.dock) config.saveDock(payload.dock, setupKey());
     if (payload.status) config.saveStatus(payload.status);
     if (payload.launch) config.saveLaunch(payload.launch);
     // The theme lives with the rest of the remembered position, so it comes back with it.

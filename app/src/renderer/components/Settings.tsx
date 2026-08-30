@@ -4,7 +4,7 @@
  * The terminal version showed all four at once and moved between them with Tab; that survives —
  * the focused card is the one Tab lands on, and every choice is one Space or Enter away.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DOCK_EDGES, DOCK_PERCENT, STACK_BELOW } from "@core/constants";
 import type { DockEdge, LayoutMode, PermissionMode, ShellChoice, ThemeMode } from "@core/types";
@@ -103,7 +103,15 @@ export interface SettingsViewProps {
 
 export function SettingsView({ settings, displays, focused, onFocus, onChange, onApplyDock, onClose }: SettingsViewProps) {
   const [draft, setDraft] = useState(settings);
-  useEffect(() => setDraft(settings), [settings]);
+  // What we last sent, so a push that is only the echo of our own save does not reset the draft
+  // out from under someone mid-drag. Anything genuinely new — main undocking us, say — still does.
+  const sent = useRef(JSON.stringify(settings));
+  useEffect(() => {
+    const incoming = JSON.stringify(settings);
+    if (incoming === sent.current) return;
+    sent.current = incoming;
+    setDraft(settings);
+  }, [settings]);
 
   const span = useMemo(() => {
     const display = displays.find((d) => d.id === draft.dock.device) ?? displays.find((d) => d.primary);
@@ -113,6 +121,7 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
 
   const update = (next: SettingsPayload): void => {
     setDraft(next);
+    sent.current = JSON.stringify(next);
     onChange(next);
   };
 
