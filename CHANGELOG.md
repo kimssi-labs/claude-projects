@@ -3,6 +3,21 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.2.1
+
+- **Dock settings changed in Settings stick.** Saving the dock section did not carry the monitor
+  arrangement it belonged to, so the arrangement's own entry — written only when "Dock now" was
+  pressed — overrode the new edge or size on the very next read, and the screen snapped back. Both
+  paths now write the same thing.
+- A settings screen no longer resets what you are editing when main echoes your own save back to it.
+
+Each fault found since v2.0.0 now has a test that fails without its fix, and CI runs all of them on
+Windows and Linux: the dock size staying what was asked for, a band reserving and releasing on every
+attached monitor and every edge, dragging a docked window undocking it, a dock change made in
+Settings surviving a read-back, a scan not waiting for an unreachable network share, and a
+transcript's first line being read without the other 48 MB. The multi-monitor checks loop over
+whatever screens are attached, so a CI runner exercises one and says so in its log.
+
 ## v2.2.0
 
 - **A splash while it starts.** It names what the app is doing — reading settings, scanning

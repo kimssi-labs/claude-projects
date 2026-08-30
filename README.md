@@ -167,6 +167,10 @@ npm run dist         # installers into app/release
 CI runs typecheck, unit tests and the end-to-end suite on Windows and Linux for every push; a tag
 builds the installers on both and publishes them.
 
+The end-to-end suite drives the real window: it docks to every attached monitor on every edge and
+checks the desktop's work area really changed and came back. A machine with one screen exercises
+one, and the run says which it checked.
+
 ## Requirements
 
 Windows 10/11 or Linux (X11 for docking), and `claude` on `PATH`.

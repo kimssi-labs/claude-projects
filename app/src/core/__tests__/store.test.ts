@@ -141,3 +141,28 @@ ${filler.repeat(4000)}`);
     expect(Date.now() - started).toBeLessThan(1000);
   });
 });
+
+describe("paths that do not answer", () => {
+  it("does not wait for an unreachable network share", () => {
+    const home = makeHome().home;
+    // A host that cannot exist: on Windows this is an SMB lookup that blocks for about ten seconds
+    // per call, which is what used to freeze the window on every scan.
+    const cwd = "\\hangar-no-such-host-9f3a\share\project";
+    const dir = join(home, "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "22222222-3333-4444-5555-666666666666.jsonl"),
+      `${JSON.stringify({ type: "user", cwd })}
+`,
+    );
+
+    const store = new Store(home, { isAlive: () => false });   // the real folderExists on purpose
+    const started = Date.now();
+    const projects = store.scan();
+    const elapsed = Date.now() - started;
+
+    expect(projects.length).toBeGreaterThan(0);
+    // The probe runs in the background; the scan itself may not wait for it.
+    expect(elapsed, `scan took ${elapsed} ms`).toBeLessThan(2000);
+  });
+});
