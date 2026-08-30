@@ -289,23 +289,46 @@ test("every monitor: each edge reserves on the axis it belongs to", async () => 
   }
 });
 
-test("dragging a docked window off its edge undocks it", async () => {
+test("a docked window that is dragged or maximised stays docked; restoring it undocks", async () => {
   const { app, page } = await launch(fixture());
   try {
     const displays = await monitors(page);
     const display = displays.find((d) => d.primary) ?? displays[0]!;
-    test.skip(!(await reservesSpace(app, page, display.id)), "no window manager to reserve space");
     const before = await workAreaOf(app, display.id);
+    test.skip(!(await reservesSpace(app, page, display.id)), "no window manager to reserve space");
+
     await dockTo(page, display.id, "top", 12);
     expect(await settled(async () => (await workAreaOf(app, display.id)).height < before.height)).toBe(true);
-    await page.waitForTimeout(1600);                          // past the settle window
+    await page.waitForTimeout(1700);                          // past the settle window
+    const band = await bounds(app);
 
-    // Somewhere else entirely: not a thickness change, so the edge goes back.
+    // Dragged by the title bar: a docked window is a band, so it goes back to its band.
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]?.setBounds({ x: 300, y: 300, width: 800, height: 500 }));
+    await expect.poll(async () => {
+      const now = await bounds(app);
+      return Math.abs(now.x - band.x) <= 1 && Math.abs(now.y - band.y) <= 1;
+    }, { timeout: 8000 }).toBe(true);
+    expect((await settingsOf(page)).dock.enabled, "still docked after a drag").toBe(true);
+
+    // Maximising keeps it too — there is nothing to maximise into, so the band simply stays.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.maximize());
+    await page.waitForTimeout(1200);
+    expect((await settingsOf(page)).dock.enabled, "still docked after maximise").toBe(true);
+    expect((await workAreaOf(app, display.id)).height, "band still reserved").toBeLessThan(before.height);
+    const afterMaximise = await bounds(app);
+    samePixels(afterMaximise.height, band.height, "still the band it was");
+
+    // The caption button says so: docked is the maximised state, so it offers to restore.
+    await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
+
+    // Restoring is the gesture that asks for an ordinary window, and gives the edge back.
+    await page.getByRole("button", { name: "Restore" }).click();
     await expect.poll(async () => (await workAreaOf(app, display.id)).height, { timeout: 8000 })
       .toBe(before.height);
     await expect.poll(async () => (await settingsOf(page)).dock.enabled).toBe(false);
+    // ...and the button goes back to offering the maximise it now means.
+    await expect(page.getByRole("button", { name: "Maximise" })).toBeVisible();
   } finally {
     await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
     await app.close();

@@ -3,138 +3,69 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
-## v2.2.2
+## v2.2.3
 
-- **A band stays on its edge when you resize it.** Dragging the outer edge of a right- or
-  bottom-docked window changed its size without moving it, leaving a strip of desktop between the
-  band and the screen edge. A resized band is re-applied, and a band is always anchored to its edge.
-- The usage strip reads as one thing again: the percentage sits beside the bar it measures, and the
-  reset time beside the name it belongs to.
+Everything the 2.x line changed, in one place — the terminal manager became a desktop app, and the
+faults found while living with it were fixed.
 
-## v2.2.1
+### The app
 
-- **Dock settings changed in Settings stick.** Saving the dock section did not carry the monitor
-  arrangement it belonged to, so the arrangement's own entry — written only when "Dock now" was
-  pressed — overrode the new edge or size on the very next read, and the screen snapped back. Both
-  paths now write the same thing.
-- A settings screen no longer resets what you are editing when main echoes your own save back to it.
+**Claude Projects became Hangar**, an Electron + TypeScript desktop app for Windows and Linux with
+every feature and every key of the terminal version. The name is Hangar; *for Claude Code* is a
+subtitle, never part of the name or the appId, so a third-party tool does not read as an official
+one. The Python terminal version remains downloadable as **v1.15.0**.
 
-Each fault found since v2.0.0 now has a test that fails without its fix, and CI runs all of them on
-Windows and Linux: the dock size staying what was asked for, a band reserving and releasing on every
-attached monitor and every edge, dragging a docked window undocking it, a dock change made in
-Settings surviving a read-back, a scan not waiting for an unreachable network share, and a
-transcript's first line being read without the other 48 MB. The multi-monitor checks loop over
-whatever screens are attached, so a CI runner exercises one and says so in its log.
+- **No title bar.** The caption buttons are drawn in the app's own header, so a docked window fills
+  its band edge to edge. Docked counts as the maximised state: the middle button offers to restore,
+  and restoring is what gives the edge back.
+- **Four shapes, chosen by the window's own size** — full, compact, a band for a top/bottom dock,
+  and a stacked column. **Settings · Layout** picks side-by-side, stacked, or stacked below a width
+  you choose. Every pane can be dragged to any width, and the stacked layout has its own divider.
+- **Light, dark and system themes**, the system one following the OS without a restart.
+- **A splash while it starts**, naming each step, and only when starting takes longer than 450 ms.
+- Usage bars for the 5 h, 7 d and weekly Fable/Opus and Sonnet windows, each percentage beside the
+  bar it measures, with a refresh button; every segment of the strip — usage, Outlook, ponytail, and
+  each MCP server — can be turned on or off.
+- **Everything is remembered**: window size and position, pane widths, theme, layout, the shell and
+  permission mode, and the dock — per monitor *and* per monitor arrangement, so plugging a screen in
+  or out brings back that setup.
 
-## v2.2.0
+### Docking
 
-- **A splash while it starts.** It names what the app is doing — reading settings, scanning
-  projects, opening the window — and only appears if start-up takes longer than 450 ms, so a warm
-  start (about two seconds here) does not flash a window at you.
-- **The dock size stopped shrinking itself.** A band was measured against a work area it had already
-  taken a bite out of, so asking for the same percentage twice gave a smaller band each time.
-- **Docking across monitors with different scaling.** Placing the band with `SWP_NOSENDCHANGING`
-  meant Chromium never noticed the window had moved to a 125 % monitor and kept laying it out at the
-  old scale, so the band was a quarter too wide. The window is moved to the target monitor first,
-  while nothing is reserved and nothing can clamp it.
-- **The stacked layout can be split** — drag the divider between the project list and the sessions;
-  the height is remembered like every other size.
-- **Status line: every segment is a choice** — usage bars, Outlook, ponytail — beside the MCP list.
-- The usage strip's spacing was uneven and started hard against the window edge.
-- **The dock size stayed the size you asked for.** Three faults compounded into a band that grew on
-  its own: the remembered undocked work area was thrown away every time our own band changed it,
-  the measured "smallest band this window manager allows" was then applied on top of the next
-  request, and each application made that measurement larger again — 12 % became 26 %, then 35 %,
-  then 53 %. A band is now applied exactly as asked, and the measured floor only decides where the
-  slider stops.
-- **Docking is remembered per monitor arrangement**, not only per monitor: the screen you dock to at
-  a desk with two externals is not the one you dock to on the laptop alone, and plugging a monitor
-  in or out now re-reads that arrangement's setting and follows it.
+The band is genuinely reserved — an application desktop toolbar on Windows, `_NET_WM_STRUT_PARTIAL`
+on X11 — so a maximised window stops at it. Wayland cannot do this for an ordinary application, and
+says so instead of pretending. Faults fixed along the way, each with a test that fails without it:
 
-Docking is now tested on **every connected monitor**, on all four edges, for reserve / fill /
-release, and for a percentage meaning the same thing however often it is applied.
+- The band **fills exactly what it reserved**: Windows enforces a window's minimum size and drags it
+  back inside the work area unless both are handled.
+- The edge is **given back the moment the window closes**, synchronously — an async release loses the
+  race with process exit. A forced kill leaks nothing either; Windows reclaims it.
+- **A percentage means the same thing every time.** Three faults compounded into a band that grew on
+  its own — 12 % became 26 %, then 35 %, then 53 %.
+- **A second monitor works.** Electron's display ids are not stable between runs, so a dock saved for
+  the second screen came back on the first; and the DIP-to-pixel conversion used the scale of the
+  monitor the *window* was on, not the one being docked to.
+- **A resized band stays on its edge** instead of drifting inwards, and **dragging or maximising a
+  docked window keeps it docked** — only restoring undocks.
+- A dock change made in **Settings** sticks rather than being overridden on the next read.
 
-## v2.1.0
+### Speed
 
-**The window stopped freezing.** Three things were blocking the thread that draws it, and all three
-were measured rather than guessed:
+The window used to freeze for tens of seconds. Three causes, all measured:
 
 - A project on an unreachable network share made every scan wait for the SMB timeout — **10.9 s**,
-  on the UI thread. Whether a folder is there is now answered from a background probe, so a dead
-  share greys out a row a moment later instead of stopping the app.
-- Reading a transcript to find one field at the top of it read the whole file: 48 MB, 23 MB, 20 MB…
-  once per scan, because the session you are in is being appended to constantly. Only the first
-  64 KB is read now, and the answer is kept for good — a scan went from **21 s to 36 ms**.
-- Registering or removing the dock band makes the shell tell every window on the desktop about the
-  new work area, and waits for them. That call now runs on a worker thread.
+  on the thread that draws the window. Reachability is now answered by a background probe.
+- Reading a transcript's first line read the whole file: 48 MB, 23 MB, 20 MB, once per scan. Only
+  the first 64 KB is read, and the answer is kept — **a scan went from 21 s to 36 ms**.
+- Registering or removing the band makes the shell tell every window on the desktop; that call runs
+  on a worker thread now.
 
-Sampling moved off the UI thread as well — the process table, the per-session readings and their
-arithmetic all happen on a worker now, and the main thread only receives finished snapshots.
-
-**Docking on a second monitor works.** Electron's display ids are not stable between runs (measured:
-the same two monitors reported four different ids across two launches), so a dock saved for the
-second monitor came back on the first. Monitors are identified by where they are and how big they
-are instead. The DIP-to-pixel conversion also used the scale of the monitor the *window* was on, so
-a band placed on a 125 % monitor from a 100 % one landed at the wrong size and place.
-
-Also in this release:
-
-- **No title bar**: the caption buttons are drawn over the app's own header, so a docked window
-  fills its band edge to edge, with nothing above the content.
-- **Layout is a choice** — side by side, stacked, or stacked once the window is narrower than a
-  width you set. Stacked puts the project list, its sessions and the graphs one under the other.
-- Dragging a docked window's inner edge sets the dock size; dragging it anywhere else still undocks.
-- A refresh button (`↻`) beside the usage bars re-reads the limits without waiting for the poll.
-- The detail panel puts each value under its label, so a long path no longer wraps one character
-  per line in a narrow panel.
-- Status line: **Select all** / **Select none** beside "Every server, always".
-- `T` is gone. It opened a session "in the current window", which as a separate program is what
-  `Enter` already does.
-
-## v2.0.0
-
-**Claude Projects is now Hangar, a desktop application.** Same job, same keys, a window instead of a
-console — and it runs on Linux as well as Windows. The new name keeps a third-party tool from
-reading as an official product; *for Claude Code* is a subtitle, never part of the name.
-
-- Rewritten in Electron and TypeScript. Every feature of the terminal version is here: the project
-  and session lists, resume in a tab or a new window, aliases, `/rename`-compatible session titles,
-  guarded deletes, search, per-monitor docking, the status strip, and the launch and permission
-  settings.
-- **Docking still reserves the space.** The band is registered as an application desktop toolbar on
-  Windows and as `_NET_WM_STRUT_PARTIAL` on X11, so the desktop work area shrinks and a maximised
-  window stops at the band instead of covering it. Wayland cannot do this for an ordinary
-  application, and the screen says so rather than pretending.
-- **CPU and memory monitoring that costs nothing.** Each running session's whole process tree is
-  sampled once a second and drawn in its row; the machine's own CPU, clock speed and memory are
-  charted beside the list, with five minutes of history. Every reading is taken in-process — a
-  toolhelp snapshot and `GetProcessTimes` on Windows, `/proc` on Linux, `os.cpus()` for the machine.
-  The obvious library for this shelled out to WMI: `processes()` measured 3.6 s per call and `mem()`
-  3.3 s, once a second. The whole app now costs about 3 % of one core.
-- **Monitoring can be switched off** (Settings · Monitoring). Off is not a hidden graph: the timer
-  stops and nothing is measured at all.
-- **Light, dark and system themes.** System follows the OS and changes with it, without a restart.
-- **Four layouts, chosen from the window's own size** — full, compact, a horizontal band for a
-  top/bottom dock, and a vertical column for a left/right dock. None of them scrolls the page.
-- The usage strip reads the weekly Fable/Opus and Sonnet windows as well as the 5-hour and 7-day
-  ones, when Claude Code has published them.
-- **Usage is drawn as bars**, one fixed-width column per window, so the labels line up with each
-  other and the percentages line up with each other however many windows a machine reports. A band
-  too narrow for all of them fades at the edge instead of clipping one in half.
-- **The three panes can be dragged to any width** — double-click a divider to go back to the
-  layout's own. Widths are remembered like every other setting.
-- Dragging or resizing a docked window undocks it and gives the edge back, instead of snapping the
-  window into the band it just left.
-- **Everything is remembered**: the window's own size and position (restored only if that rectangle
-  is still on a connected display), the pane widths, the theme, the per-monitor dock, the shell and
-  permission mode, the MCP servers the strip reports, and the project and row you were last on.
-- Keyboard operation is unchanged, and `?` lists every key.
-- The band gives its edge back the moment the window closes, and fills the space it reserved exactly
-  — Windows enforces a window's minimum size and drags it back inside the work area unless both are
-  handled, which is what left a strip of desktop above the window and a shrunken desktop behind it.
-
-The Python terminal version is not part of this release. It remains available as **v1.15.0** under
-the old name, and its source is in this repository's history.
+**Monitoring costs about 3 % of one core.** The obvious library for it shelled out to WMI —
+`processes()` measured 3.6 s per call and `mem()` 3.3 s, once a second — so every reading is taken
+in-process (a toolhelp snapshot and `GetProcessTimes` on Windows, `/proc` on Linux, `os.cpus()` for
+the machine) on a worker thread. Each running session's whole process tree is sampled once a second
+and drawn in its row, with the machine's CPU, clock speed and memory beside the list.
+**Settings · Monitoring** turns it off entirely — the timer stops, not just the drawing.
 
 ## v1.15.0
 

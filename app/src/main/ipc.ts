@@ -5,6 +5,9 @@ export const CHANNEL = {
   metrics: "metrics:history",
   metricsPush: "metrics:push",                   // main -> renderer, on every sample
   settingsPush: "settings:push",                 // main -> renderer, when main changed them
+  windowCommand: "window:command",
+  windowState: "window:state",
+  windowStatePush: "window:state-push",           // main -> renderer, on maximise / dock / restore
   openSession: "session:open",
   renameSession: "session:rename",
   deleteSession: "session:delete",
@@ -50,6 +53,14 @@ export interface SettingsPayload {
   dockFloor: number;
   minPercent: number;
 }
+
+/** What the caption buttons need to know. Docked counts as maximised: the band IS the full state. */
+export interface WindowState {
+  maximized: boolean;
+  docked: boolean;
+}
+
+export type WindowCommand = "minimize" | "toggle" | "close";
 
 export interface DisplayInfo {
   id: string;
