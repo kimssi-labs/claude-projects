@@ -70,6 +70,8 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
       - run: npm ci
+      # electron-builder packages dist/, it does not create it.
+      - run: npm run build
       - name: Build installers
         run: npx electron-builder --publish never
         env:
