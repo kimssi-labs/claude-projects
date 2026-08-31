@@ -20,6 +20,7 @@ export const CHANNEL = {
   saveSettings: "settings:save",
   displays: "settings:displays",
   applyDock: "dock:apply",
+  dragDock: "dock:drag",           // the band's own grip, since the window frame no longer resizes
   releaseDock: "dock:release",
   saveUi: "ui:save",
   appInfo: "app:info",
@@ -27,6 +28,12 @@ export const CHANNEL = {
 } as const;
 
 export type Channel = (typeof CHANNEL)[keyof typeof CHANNEL];
+
+/** One step of a drag on the band's grip: how thick the band should be, and whether the hand let go. */
+export interface DockDrag {
+  thickness: number;
+  done: boolean;
+}
 
 export interface OpenSessionRequest {
   projectDir: string;

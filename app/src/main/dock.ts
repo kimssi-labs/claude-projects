@@ -50,13 +50,19 @@ export interface DockPlacement {
   note: string | null;
 }
 
+/** A band of exactly `thickness` pixels, flush against `edge` of `area`. */
+export function bandOfThickness(area: Rectangle, edge: DockEdge, thickness: number): Rectangle {
+  const deep = Math.max(1, Math.round(thickness));
+  if (edge === "top") return { x: area.x, y: area.y, width: area.width, height: deep };
+  if (edge === "bottom") return { x: area.x, y: area.y + area.height - deep, width: area.width, height: deep };
+  if (edge === "left") return { x: area.x, y: area.y, width: deep, height: area.height };
+  return { x: area.x + area.width - deep, y: area.y, width: deep, height: area.height };
+}
+
 /** The band `percent` of the way along `edge` inside `area`. */
 export function bandRect(area: Rectangle, edge: DockEdge, percent: number): Rectangle {
-  const thickness = Math.max(1, Math.round((edge === "left" || edge === "right" ? area.width : area.height) * percent / 100));
-  if (edge === "top") return { x: area.x, y: area.y, width: area.width, height: thickness };
-  if (edge === "bottom") return { x: area.x, y: area.y + area.height - thickness, width: area.width, height: thickness };
-  if (edge === "left") return { x: area.x, y: area.y, width: thickness, height: area.height };
-  return { x: area.x + area.width - thickness, y: area.y, width: thickness, height: area.height };
+  const span = edge === "left" || edge === "right" ? area.width : area.height;
+  return bandOfThickness(area, edge, span * percent / 100);
 }
 
 /**
@@ -387,6 +393,10 @@ export class Dock {
     if (this.window.isMaximized()) this.window.unmaximize();
     this.window.setMaximizable(false);
     this.window.setMovable(false);
+    // Not resizable either. Windows draws the resize cursor from the frame, for every side at once —
+    // there is no per-edge control — so the only way to stop three sides offering a resize that
+    // cannot happen is to stop the frame resizing, and put a grip in the page for the fourth.
+    this.window.setResizable(false);
     loadWin32()?.setEdges(nativeHandle(this.window), true);
 
     // Move to the target monitor BEFORE reserving anything.
@@ -426,19 +436,39 @@ export class Dock {
    * visibly jumped once, at the end of every resize. One percent of a tall screen is twenty pixels.
    * The shell only needs to be told the new extent; the window is already correct.
    */
-  async reserveCurrent(): Promise<void> {
+  /**
+   * Move the band to a new thickness without telling the shell — for a drag in progress.
+   *
+   * Reserving costs the best part of half a second (the shell notifies every top-level window), so
+   * doing it per mouse-move would make the grip unusable. The reservation is updated once, on
+   * release, by `resizeTo`.
+   */
+  preview(thickness: number): void {
     const config = this.current;
     if (!config?.enabled) return;
-    const here = this.window.getBounds();
+    const { display } = pickDisplay(config.device);
+    const band = bandOfThickness(this.workArea(display), config.edge, thickness);
     this.assertUntil = Date.now() + SETTLE_MS;
-    if (process.platform === "win32") await this.reserveWindows(here, config.edge);
-    else await this.reserveX11(here, config.edge, pickDisplay(config.device).display.bounds);
-    if (!this.reserved || process.platform !== "win32") return;
-    // Only if the shell moved the reservation out from under us — otherwise nothing moves at all.
-    const want = screen.screenToDipRect(null, this.reserved);
+    this.place(process.platform === "win32" ? screen.dipToScreenRect(null, band) : band);
+  }
+
+  async resizeTo(thickness: number): Promise<void> {
+    const config = this.current;
+    if (!config?.enabled) return;
+    const { display } = pickDisplay(config.device);
+    // Anchored to the edge, at exactly the thickness the drag ended on — not at a rounded
+    // percentage of it, and not wherever the shell would rather put it.
+    const band = bandOfThickness(this.workArea(display), config.edge, thickness);
+    this.assertUntil = Date.now() + SETTLE_MS;
+    if (process.platform === "win32") await this.reserveWindows(band, config.edge, false);
+    else await this.reserveX11(band, config.edge, display.bounds);
+    const want = this.reserved && process.platform === "win32"
+      ? screen.screenToDipRect(null, this.reserved)
+      : band;
     const now = this.window.getBounds();
+    // Only if the shell put the reservation somewhere else — otherwise nothing moves at all.
     if (want.x !== now.x || want.y !== now.y || want.width !== now.width || want.height !== now.height) {
-      this.place(this.reserved);
+      this.place(this.reserved ?? screen.dipToScreenRect(null, band));
     }
   }
 
@@ -465,6 +495,7 @@ export class Dock {
     this.window.setMinimumSize(this.minimum[0] ?? 1, this.minimum[1] ?? 1);
     this.window.setMaximizable(true);
     this.window.setMovable(true);
+    this.window.setResizable(true);
     loadWin32()?.setEdges(nativeHandle(this.window), false);
   }
 
@@ -486,7 +517,7 @@ export class Dock {
     this.current = null;
   }
 
-  private async reserveWindows(band: Rectangle, edge: DockEdge): Promise<string | null> {
+  private async reserveWindows(band: Rectangle, edge: DockEdge, ask = true): Promise<string | null> {
     const api = loadWin32();
     if (!api) return "Docking without reserving space — the native helper did not load.";
     const hwnd = nativeHandle(this.window);
@@ -504,13 +535,22 @@ export class Dock {
     }
     // QUERYPOS slides the band clear of the taskbar and any other appbar, but does not preserve
     // thickness — restore it before SETPOS or the band grows into whatever room it was offered.
-    const query = api.make(hwnd, ABE[edge], physical);
-    await api.SHAppBarMessageAsync(ABM.queryPos, query);
-    const offered = {
-      x: query.rc.left, y: query.rc.top,
-      width: query.rc.right - query.rc.left, height: query.rc.bottom - query.rc.top,
-    };
-    const kept = keepThickness(offered, physical, edge);
+    //
+    // It is skipped when re-sizing an existing band. Measured here: with our own 580 px band already
+    // reserved at the top of the screen, QUERYPOS answers a 680 px request with the free space
+    // BELOW it — y = 499 — and the band walks down the screen by its own height on every resize.
+    // The shell does not exclude the caller's own reservation, so on a resize the anchored rectangle
+    // we already computed is the better answer, and SETPOS still adjusts it if it has to.
+    let kept = physical;
+    if (ask) {
+      const query = api.make(hwnd, ABE[edge], physical);
+      await api.SHAppBarMessageAsync(ABM.queryPos, query);
+      const offered = {
+        x: query.rc.left, y: query.rc.top,
+        width: query.rc.right - query.rc.left, height: query.rc.bottom - query.rc.top,
+      };
+      kept = keepThickness(offered, physical, edge);
+    }
     await api.SHAppBarMessageAsync(ABM.setPos, api.make(hwnd, ABE[edge], kept));
     this.reserved = kept;
     return null;
