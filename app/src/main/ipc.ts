@@ -54,6 +54,8 @@ export interface SettingsPayload {
   dockDevices: string[];
   dockFloor: number;
   minPercent: number;
+  /** Whether the system-wide paste shortcut is actually held right now. */
+  pasteHotkeyActive: boolean;
 }
 
 /** What the caption buttons need to know. Docked counts as maximised: the band IS the full state. */

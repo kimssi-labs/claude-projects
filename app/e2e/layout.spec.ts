@@ -60,10 +60,18 @@ export async function mainWindow(app: ElectronApplication): Promise<Page> {
   }
 }
 
-async function resize(app: ElectronApplication, width: number, height: number): Promise<void> {
+async function resize(app: ElectronApplication, page: Page, width: number, height: number): Promise<void> {
   await app.evaluate(({ BrowserWindow }, size) => {
     BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height);
   }, { width, height });
+  // Within a few pixels: the window frame and the viewport do not agree to the pixel on Windows,
+  // and this test is about the shape of the layout, not about that arithmetic.
+  await expect
+    .poll(() => page.evaluate(() => window.innerWidth), { timeout: 8000 })
+    .toBeGreaterThan(width - 8);
+  await expect
+    .poll(() => page.evaluate(() => window.innerWidth), { timeout: 8000 })
+    .toBeLessThan(width + 8);
 }
 
 /** What "no scroll" means here: the page itself never scrolls, in either direction. */
@@ -115,14 +123,12 @@ test("neither thin shape makes the page scroll", async () => {
     await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
 
     // Docked to the top edge: short and wide.
-    await resize(app, 1200, 300);
-    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1200);
+    await resize(app, page, 1200, 300);
     expect(await overflow(page)).toEqual({ x: 0, y: 0 });
     await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
 
     // Docked to the left edge: tall and narrow. The project list is the main pane here.
-    await resize(app, 420, 900);
-    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(420);
+    await resize(app, page, 420, 900);
     expect(await overflow(page)).toEqual({ x: 0, y: 0 });
     await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
     await expect(page.getByPlaceholder("Search projects", { exact: false })).toBeVisible();

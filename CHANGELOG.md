@@ -3,6 +3,18 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.3.1
+
+- **The paste shortcut says what happened.** It is pressed in another window, so a toast inside
+  Hangar was the same as saying nothing: there is now a desktop notification either way — the image
+  is ready, or there was none on the clipboard — and Settings says plainly when another application
+  is holding the shortcut. (Hangar has to be running for it to work at all, which the screen now
+  also says.)
+- **A Back button on the settings screen**, since `Esc` is only obvious to someone who already knows
+  it. `Esc` still works.
+- The window no longer grows by three pixels each time it is reopened: the saved rectangle was
+  restored through the constructor, which does not measure a window the same way `setBounds` does.
+
 ## v2.3.0
 
 - **Paste a screenshot into a terminal session.** A terminal cannot take a bitmap, so copying a

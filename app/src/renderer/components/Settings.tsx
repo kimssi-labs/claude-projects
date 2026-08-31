@@ -136,6 +136,15 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
 
   return (
     <div className="flex-1 overflow-auto p-4 space-y-3" onKeyDown={(event) => event.key === "Escape" && onClose()}>
+      {/* Esc still closes the screen; a button is for the times the keyboard is not where the hand
+          is, and for anyone who never learns that Esc goes back. */}
+      <div className="flex items-center gap-2 min-w-0">
+        <button type="button" className="btn shrink-0" onClick={onClose} aria-label="Back">
+          ← Back (Esc)
+        </button>
+        <span className="text-[11px] text-bone-500 truncate">Settings are saved as you change them.</span>
+      </div>
+
       <Card title="Appearance" section="appearance" focused={focused} hint="Tab moves between cards">
         <div className="space-y-1" onMouseEnter={() => onFocus("appearance")}>
           {THEMES.map((theme) => (
@@ -396,8 +405,13 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
           </div>
           <div className="text-[11px] text-bone-500">
             Copy a screenshot, press it in the terminal: the image is written out and its path is
-            pasted where the cursor is, ready for Claude Code to open.
+            pasted where the cursor is, ready for Claude Code to open. Hangar has to be running.
           </div>
+          {draft.launch.pasteHotkey.trim() && !draft.pasteHotkeyActive ? (
+            <div className="text-[11px] text-bad">
+              Another application is holding {draft.launch.pasteHotkey} — choose a different one.
+            </div>
+          ) : null}
         </div>
       </Card>
 

@@ -8,7 +8,7 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, Notification, screen, shell } from "electron";
 
 import { ConfigStore, percentFloor } from "../core/config.js";
 import { launchCommand, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
@@ -152,6 +152,8 @@ let worker: Worker | null = null;
 let splash: BrowserWindow | null = null;
 /** The step named before the loading page had parsed, so it is not lost. */
 let pendingStep = "Starting…";
+/** Whether the system-wide paste shortcut is held; false when something else owns it. */
+let pasteHotkeyActive = false;
 let lastProjects: ProjectInfo[] = [];
 
 function which(exe: string): string | null {
@@ -205,7 +207,6 @@ async function createWindow(): Promise<void> {
 
   window = new BrowserWindow({
     ...WINDOW,
-    ...(onScreen && savedBounds ? savedBounds : {}),
     // Hidden until it has something to show: the loading window is on screen meanwhile, and a
     // half-drawn app appearing before it is ready is worse than a moment more of the splash.
     show: false,
@@ -225,6 +226,11 @@ async function createWindow(): Promise<void> {
       sandbox: false,
     },
   });
+  // Restored with the same call that measured them. Passing a saved rectangle as constructor
+  // options came back three pixels wider: the constructor and `setBounds` do not agree about the
+  // invisible resize border, and a window that grows a little on every run is a bug people notice.
+  if (onScreen && savedBounds) window.setBounds(savedBounds);
+
   dock = new Dock(window);
   window.on("maximize", () => {
     // setMaximizable(false) stops the caption button and the system menu, not the API or every
@@ -447,17 +453,36 @@ function pasteClipboardImage(): PastedImage {
 function registerPasteHotkey(): boolean {
   globalShortcut.unregisterAll();
   const accelerator = config.launch().pasteHotkey.trim();
-  if (!accelerator) return true;                  // deliberately off
+  if (!accelerator) {
+    pasteHotkeyActive = false;
+    return true;                                  // deliberately off
+  }
   try {
-    return globalShortcut.register(accelerator, () => {
+    pasteHotkeyActive = globalShortcut.register(accelerator, () => {
       const result = pasteClipboardImage();
       window?.webContents.send(CHANNEL.pasteResult, result);
-      // Only paste for the user when there is something worth pasting.
+      // The shortcut is pressed in some other window, so the answer has to be visible from there —
+      // a toast inside a window nobody is looking at is the same as saying nothing.
+      announce(result.ok ? "Screenshot ready" : "Nothing to paste", result.message ?? "");
       if (result.ok) setTimeout(() => sendPaste(), PASTE_KEY_DELAY_MS);
     });
   } catch (error) {
     console.error("[hangar] paste shortcut unavailable:", (error as Error).message);
-    return false;
+    pasteHotkeyActive = false;
+  }
+  if (accelerator && !pasteHotkeyActive) {
+    console.error(`[hangar] the paste shortcut ${accelerator} is held by something else`);
+  }
+  return pasteHotkeyActive;
+}
+
+/** A desktop notification: the only feedback that reaches a user working in another window. */
+function announce(title: string, body: string): void {
+  if (!Notification.isSupported()) return;
+  try {
+    new Notification({ title, body, silent: true }).show();
+  } catch {
+    /* a machine with notifications switched off is not a failure worth reporting */
   }
 }
 
@@ -482,6 +507,7 @@ function settingsPayload(): SettingsPayload {
     mcpServers: installedMcpServers(claudeJson, mcpProbe),
     dockDevices: config.dockDevices(),
     dockFloor: config.dockFloor(dockConfig.edge),
+    pasteHotkeyActive,
     minPercent: percentFloor(config.dockFloor(dockConfig.edge), span),
   };
 }
