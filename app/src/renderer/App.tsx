@@ -19,7 +19,7 @@ import { formatBytes } from "./format";
 import { Splitter } from "./components/Splitter";
 import { Truncated } from "./components/Truncated";
 import { WindowControls } from "./components/WindowControls";
-import { useLayoutMode } from "./useLayoutMode";
+import { STACK_MIN, stackedTopHeight, useLayoutMode } from "./useLayoutMode";
 import { useTheme } from "./useTheme";
 
 const PAGE_SIZE = 10;
@@ -29,7 +29,6 @@ const NAV_MIN = 180;
 const NAV_MAX = 560;
 const ASIDE_MIN = 160;
 /** Enough of a stacked pane to be a list rather than a sliver. */
-const STACK_MIN = 120;
 const ASIDE_MAX = 640;
 
 const HISTORY_LIMIT = 300;
@@ -63,8 +62,11 @@ export function App() {
   const [navWidth, setNavWidth] = useState(0);
   const [asideWidth, setAsideWidth] = useState(0);
   const [stackTop, setStackTop] = useState(0);
+  /** Measured height of the stacked pair, so the divider can be kept inside it. */
+  const [stackHeight, setStackHeight] = useState(0);
+  const stackRef = useRef<HTMLDivElement | null>(null);
   useTheme(theme);
-  const { mode } = useLayoutMode(settings?.ui.layout ?? "auto", settings?.ui.stackBelow ?? 520);
+  const { mode, height: windowHeight } = useLayoutMode(settings?.ui.layout ?? "auto", settings?.ui.stackBelow ?? 520);
   const searchRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLInputElement>(null);
 
@@ -102,6 +104,20 @@ export function App() {
   // Main can change the settings on its own — undocking when the window is dragged out of its band.
   useEffect(() => api.onSettings((next) => setSettings(next)), []);
   useEffect(() => api.onWindowState(setWindowState), []);
+
+  // Measure the room the two stacked panes share, rather than guessing it from the window: the
+  // header and toolbar above them came to 149 px here, which is more than a divider can spare.
+  useEffect(() => {
+    const element = stackRef.current;
+    if (!element || typeof ResizeObserver === "undefined") {
+      setStackHeight(0);
+      return;
+    }
+    const observer = new ResizeObserver(([entry]) => setStackHeight(entry?.contentRect.height ?? 0));
+    observer.observe(element);
+    setStackHeight(element.getBoundingClientRect().height);
+    return () => observer.disconnect();
+  }, [mode]);
   useEffect(() => { void api.windowState().then(setWindowState); }, []);
 
   useEffect(() => api.onMetrics((snapshot: MetricsSnapshot) => {
@@ -298,6 +314,8 @@ export function App() {
 
   // Monitoring off means there is nothing to draw — and nothing being measured, which is the point.
   const monitoring = settings?.ui.monitor ?? true;
+  // The remembered height, cut down to what the two stacked panes actually have between them.
+  const topHeight = stackedTopHeight(stackTop, stackHeight);
   const band = mode === "band";
   const column = mode === "column";
   const showDetail = mode === "full";
@@ -427,22 +445,22 @@ export function App() {
                 {column ? (
                   // Stacked: the project list, that project's sessions, and the graphs, one under
                   // the other — a tall narrow window has no room for panes side by side.
-                  <div className="flex-1 min-w-0 flex flex-col">
+                  <div ref={stackRef} className="flex-1 min-w-0 flex flex-col">
                     <div
-                      className={`${stackTop ? "" : "flex-1"} min-h-0 flex flex-col border-b border-ink-600`}
-                      style={stackTop ? { height: stackTop } : undefined}
+                      className={`${topHeight ? "" : "flex-1"} min-h-0 flex flex-col border-b border-ink-600`}
+                      style={topHeight ? { height: topHeight } : undefined}
                     >
                       {projectPane}
                     </div>
                     <Splitter
-                      width={stackTop || Math.round(window.innerHeight / 2)}
+                      width={topHeight || Math.round(stackHeight / 2)}
                       side="top"
                       min={STACK_MIN}
-                      max={Math.max(STACK_MIN, window.innerHeight - STACK_MIN)}
+                      max={Math.max(STACK_MIN, stackHeight - STACK_MIN)}
                       onDrag={setStackTop}
                       onCommit={(height) => void api.saveUi({ stackTop: height })}
                     />
-                    <div className="flex-1 min-h-0 overflow-auto p-1 space-y-0.5">
+                    <div data-testid="stack-sessions" className="flex-1 min-h-0 overflow-auto p-1 space-y-0.5">
                   {screen === "sessions"
                     ? sessions.map((item: SessionInfo, index: number) => (
                       editing === item.id ? (

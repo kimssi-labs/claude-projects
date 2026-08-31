@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BAND_MAX_HEIGHT, COLUMN_MAX_WIDTH, COMPACT_MAX_WIDTH, layoutFor } from "../useLayoutMode";
+import { BAND_MAX_HEIGHT, COLUMN_MAX_WIDTH, COMPACT_MAX_WIDTH, layoutFor, STACK_MIN, stackedTopHeight } from "../useLayoutMode";
 
 describe("layoutFor", () => {
   it("treats a wide, short dock as a band", () => {
@@ -38,5 +38,35 @@ describe("layout modes", () => {
   it("keeps the short-window band when the layout is not stacked", () => {
     expect(layoutFor(1600, 300, "auto", 520)).toBe("band");
     expect(layoutFor(1600, 300, "horizontal", 520)).toBe("band");
+  });
+});
+
+/**
+ * The stacked layout's upper pane, cut to what the window can spare.
+ *
+ * Reported from a docked band: the project list was remembered at 661 px and the band was 762 px
+ * tall, so entering a project showed no sessions at all — they were below the bottom of the window.
+ */
+describe("stackedTopHeight", () => {
+  // The reported case: a 762 px band, whose header and toolbar leave the panes 613 px between them.
+  const BAND_PANES = 613;
+
+  it("leaves room for the pane below it", () => {
+    const top = stackedTopHeight(661, BAND_PANES);
+    expect(top).toBeLessThan(661);
+    expect(BAND_PANES - top).toBeGreaterThanOrEqual(STACK_MIN);
+  });
+
+  it("honours the remembered height when there is room for it", () => {
+    expect(stackedTopHeight(661, 1250)).toBe(661);
+  });
+
+  it("keeps the upper pane a list rather than a sliver", () => {
+    expect(stackedTopHeight(661, 150)).toBe(STACK_MIN);
+  });
+
+  it("leaves the even split alone, and waits until it has been measured", () => {
+    expect(stackedTopHeight(0, BAND_PANES)).toBe(0);
+    expect(stackedTopHeight(661, 0)).toBe(0);          // nothing measured yet: split evenly
   });
 });

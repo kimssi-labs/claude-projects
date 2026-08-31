@@ -5,6 +5,13 @@ notes. Add the section **before** tagging.
 
 ## v2.5.0
 
+- **Stacked: entering a project shows its sessions again.** The divider between the project list and
+  the sessions is remembered in pixels, and a docked band is usually far shorter than the window it
+  was set in — 661 px of project list in a 762 px band left the sessions eight pixels of room, which
+  reads as nothing at all. The remembered height is still kept, and still used in full wherever it
+  fits; what is drawn is now cut to the space the two panes actually share, measured rather than
+  guessed, so the lower pane is never smaller than a list.
+
 - **A docked band cannot be dragged or pulled off its edge, and does not pretend it can.** Docking
   is the maximised state, so the title bar no longer drags the window and the frame no longer
   resizes at all — Windows draws the resize cursor for every side of a frame at once, so the only

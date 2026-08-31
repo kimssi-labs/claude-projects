@@ -149,6 +149,43 @@ test("every shape says when the usage window resets", async () => {
   }
 });
 
+/**
+ * Stacked, with a divider remembered from a taller window: the sessions must still be on screen.
+ *
+ * Reported from a docked band — the project list was remembered at 661 px, the band was 762 px
+ * tall, and entering a project showed nothing at all below the divider.
+ */
+test("stacked: entering a project shows its sessions, even with a tall remembered divider", async () => {
+  const home = fixture();
+  mkdirSync(join(home, "config"), { recursive: true });
+  writeFileSync(join(home, "config", "manager.json"), JSON.stringify({
+    ui: { layout: "vertical", stackTop: 661 },
+  }));
+
+  const { app, page } = await launch(home);
+  try {
+    await resize(app, page, 1080, 762);
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+
+    await page.keyboard.press("Enter");                       // into the project's sessions
+    const session = page.getByText("프롬프트").first();
+    await expect(session).toBeVisible();
+
+    // "Visible" is not enough: with the divider left where it was, the sessions were squeezed into
+    // a sliver that read as empty. The pane has to be a list.
+    const pane = await page.getByTestId("stack-sessions").boundingBox();
+    expect(pane, "the stacked sessions pane is there").not.toBeNull();
+    expect(pane!.height, "the sessions pane is a list, not a sliver").toBeGreaterThanOrEqual(120);
+
+    const box = await session.boundingBox();
+    expect(box, "the session row has a box").not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(await page.evaluate(() => window.innerHeight));
+    expect(await overflow(page)).toEqual({ x: 0, y: 0 });
+  } finally {
+    await app.close();
+  }
+});
+
 test("neither thin shape makes the page scroll", async () => {
   const home = fixture();
   const { app, page } = await launch(home);
