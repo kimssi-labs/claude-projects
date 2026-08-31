@@ -464,7 +464,8 @@ function registerPasteHotkey(): boolean {
       // The shortcut is pressed in some other window, so the answer has to be visible from there —
       // a toast inside a window nobody is looking at is the same as saying nothing.
       announce(result.ok ? "Screenshot ready" : "Nothing to paste", result.message ?? "");
-      if (result.ok) setTimeout(() => sendPaste(), PASTE_KEY_DELAY_MS);
+      // sendPaste waits for the user's fingers to leave Ctrl+Alt before it sends anything.
+      if (result.ok) setTimeout(() => void sendPaste(), PASTE_KEY_DELAY_MS);
     });
   } catch (error) {
     console.error("[hangar] paste shortcut unavailable:", (error as Error).message);

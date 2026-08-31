@@ -3,6 +3,15 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.3.2
+
+- **The paste shortcut now actually pastes.** It was sending Ctrl+V about 60 ms after the shortcut
+  fired — while the hand that pressed Ctrl+Alt+V was still on those keys, so the terminal received
+  Ctrl+Alt+V, which is not paste, and nothing appeared. The image was saved and the path was on the
+  clipboard the whole time, which is why it looked like nothing had happened at all. Hangar now
+  waits for the modifiers to come up before it sends anything (up to 1.2 s, then sends regardless
+  rather than swallowing the paste). Measured: a 250 ms hold pasted nothing before, the path after.
+
 ## v2.3.1
 
 - **The paste shortcut says what happened.** It is pressed in another window, so a toast inside
