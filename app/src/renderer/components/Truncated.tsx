@@ -5,7 +5,7 @@
  * quietly loses the tooltip again. This measures instead — when the text is actually cut off, the
  * element carries its full content as a tooltip, and when it fits, no tooltip appears to nag.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 
 export interface TruncatedProps {
   children: ReactNode;
@@ -18,15 +18,21 @@ export interface TruncatedProps {
 
 export function Truncated({ children, title, className = "", as = "div" }: TruncatedProps) {
   const ref = useRef<HTMLElement | null>(null);
-  const [clipped, setClipped] = useState(false);
 
   const measure = useCallback(() => {
     const element = ref.current;
     if (!element) return;
-    // One pixel of slack: sub-pixel layout makes scrollWidth exceed clientWidth by a hair on text
-    // that is not actually cut.
-    setClipped(element.scrollWidth > element.clientWidth + 1);
-  }, []);
+    // Set on the element rather than through state: the tooltip has to be there in the same frame
+    // the text is cut, not one render later, or a reader hovering straight away finds nothing.
+    //
+    // One pixel of slack — sub-pixel layout makes scrollWidth exceed clientWidth by a hair on text
+    // that is not actually cut. The text comes from the DOM, so a child that is not a plain string
+    // is covered too.
+    const clipped = element.scrollWidth > element.clientWidth + 1;
+    const tooltip = title ?? (clipped ? element.textContent?.trim() ?? "" : "");
+    if (tooltip) element.setAttribute("title", tooltip);
+    else element.removeAttribute("title");
+  }, [title]);
 
   useLayoutEffect(measure);
 
@@ -38,16 +44,9 @@ export function Truncated({ children, title, className = "", as = "div" }: Trunc
     return () => observer.disconnect();
   }, [measure]);
 
-  const text = typeof children === "string" || typeof children === "number" ? String(children) : undefined;
-  const tooltip = title ?? (clipped ? text : undefined);
   const Tag = as;
-
   return (
-    <Tag
-      ref={ref as never}
-      title={tooltip}
-      className={`truncate ${className}`}
-    >
+    <Tag ref={ref as never} className={`truncate ${className}`}>
       {children}
     </Tag>
   );
