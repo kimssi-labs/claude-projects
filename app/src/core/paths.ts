@@ -27,6 +27,8 @@ export interface HomePaths {
   mcpStatus: string;
   outlookStatus: string;
   ponytailFlag: string;
+  /** Where a pasted screenshot is written, so a terminal session can be given its path. */
+  clips: string;
 }
 
 export function homePaths(root = claudeHome()): HomePaths {
@@ -44,6 +46,7 @@ export function homePaths(root = claudeHome()): HomePaths {
     mcpStatus: join(root, "cache", "mcp-status.json"),
     outlookStatus: join(root, "cache", "outlook-status.json"),
     ponytailFlag: join(root, ".ponytail-active"),
+    clips: join(root, "cache", "hangar-clips"),
   };
 }
 

@@ -7,7 +7,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
+import { DEFAULT_PASTE_HOTKEY, DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
 import { homePaths } from "./paths.js";
 import type { DockConfig, DockEdge, LaunchConfig, LayoutMode, PermissionMode, ShellChoice, StatusConfig, ThemeMode, UiConfig } from "./types.js";
 
@@ -15,7 +15,7 @@ export const SECTION = { dock: "dock", status: "status", launch: "launch", ui: "
 export const DOCK_MONITORS_KEY = "monitors";
 export const DOCK_SETUPS_KEY = "setups";
 export const DOCK_FLOOR_KEY = "floor";
-export { DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
+export { DEFAULT_PASTE_HOTKEY, DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
 
 type Json = Record<string, unknown>;
 
@@ -165,6 +165,9 @@ export class ConfigStore {
       permission: PERMISSION_MODES.includes(permission as PermissionMode) ? (permission as PermissionMode) : "default",
       terminal: typeof raw["terminal"] === "string" ? (raw["terminal"] as string) : "",
       customShell: typeof raw["customShell"] === "string" ? (raw["customShell"] as string) : "",
+      pasteHotkey: typeof raw["pasteHotkey"] === "string"
+        ? (raw["pasteHotkey"] as string)
+        : DEFAULT_PASTE_HOTKEY,
     };
   }
 

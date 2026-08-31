@@ -5,6 +5,8 @@ export const CHANNEL = {
   metrics: "metrics:history",
   metricsPush: "metrics:push",                   // main -> renderer, on every sample
   settingsPush: "settings:push",                 // main -> renderer, when main changed them
+  pasteImage: "clipboard:paste-image",
+  pasteResult: "clipboard:paste-result",   // main -> renderer, after the global shortcut
   windowCommand: "window:command",
   windowState: "window:state",
   windowStatePush: "window:state-push",           // main -> renderer, on maximise / dock / restore
@@ -77,6 +79,13 @@ export interface AppInfo {
   home: string;
   dockSupported: boolean;
   dockNote: string | null;
+}
+
+/** What became of a clipboard image: where it was written, and what is on the clipboard now. */
+export interface PastedImage {
+  ok: boolean;
+  message?: string;
+  file?: string;
 }
 
 export interface ActionResult {

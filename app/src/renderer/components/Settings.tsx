@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { DOCK_EDGES, DOCK_PERCENT, STACK_BELOW } from "@core/constants";
+import { DEFAULT_PASTE_HOTKEY, DOCK_EDGES, DOCK_PERCENT, STACK_BELOW } from "@core/constants";
 
 import { Truncated } from "./Truncated";
 import type { DockEdge, LayoutMode, PermissionMode, ShellChoice, ThemeMode } from "@core/types";
@@ -364,6 +364,40 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
               Without a path this behaves as Auto, so a session still opens.
             </div>
           ) : null}
+
+          {/* A terminal cannot paste a picture, but it can paste a path — this shortcut turns the
+              one into the other wherever the cursor happens to be. */}
+          <div className="pt-3 text-[11px] text-bone-500">Paste a screenshot into a session</div>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              spellCheck={false}
+              value={draft.launch.pasteHotkey}
+              placeholder="off"
+              onChange={(event) =>
+                update({ ...draft, launch: { ...draft.launch, pasteHotkey: event.target.value } })}
+              className="flex-1 min-w-0 bg-ink-800 border border-ink-600 rounded-lg px-2 py-1 text-xs placeholder:text-bone-500 focus:border-accent/60"
+            />
+            <button
+              type="button"
+              className="btn shrink-0"
+              onClick={() =>
+                update({ ...draft, launch: { ...draft.launch, pasteHotkey: DEFAULT_PASTE_HOTKEY } })}
+            >
+              Default
+            </button>
+            <button
+              type="button"
+              className="btn shrink-0"
+              onClick={() => update({ ...draft, launch: { ...draft.launch, pasteHotkey: "" } })}
+            >
+              Off
+            </button>
+          </div>
+          <div className="text-[11px] text-bone-500">
+            Copy a screenshot, press it in the terminal: the image is written out and its path is
+            pasted where the cursor is, ready for Claude Code to open.
+          </div>
         </div>
       </Card>
 

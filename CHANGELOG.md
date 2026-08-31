@@ -3,6 +3,19 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.3.0
+
+- **Paste a screenshot into a terminal session.** A terminal cannot take a bitmap, so copying a
+  screenshot used to mean saving it somewhere by hand and typing the path. Press **Ctrl+Alt+V** in
+  the terminal instead: Hangar writes the clipboard's image out, puts that file's path on the
+  clipboard, and sends the paste — the path lands where the cursor already is, ready for Claude Code
+  to open. The shortcut is a setting (Launch), and `V` in Hangar's own window does the same thing
+  without the keystroke.
+- **A docked band has no border of its own.** Measured against the desktop: the top row, the bottom
+  row and about three columns at each side were the wallpaper showing through — Windows 11's 1 px
+  border and rounded corners. Docked, the window is told to have neither, so the band ends exactly
+  where the screen does.
+
 ## v2.2.5
 
 - **A loading window, in the order you would expect**: it appears first and alone — measured at

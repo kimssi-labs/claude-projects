@@ -61,6 +61,7 @@ Everything is reachable from the keyboard; `?` shows this list in the app.
 | `O` | new session in a new window | resume in a new window |
 | `F2` | set a display alias | rename the session |
 | `Del` | delete the project folder | delete the session |
+| `V` | save the clipboard image, copy its path | same |
 | `/` | search projects | search projects |
 | `S` | settings | settings |
 | `←` `Esc` | — | back to projects |
@@ -69,6 +70,16 @@ Everything is reachable from the keyboard; `?` shows this list in the app.
 
 Deletions ask first and refuse anything still running. Renaming a session writes the same
 `custom-title.json` Claude Code's own `/rename` writes, so the new name also shows up in `/resume`.
+
+## Pasting a screenshot
+
+A terminal cannot paste a picture, and Claude Code opens an image by path — so copying a screenshot
+normally means saving it somewhere first. Press **Ctrl+Alt+V** in the terminal instead: the image on
+the clipboard is written out, its path replaces it on the clipboard, and the paste is sent for you.
+The shortcut is set in **Settings · Launch** (empty turns it off), and `V` in Hangar's own window
+does the same without sending the keystroke.
+
+Images are written to `~/.claude/cache/hangar-clips/`.
 
 ## Monitoring
 

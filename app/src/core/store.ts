@@ -345,3 +345,16 @@ function defaultIsAlive(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code === "EPERM";   // exists, owned by someone else
   }
 }
+
+/**
+ * A file name for a pasted image: sortable, unique, and readable in a terminal.
+ *
+ * Seconds are not enough — two screenshots in the same second are normal — so the name carries
+ * milliseconds rather than a counter that would have to be remembered between runs.
+ */
+export function clipFileName(at = new Date()): string {
+  const pad = (value: number, width = 2): string => String(value).padStart(width, "0");
+  return `clip-${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}`
+    + `-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`
+    + `-${pad(at.getMilliseconds(), 3)}.png`;
+}
