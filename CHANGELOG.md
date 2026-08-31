@@ -3,7 +3,10 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
-## v2.5.0
+## v2.5.1
+
+Both faults were found by living with a docked band, and both are fixed with a case that fails
+without the fix.
 
 - **Stacked: entering a project shows its sessions again.** The divider between the project list and
   the sessions is remembered in pixels, and a docked band is usually far shorter than the window it
@@ -12,18 +15,21 @@ notes. Add the section **before** tagging.
   fits; what is drawn is now cut to the space the two panes actually share, measured rather than
   guessed, so the lower pane is never smaller than a list.
 
-- **A docked band cannot be dragged or pulled off its edge, and does not pretend it can.** Docking
-  is the maximised state, so the title bar no longer drags the window and the frame no longer
-  resizes at all — Windows draws the resize cursor for every side of a frame at once, so the only
-  way to stop three sides offering a resize that cannot happen was to stop the frame resizing and
-  give the fourth side a grip of its own. Measured: arrow on all four sides of the frame, and the
-  resize cursor only on the band's inner edge.
 - **Dragging a band's grip moves it the distance you dragged.** Re-asserting the band — the guard
   that undoes what the shell does to it behind our back — was also undoing each step of a drag in
   progress, putting the window back to the size it had before the drag started. Measured on a
   left-hand band: a 120 px drag moved it 48 px, the few steps that happened to land between two
   corrections. Re-asserting now stands aside while the hand is on the grip. Verified across both
   monitors on all four edges: 120 px dragged, 120 px given, and the far edge never moves.
+
+## v2.5.0
+
+- **A docked band cannot be dragged or pulled off its edge, and does not pretend it can.** Docking
+  is the maximised state, so the title bar no longer drags the window and the frame no longer
+  resizes at all — Windows draws the resize cursor for every side of a frame at once, so the only
+  way to stop three sides offering a resize that cannot happen was to stop the frame resizing and
+  give the fourth side a grip of its own. Measured: arrow on all four sides of the frame, and the
+  resize cursor only on the band's inner edge.
 - **Resizing the band no longer jumps or flickers.** Two faults, both measured on a top-docked band:
   settling a drag re-applied the whole dock, which recomputed the band from a percentage rounded to
   a whole number and placed the window up to twenty pixels from where the drag ended; and the new
