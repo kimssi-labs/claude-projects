@@ -262,6 +262,15 @@ export class Dock {
   private readonly minimum: number[];
   /** Set while we are the ones moving the window, so re-asserting the band cannot recurse. */
   private placing = false;
+  /**
+   * Set while the user is dragging the band's grip.
+   *
+   * Re-asserting exists to undo what the shell does to a band behind our back, and it puts the
+   * window back to the last RESERVED rectangle. Mid-drag that rectangle is the size the band had
+   * before the drag started, so every preview was immediately undone: a 120 px drag on a left-hand
+   * band moved it 48 px, the few steps that happened to land between two corrections.
+   */
+  private dragging = false;
   /** Undocked work area per display, captured while nothing of ours was reserved. */
   private readonly baseAreas = new Map<string, Rectangle>();
   /**
@@ -294,7 +303,7 @@ export class Dock {
     // Windows moves an appbar out of the work area it just shrank — and does it after the call
     // returns, so the only reliable answer is to put the band back whenever something moves it.
     const reassert = (): void => {
-      if (this.placing || !this.reserved || !this.registered) return;
+      if (this.placing || this.dragging || !this.reserved || !this.registered) return;
       const current = this.window.getBounds();
       const want = screen.screenToDipRect(null, this.reserved);
       if (current.x === want.x && current.y === want.y
@@ -448,12 +457,13 @@ export class Dock {
     if (!config?.enabled) return;
     const { display } = pickDisplay(config.device);
     const band = bandOfThickness(this.workArea(display), config.edge, thickness);
-    this.assertUntil = Date.now() + SETTLE_MS;
+    this.dragging = true;
     this.place(process.platform === "win32" ? screen.dipToScreenRect(null, band) : band);
   }
 
   async resizeTo(thickness: number): Promise<void> {
     const config = this.current;
+    this.dragging = false;                        // the hand is off; re-asserting may resume
     if (!config?.enabled) return;
     const { display } = pickDisplay(config.device);
     // Anchored to the edge, at exactly the thickness the drag ended on — not at a rounded

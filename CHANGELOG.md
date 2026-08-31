@@ -11,6 +11,12 @@ notes. Add the section **before** tagging.
   way to stop three sides offering a resize that cannot happen was to stop the frame resizing and
   give the fourth side a grip of its own. Measured: arrow on all four sides of the frame, and the
   resize cursor only on the band's inner edge.
+- **Dragging a band's grip moves it the distance you dragged.** Re-asserting the band — the guard
+  that undoes what the shell does to it behind our back — was also undoing each step of a drag in
+  progress, putting the window back to the size it had before the drag started. Measured on a
+  left-hand band: a 120 px drag moved it 48 px, the few steps that happened to land between two
+  corrections. Re-asserting now stands aside while the hand is on the grip. Verified across both
+  monitors on all four edges: 120 px dragged, 120 px given, and the far edge never moves.
 - **Resizing the band no longer jumps or flickers.** Two faults, both measured on a top-docked band:
   settling a drag re-applied the whole dock, which recomputed the band from a percentage rounded to
   a whole number and placed the window up to twenty pixels from where the drag ended; and the new

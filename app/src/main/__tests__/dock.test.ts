@@ -111,3 +111,42 @@ describe("bandOfThickness", () => {
     expect(bandOfThickness(AREA_2, "top", 0).height).toBe(1);
   });
 });
+
+/**
+ * Every edge anchors the same way, whatever the monitor's shape.
+ *
+ * Measured across both screens here — 2560x1440 and a portrait 1080x1920 at a negative origin —
+ * where a left band was the case that went wrong in practice.
+ */
+describe("a band on any edge of any monitor", () => {
+  const WIDE = { x: 0, y: 0, width: 2560, height: 1392 };          // primary, taskbar removed
+  const TALL = { x: -1080, y: -81, width: 1080, height: 1872 };    // portrait, off to the left
+
+  it("keeps its far edge on the work area, and only grows inward", () => {
+    for (const area of [WIDE, TALL]) {
+      const thin = 200;
+      const thick = 320;
+      expect(bandOfThickness(area, "top", thin).y).toBe(area.y);
+      expect(bandOfThickness(area, "top", thick).y).toBe(area.y);
+      expect(bandOfThickness(area, "left", thin).x).toBe(area.x);
+      expect(bandOfThickness(area, "left", thick).x).toBe(area.x);
+
+      // The far edges: bottom and right stay put while the band thickens.
+      const bottom = (t: number) => bandOfThickness(area, "bottom", t);
+      expect(bottom(thin).y + thin).toBe(area.y + area.height);
+      expect(bottom(thick).y + thick).toBe(area.y + area.height);
+      const right = (t: number) => bandOfThickness(area, "right", t);
+      expect(right(thin).x + thin).toBe(area.x + area.width);
+      expect(right(thick).x + thick).toBe(area.x + area.width);
+    }
+  });
+
+  it("spans the whole of the other axis", () => {
+    for (const area of [WIDE, TALL]) {
+      expect(bandOfThickness(area, "top", 200).width).toBe(area.width);
+      expect(bandOfThickness(area, "bottom", 200).width).toBe(area.width);
+      expect(bandOfThickness(area, "left", 200).height).toBe(area.height);
+      expect(bandOfThickness(area, "right", 200).height).toBe(area.height);
+    }
+  });
+});
