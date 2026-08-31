@@ -19,6 +19,7 @@ import { clipFileName, Store } from "../core/store.js";
 import type { DockConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
 import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
 import { sendPaste } from "./keystroke.js";
+import { startClipboardWatch, stopClipboardWatch } from "./clipboardWatch.js";
 import { DOCK_PERCENT } from "../core/constants.js";
 import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 import { Worker } from "node:worker_threads";
@@ -432,16 +433,37 @@ async function applyDockConfig(wanted: DockConfig): Promise<ActionResult & { set
 function pasteClipboardImage(): PastedImage {
   const image = clipboard.readImage();
   if (image.isEmpty()) return { ok: false, message: "No image on the clipboard." };
+  const file = saveClipImage(image);
+  if (!file) return { ok: false, message: "Could not save the image." };
+  clipboard.writeText(file);
+  return { ok: true, file, message: `Image ready to paste: ${file}` };
+}
+
+/** Write an image into the clips folder. Shared by the shortcut and the clipboard watch. */
+function saveClipImage(image: Electron.NativeImage): string | null {
   try {
-    const dir = store.paths.clips;
-    mkdirSync(dir, { recursive: true });
-    const file = join(dir, clipFileName());
+    mkdirSync(store.paths.clips, { recursive: true });
+    const file = join(store.paths.clips, clipFileName());
     writeFileSync(file, image.toPNG());
-    clipboard.writeText(file);
-    return { ok: true, file, message: `Image ready to paste: ${file}` };
+    return file;
   } catch (error) {
-    return { ok: false, message: `Could not save the image: ${(error as Error).message}` };
+    console.error("[hangar] could not save the clipboard image:", (error as Error).message);
+    return null;
   }
+}
+
+/**
+ * Give copied screenshots a path, so the ordinary paste key works in a terminal.
+ *
+ * Nothing is intercepted: the clipboard is left holding the picture AND the path, and each window
+ * takes the one it understands.
+ */
+function applyClipboardWatch(): void {
+  if (!config.launch().autoClipPath) {
+    stopClipboardWatch();
+    return;
+  }
+  startClipboardWatch({ save: saveClipImage, clipsDir: store.paths.clips });
 }
 
 /**
@@ -679,6 +701,7 @@ function registerIpc(): void {
     if (payload.launch) {
       config.saveLaunch(payload.launch);
       registerPasteHotkey();                      // the shortcut may have just changed
+      applyClipboardWatch();                      // as may the automatic path
     }
     // The theme lives with the rest of the remembered position, so it comes back with it.
     if (payload.ui) {
@@ -747,6 +770,7 @@ app.whenReady().then(async () => {
   splashSays("Starting the monitor…");
   startSampling();
   registerPasteHotkey();
+  applyClipboardWatch();
 
   closeSplash();
   window?.show();
@@ -781,7 +805,10 @@ app.on("window-all-closed", () => {
 // Windows is already handled synchronously on close; X11 needs an `xprop` call, which does need
 // waiting for — so hold the quit open exactly once, for that.
 let clearingStruts = false;
-app.on("will-quit", () => globalShortcut.unregisterAll());
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+  stopClipboardWatch();
+});
 
 app.on("before-quit", (event) => {
   dock?.releaseSync();                            // never leave a reserved edge behind

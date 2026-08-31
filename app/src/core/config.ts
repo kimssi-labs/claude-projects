@@ -168,6 +168,7 @@ export class ConfigStore {
       pasteHotkey: typeof raw["pasteHotkey"] === "string"
         ? (raw["pasteHotkey"] as string)
         : DEFAULT_PASTE_HOTKEY,
+      autoClipPath: raw["autoClipPath"] !== false,      // on unless it has been turned off
     };
   }
 

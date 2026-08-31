@@ -74,12 +74,17 @@ Deletions ask first and refuse anything still running. Renaming a session writes
 ## Pasting a screenshot
 
 A terminal cannot paste a picture, and Claude Code opens an image by path — so copying a screenshot
-normally means saving it somewhere first. Press **Ctrl+Alt+V** in the terminal instead: the image on
-the clipboard is written out, its path replaces it on the clipboard, and the paste is sent for you.
-The shortcut is set in **Settings · Launch** (empty turns it off), and `V` in Hangar's own window
-does the same without sending the keystroke.
+normally means saving it somewhere first. Copy one while Hangar is running and **your ordinary paste
+key does the rest**: the image is written out and the clipboard is left holding both the picture and
+that file's path, so `Ctrl+V` in a terminal pastes the path while `Ctrl+V` in an image editor still
+pastes the image. Each window takes the format it understands; nothing is intercepted, so no other
+application's paste is touched.
 
-Images are written to `~/.claude/cache/hangar-clips/`.
+**Settings · Launch** turns it off. **Ctrl+Alt+V** remains for a clipboard that already carries text,
+and `V` in Hangar's own window does the same without sending the keystroke.
+
+Images are written to `~/.claude/cache/hangar-clips/`, most recent 50 kept. The automatic path is
+Windows-only — elsewhere the shortcut is the way.
 
 ## Monitoring
 

@@ -3,8 +3,14 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
-## v2.3.2
+## v2.4.0
 
+- **Your ordinary paste key now works for screenshots.** Copy one and Hangar writes it out and
+  leaves the clipboard holding both the picture and that file's path, so Ctrl+V in a terminal
+  pastes the path while Ctrl+V in an image editor still pastes the image — each window takes the
+  format it understands. Nothing is intercepted, so no other application's paste is affected, and
+  the shortcut remains for a clipboard that already carries text. **Settings · Launch** turns it
+  off; the last 50 screenshots are kept and older ones are cleared out. Windows only.
 - **The paste shortcut now actually pastes.** It was sending Ctrl+V about 60 ms after the shortcut
   fired — while the hand that pressed Ctrl+Alt+V was still on those keys, so the terminal received
   Ctrl+Alt+V, which is not paste, and nothing appeared. The image was saved and the path was on the
