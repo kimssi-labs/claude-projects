@@ -98,8 +98,17 @@ jobs:
       - name: Release notes from CHANGELOG.md
         working-directory: .
         run: python tools/release_notes.py "${{ github.ref_name }}" > notes.md
+      # Re-tagging is normal here — a tag gets moved when a release needs one more fix — and
+      # `gh release create` refuses a tag that already has a release. Update that release instead.
       - name: Publish
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" artifacts/* --notes-file notes.md --title "${{ github.ref_name }}"
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" artifacts/* --title "$TAG" --notes-file notes.md
+          fi
