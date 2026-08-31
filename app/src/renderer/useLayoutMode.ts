@@ -18,6 +18,29 @@ export const COLUMN_MAX_WIDTH = 520;
 /** Below this width the detail panel has to go — it would squeeze the list to nothing. */
 export const COMPACT_MAX_WIDTH = 960;
 
+/** Smallest a stacked pane may be and still be a list rather than a sliver. */
+export const STACK_MIN = 120;
+/** The divider between the two stacked panes (`h-1`). */
+const STACK_DIVIDER = 4;
+
+/**
+ * How tall the upper stacked pane should actually be, given the room the two panes share.
+ *
+ * The remembered height is in pixels, and a band is often far shorter than the window it was set
+ * in: 661 px of project list in a 762 px band left the sessions with nothing, so entering a project
+ * showed no sessions at all. The saved value is kept — it fits again in a taller window — but what
+ * is drawn never takes so much that the pane below it disappears.
+ *
+ * `available` is the height of the pair, measured, not the window's: header and toolbar came to
+ * 149 px here, and a guessed constant was the difference between a list and a sliver.
+ */
+export function stackedTopHeight(saved: number, available: number): number {
+  if (!saved || !available) return 0;                     // 0 means "share the space evenly"
+  // The divider sits between the two panes and is part of what was measured, so it comes off too.
+  const most = Math.max(STACK_MIN, available - STACK_MIN - STACK_DIVIDER);
+  return Math.min(saved, most);
+}
+
 export function layoutFor(
   width: number,
   height: number,
