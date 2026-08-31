@@ -31,7 +31,7 @@ describe("ConfigStore", () => {
   it("keeps every section in one file", () => {
     config.saveDock({ enabled: true, device: "\\\\.\\DISPLAY1", edge: "left", percent: 30 });
     config.saveStatus({ mcp: ["wiki"], outlook: true, ponytail: false, usage: true });
-    config.saveLaunch({ shell: "cmd", permission: "bypass", terminal: "", customShell: "", pasteHotkey: "" });
+    config.saveLaunch({ shell: "cmd", permission: "bypass", terminal: "", customShell: "", pasteHotkey: "", autoClipPath: true });
     config.saveUi({ project: "C--Users-Terry", cursor: 4, theme: "dark", monitor: true, layout: "auto", stackBelow: 520, window: null, navWidth: 0, asideWidth: 0, stackTop: 0 });
     const written = JSON.parse(readFileSync(join(home, "config", "manager.json"), "utf8"));
     expect(Object.keys(written).sort()).toEqual(["dock", "launch", "status", "ui"]);
@@ -82,7 +82,7 @@ describe("ConfigStore", () => {
     expect(config.dock()).toMatchObject({ enabled: false, edge: "top", percent: DOCK_PERCENT.default });
     writeFileSync(join(home, "config", "manager.json"), "not json at all");
     expect(config.dock().edge).toBe("top");
-    expect(config.launch()).toEqual({ shell: "auto", permission: "default", terminal: "", customShell: "", pasteHotkey: DEFAULT_PASTE_HOTKEY });
+    expect(config.launch()).toEqual({ shell: "auto", permission: "default", terminal: "", customShell: "", pasteHotkey: DEFAULT_PASTE_HOTKEY, autoClipPath: true });
     expect(config.status()).toEqual({ mcp: null, outlook: true, ponytail: true, usage: true });
     expect(config.ui()).toEqual({ project: null, cursor: 0, theme: "system", monitor: true, layout: "auto", stackBelow: 520, window: null, navWidth: 0, asideWidth: 0, stackTop: 0 });
   });

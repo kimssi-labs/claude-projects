@@ -376,9 +376,25 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
             </div>
           ) : null}
 
-          {/* A terminal cannot paste a picture, but it can paste a path — this shortcut turns the
-              one into the other wherever the cursor happens to be. */}
+          {/* A terminal cannot paste a picture, but it can paste a path. Rather than intercept
+              anyone's paste key, the path is put on the clipboard beside the image. */}
           <div className="pt-3 text-[11px] text-bone-500">Paste a screenshot into a session</div>
+          <label className="flex items-center gap-2 px-1 py-1 rounded-lg hover:bg-ink-700/60">
+            <input
+              type="checkbox"
+              checked={draft.launch.autoClipPath}
+              onChange={() =>
+                update({ ...draft, launch: { ...draft.launch, autoClipPath: !draft.launch.autoClipPath } })}
+              className="accent-accent"
+            />
+            <Truncated as="span" className="text-sm text-bone-100">Give copied screenshots a path</Truncated>
+          </label>
+          <div className="text-[11px] text-bone-500">
+            Copy a screenshot and your ordinary paste key does the rest: the clipboard is left
+            holding the picture <em>and</em> the file it was written to, so a terminal pastes the
+            path and an image editor still pastes the image. Nothing is intercepted.
+          </div>
+
           <div className="flex items-center gap-2">
             <input
               type="text"
@@ -406,8 +422,9 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
             </button>
           </div>
           <div className="text-[11px] text-bone-500">
-            Copy a screenshot, press it in the terminal: the image is written out and its path is
-            pasted where the cursor is, ready for Claude Code to open. Hangar has to be running.
+            A shortcut for the same thing, for a clipboard that already carries text: pressed in the
+            terminal, it writes the image out and pastes the path where the cursor is. Hangar has to
+            be running either way.
           </div>
           {draft.launch.pasteHotkey.trim() && !draft.pasteHotkeyActive ? (
             <div className="text-[11px] text-bad">

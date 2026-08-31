@@ -198,3 +198,40 @@ test("a screenshot on the clipboard becomes a file, with its path ready to paste
     await app.close();
   }
 });
+
+/**
+ * The watch is what lets the ordinary paste key work, and it is invisible when it is not running —
+ * the unit tests know when a screenshot should be given a path, but only this knows that anything
+ * is actually watching. It was written after a build shipped with the rules in place and nothing
+ * calling them.
+ *
+ * Windows only: the change is detected through the clipboard sequence number, and no equivalent is
+ * used elsewhere, so the setting simply does nothing there.
+ */
+test("a copied screenshot is given a path without anyone pressing a shortcut", async () => {
+  test.skip(process.platform !== "win32", "the clipboard watch is Windows-only");
+  const { home } = fixture();
+  const { app, page } = await launch(home);
+  try {
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+
+    await app.evaluate(({ clipboard, nativeImage }) => {
+      const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGO8WR7OgA0wYRUdtBIATsMBtyGIWZMAAAAASUVORK5CYII=", "base64");
+      clipboard.clear();
+      clipboard.writeImage(nativeImage.createFromBuffer(png));
+    });
+
+    // Nothing is pressed. Within a poll or two the path should simply be there.
+    await expect.poll(
+      () => app.evaluate(({ clipboard }) => clipboard.readText()),
+      { message: "the watch never added a path", timeout: 8000 },
+    ).toMatch(new RegExp(String.raw`hangar-clips[\\/]clip-\d{8}-\d{6}-\d{3}\.png$`));
+
+    const file = await app.evaluate(({ clipboard }) => clipboard.readText());
+    expect(existsSync(file), "the file the path points at is really there").toBe(true);
+    // And the picture is still on the clipboard, so an image editor is unaffected.
+    expect(await app.evaluate(({ clipboard }) => !clipboard.readImage().isEmpty())).toBe(true);
+  } finally {
+    await app.close();
+  }
+});

@@ -99,6 +99,14 @@ export interface LaunchConfig {
    * path, and Claude Code opens the image from it.
    */
   pasteHotkey: string;
+  /**
+   * Whether a copied screenshot is given a path of its own, right as it is copied.
+   *
+   * The image is written to a file and the clipboard is left holding both the picture and that
+   * file's path, so the ordinary paste key does the right thing in either kind of window — a
+   * terminal takes the path, an image editor takes the picture. Nobody's keys are intercepted.
+   */
+  autoClipPath: boolean;
   shell: ShellChoice;
   permission: PermissionMode;
   /** Terminal command used on Linux; empty means "detect". */
