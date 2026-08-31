@@ -129,8 +129,12 @@ Everything comes from files Claude Code maintains under `~/.claude` (override wi
 | `config/project-aliases.json` | display aliases for projects |
 
 The status strip is optional: each segment appears only if that source exists on your machine — rate
-limits from `cache/rate-limits.json` (5 h, 7 d, and the weekly Fable/Opus and Sonnet windows), MCP
-health from its status cache. On a machine without them the segment is not drawn at all.
+limits from `cache/rate-limits.json` (5 h, 7 d, and the weekly Fable/Opus and Sonnet windows when
+Claude Code reports them), Outlook reachability from its probe's cache. On a machine without them
+the segment is not drawn at all.
+
+Each window shows how much is used, how long until it resets, and the clock time it resets at — in
+every shape, the docked band included.
 
 ## Settings (`S`)
 
@@ -157,10 +161,8 @@ also remembers which of them was docked, so plugging a screen in or out brings b
 shrink below some minimum; the first refusal is measured and becomes the lower bound of the size
 setting, so what the screen shows is what docking will give you.
 
-**Status line** lists the MCP servers this machine has — from `~/.claude.json` and from the probe
-cache — and lets you check the ones the segment should report, with **Select all** / **Select none**
-and an "Every server, always" mode that follows the list as it changes. Uncheck everything and the
-segment disappears.
+**Status line** turns each segment of the strip on or off — usage bars, Outlook, ponytail. A segment
+whose source this machine does not have is not drawn either way.
 
 **Launch** picks the terminal and shell that host an opened session: PowerShell 7, Windows
 PowerShell, Command Prompt or none on Windows; on Linux the first terminal emulator found, or a named

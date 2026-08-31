@@ -139,8 +139,6 @@ export interface UiConfig {
 }
 
 export interface StatusConfig {
-  /** Selected MCP servers, or null for "every server the probe knows". */
-  mcp: string[] | null;
   /** Show the Outlook reachability segment, when that probe writes a cache here. */
   outlook: boolean;
   /** Show the ponytail mode chip, when the flag file is present. */

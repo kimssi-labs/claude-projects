@@ -140,9 +140,7 @@ export class ConfigStore {
   // -- status line -------------------------------------------------------------------------------
   status(): StatusConfig {
     const raw = this.section(SECTION.status);
-    const chosen = raw["mcp"];
     return {
-      mcp: Array.isArray(chosen) ? chosen.map(String) : null,
       // Every segment is on unless it was turned off; a machine without the source shows nothing
       // either way, so "on" is the harmless default.
       outlook: raw["outlook"] !== false,

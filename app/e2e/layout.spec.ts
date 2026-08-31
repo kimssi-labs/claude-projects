@@ -116,6 +116,39 @@ test("the theme choice applies at once and survives a restart", async () => {
   }
 });
 
+/**
+ * The reset time is the second half of a usage reading: a percentage without it does not say
+ * whether to keep working or wait. The docked band dropped it for want of room — and the band is
+ * the shape the app is left in all day, so the layout that needed the answer most never gave it.
+ */
+test("every shape says when the usage window resets", async () => {
+  const home = fixture();
+  mkdirSync(join(home, "cache"), { recursive: true });
+  const resetsAt = Math.floor(Date.now() / 1000) + 2 * 3600 + 15 * 60;   // 2h 15m from now
+  writeFileSync(join(home, "cache", "rate-limits.json"), JSON.stringify({
+    five_hour: { used_percentage: 19, resets_at: resetsAt },
+    seven_day: { used_percentage: 100, resets_at: resetsAt + 86400 },
+  }));
+
+  const { app, page } = await launch(home);
+  try {
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+    const reset = page.getByText(/left ·/).first();
+
+    // Wide: the full column.
+    await resize(app, page, 1200, 800);
+    await expect(reset).toBeVisible();
+    await expect(reset).toContainText("2h 1");                  // 2h 15m, give or take a minute
+
+    // Docked as a band along an edge: the same answer, on one line.
+    await resize(app, page, 1200, 300);
+    await expect(page.getByText(/left ·/).first()).toBeVisible();
+    expect(await overflow(page)).toEqual({ x: 0, y: 0 });
+  } finally {
+    await app.close();
+  }
+});
+
 test("neither thin shape makes the page scroll", async () => {
   const home = fixture();
   const { app, page } = await launch(home);

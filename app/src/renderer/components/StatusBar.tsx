@@ -2,14 +2,14 @@
  * The strip along the top: usage windows on the left, health on the right.
  *
  * Each segment appears only when its source exists on this machine, which is what makes the same
- * build usable by someone who has neither the wiki MCP nor the Outlook probe.
+ * build usable by someone who does not have the Outlook probe.
  *
  * Every usage window is the same fixed-width column, so the labels line up with each other and the
  * percentages line up with each other however many windows the machine reports.
  */
 import type { RateWindow, StatusSnapshot } from "@core/types";
 
-import { formatClock, formatPercent, usageTone } from "../format";
+import { formatClock, formatPercent, resetLabel, usageTone } from "../format";
 import { Truncated } from "./Truncated";
 
 function barTone(percent: number): string {
@@ -19,7 +19,7 @@ function barTone(percent: number): string {
 /** The bar itself: a track that is always full width, and a fill that is the number. */
 function Bar({ percent, className = "" }: { percent: number; className?: string }) {
   return (
-    <div className={`h-1.5 rounded-full bg-ink-600 overflow-hidden ${className}`}>
+    <div className={`h-2.5 rounded-full bg-ink-600 overflow-hidden ${className}`}>
       <div
         className={`h-full rounded-full ${barTone(percent)}`}
         // A window at 0 % still shows a sliver, so the bar reads as a bar and not as a missing one.
@@ -37,23 +37,23 @@ function Bar({ percent, className = "" }: { percent: number; className?: string 
  */
 function UsageColumn({ window: usage }: { window: RateWindow }) {
   return (
-    <div className="w-44 shrink-0" title={`${usage.label} usage`}>
+    <div className="w-52 shrink-0" title={`${usage.label} usage`}>
       {/* Both belong to the label, so they sit together — pushed apart, the reset time reads as if
           it belonged to the next window along. */}
       <div className="flex items-baseline gap-2 min-w-0">
-        <span className="text-[11px] uppercase tracking-wide text-bone-500 shrink-0">{usage.label}</span>
+        <span className="text-xs font-medium uppercase tracking-wide text-bone-300 shrink-0">{usage.label}</span>
         <Truncated
           as="span"
           title={usage.resetsAt ? `Resets ${formatClock(usage.resetsAt)}` : undefined}
-          className="text-[10px] text-bone-500 tabular-nums"
+          className="text-[11px] text-bone-400 tabular-nums"
         >
-          {usage.resetsAt ? `↻ ${formatClock(usage.resetsAt)}` : ""}
+          {usage.resetsAt ? `↻ ${resetLabel(usage.resetsAt)}` : ""}
         </Truncated>
       </div>
-      <div className="mt-1 flex items-center gap-1.5">
+      <div className="mt-1.5 flex items-center gap-2">
         <Bar percent={usage.usedPercent} className="flex-1" />
         {/* Fixed width, right-aligned: the numbers still line up down the strip. */}
-        <span className={`text-xs tabular-nums w-9 text-right ${usageTone(usage.usedPercent)}`}>
+        <span className={`text-base font-semibold tabular-nums w-12 text-right ${usageTone(usage.usedPercent)}`}>
           {formatPercent(usage.usedPercent)}
         </span>
       </div>
@@ -61,15 +61,28 @@ function UsageColumn({ window: usage }: { window: RateWindow }) {
   );
 }
 
-/** Docked band: one line, but still three fixed columns, so nothing wanders as numbers change. */
+/**
+ * Docked band: one line, and the reset time is on it.
+ *
+ * It used to be dropped here for want of room, which meant the layout most people leave open all
+ * day was the one that never answered "when does this reset".
+ */
 function UsageRow({ window: usage }: { window: RateWindow }) {
   return (
-    <div className="flex items-center gap-1 shrink-0" title={`${usage.label} usage`}>
-      <span className="text-[11px] uppercase tracking-wide text-bone-500 whitespace-nowrap">{usage.label}</span>
-      <Bar percent={usage.usedPercent} className="w-14" />
-      <span className={`text-xs tabular-nums w-9 text-right ${usageTone(usage.usedPercent)}`}>
+    <div className="flex items-center gap-1.5 shrink-0" title={`${usage.label} usage`}>
+      <span className="text-xs font-medium uppercase tracking-wide text-bone-300 whitespace-nowrap">{usage.label}</span>
+      <Bar percent={usage.usedPercent} className="w-20" />
+      <span className={`text-base font-semibold tabular-nums w-12 text-right ${usageTone(usage.usedPercent)}`}>
         {formatPercent(usage.usedPercent)}
       </span>
+      {usage.resetsAt ? (
+        <span
+          className="text-xs text-bone-400 tabular-nums whitespace-nowrap"
+          title={`Resets ${formatClock(usage.resetsAt)}`}
+        >
+          ↻ {resetLabel(usage.resetsAt)}
+        </span>
+      ) : null}
     </div>
   );
 }
