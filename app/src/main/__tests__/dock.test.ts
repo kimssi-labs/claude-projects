@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { bandRect, bandThickness, keepThickness } from "../dock.js";
+import { bandRect, bandThickness, keepThickness, OPEN_FACE, resizeAllowed } from "../dock.js";
 
 const AREA = { x: 0, y: 0, width: 2000, height: 1000 };
 
@@ -47,5 +47,37 @@ describe("keepThickness", () => {
     const offered = { x: 0, y: 0, width: 1900, height: 1000 };
     expect(keepThickness(offered, asked, "right")).toEqual({ x: 1400, y: 0, width: 500, height: 1000 });
     expect(bandThickness(keepThickness(offered, asked, "right"), "right")).toBe(500);
+  });
+});
+
+/**
+ * A docked band is flush with three sides of the screen, so only its inner face can be dragged.
+ *
+ * This used to be handled after the fact — the band was put back where it belonged — which meant
+ * the window visibly jumped and returned on every grab of a pinned edge.
+ */
+describe("which edges a docked band accepts", () => {
+  it("takes only the face that is not against the screen", () => {
+    expect(OPEN_FACE).toEqual({ top: "bottom", bottom: "top", left: "right", right: "left" });
+    expect(resizeAllowed("top", "bottom")).toBe(true);
+    expect(resizeAllowed("left", "right")).toBe(true);
+  });
+
+  it("refuses the three pinned sides", () => {
+    for (const grabbed of ["top", "left", "right"]) {
+      expect(resizeAllowed("top", grabbed), `top band, ${grabbed} grip`).toBe(false);
+    }
+    expect(resizeAllowed("right", "left")).toBe(true);      // the open face of a right-hand band
+    expect(resizeAllowed("right", "bottom")).toBe(false);
+  });
+
+  it("refuses a corner, which would move a pinned side too", () => {
+    expect(resizeAllowed("top", "bottom-left")).toBe(false);
+    expect(resizeAllowed("top", "bottom-right")).toBe(false);
+  });
+
+  it("leaves an undocked window alone", () => {
+    expect(resizeAllowed(undefined, "top-left")).toBe(true);
+    expect(resizeAllowed(undefined, undefined)).toBe(true);
   });
 });

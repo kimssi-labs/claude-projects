@@ -352,6 +352,7 @@ export function App() {
         status={status}
         appVersion={info?.version ?? "—"}
         compact={mode !== "full"}
+        draggable={!windowState.docked}
         onRefresh={() => void api.status().then(setStatus)}
         controls={
           <WindowControls

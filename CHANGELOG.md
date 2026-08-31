@@ -5,6 +5,14 @@ notes. Add the section **before** tagging.
 
 ## v2.5.0
 
+- **A docked band cannot be dragged or pulled off its edge.** Docking is the maximised state, so the
+  title bar no longer drags the window, and of the four sides only the open one — the bottom of a
+  top-docked band — resizes; the three against the screen, and every corner, are refused outright.
+  They used to be allowed and then undone, so the band visibly jumped and came back.
+- **Resizing the band no longer flickers.** Settling a drag re-applied the whole dock, which
+  recomputed the band from a percentage rounded to a whole number and placed the window there — up
+  to twenty pixels from where the drag ended. Only the reservation is updated now, and the window is
+  left exactly where it was let go. Measured: unchanged to the pixel for two seconds after release.
 - **Every usage window says when it resets** — in the docked band too, which used to drop it for
   want of room, and that is the shape the app is left in all day. The reading leads with the time
   left rather than a bare clock time, because "when does this free up" is the question a percentage
