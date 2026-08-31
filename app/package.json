@@ -1,6 +1,6 @@
 {
   "name": "hangar",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Session manager for Claude Code",
   "author": {
     "name": "kimssi-labs",

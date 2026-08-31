@@ -154,8 +154,8 @@ test("opens one window, with no title bar above the content", async () => {
     // Frameless: the page is exactly as tall as the window's content, and the header is draggable.
     const win = await bounds(app);
     const inner = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
-    expect(inner.w).toBe(win.width);
-    expect(inner.h).toBe(win.height);
+    samePixels(inner.w, win.width, "content spans the window");
+    samePixels(inner.h, win.height, "content is as tall as the window — no title bar above it");
     const draggable = await page.evaluate(() =>
       getComputedStyle(document.querySelector("header") as Element).getPropertyValue("-webkit-app-region"));
     expect(draggable).toBe("drag");
@@ -184,7 +184,11 @@ test("remembers where the window was left", async () => {
 
   const second = await launch(home);
   try {
-    expect(await bounds(second.app)).toMatchObject({ x: 220, y: 160, width: 940, height: 620 });
+    const restored = await bounds(second.app);
+    samePixels(restored.x, 220, "x");
+    samePixels(restored.y, 160, "y");
+    samePixels(restored.width, 940, "width");
+    samePixels(restored.height, 620, "height");
   } finally {
     await second.app.close();
   }
