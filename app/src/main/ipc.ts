@@ -50,7 +50,6 @@ export interface SettingsPayload {
   status: import("../core/types.js").StatusConfig;
   launch: import("../core/types.js").LaunchConfig;
   ui: import("../core/types.js").UiConfig;
-  mcpServers: string[];
   dockDevices: string[];
   dockFloor: number;
   minPercent: number;

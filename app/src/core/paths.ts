@@ -24,7 +24,6 @@ export interface HomePaths {
   managerConfig: string;
   aliases: string;
   rateLimits: string;
-  mcpStatus: string;
   outlookStatus: string;
   ponytailFlag: string;
   /** Where a pasted screenshot is written, so a terminal session can be given its path. */
@@ -43,7 +42,6 @@ export function homePaths(root = claudeHome()): HomePaths {
     managerConfig: join(root, "config", "manager.json"),
     aliases: join(root, "config", "project-aliases.json"),
     rateLimits: join(root, "cache", "rate-limits.json"),
-    mcpStatus: join(root, "cache", "mcp-status.json"),
     outlookStatus: join(root, "cache", "outlook-status.json"),
     ponytailFlag: join(root, ".ponytail-active"),
     clips: join(root, "cache", "hangar-clips"),

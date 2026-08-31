@@ -32,6 +32,25 @@ export function formatClock(ms: number): string {
     : `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/**
+ * When a rate-limit window rolls over, spelled the way a person would say it.
+ *
+ * The clock time alone made the reader do arithmetic to answer the only question they had — how
+ * long until this frees up — so the remaining time leads and the absolute time follows it.
+ */
+export function resetLabel(resetsAt: number, now = Date.now()): string {
+  const minutes = Math.max(0, Math.round((resetsAt - now) / 60000));
+  const hours = Math.floor(minutes / 60);
+  // Past a couple of days, hours stop meaning anything — "167h left" is a number to be decoded,
+  // "6d 23h left" is a week that is nearly up.
+  const left = hours >= 48
+    ? `${Math.floor(hours / 24)}d ${hours % 24}h`
+    : hours >= 1
+      ? `${hours}h ${minutes % 60}m`
+      : `${minutes}m`;
+  return `${left} left · ${formatClock(resetsAt)}`;
+}
+
 /** "3 minutes ago" — for a list where the exact second never matters. */
 export function formatSince(ms: number, now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - ms) / 1000));

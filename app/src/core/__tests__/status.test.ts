@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { installedMcpServers, mcpHealth, rateWindows, readStatus } from "../status.js";
+import { rateWindows, readStatus } from "../status.js";
 import { MetricsHistory, processTree, sumTree, SYSTEM_SERIES } from "../metrics.js";
 import type { MetricsSnapshot } from "../types.js";
 
@@ -32,28 +32,6 @@ describe("rate windows", () => {
   });
 });
 
-describe("MCP health", () => {
-  const probe = { servers: { wiki: { ok: true }, chrome: { ok: false } } };
-
-  it("lists what is installed from both sources", () => {
-    expect(installedMcpServers({ mcpServers: { wiki: {}, github: {} } }, probe)).toEqual(["chrome", "github", "wiki"]);
-  });
-
-  it("reports every checked server on its own, not one verdict for all of them", () => {
-    const items = mcpHealth(probe, ["wiki", "chrome", "ghost"]);
-    expect(items.map((i) => [i.label, i.ok])).toEqual([
-      ["wiki", true],       // the probe says it answered
-      ["chrome", false],    // the probe says it did not
-      ["ghost", null],      // the probe has never seen it
-    ]);
-  });
-
-  it("disappears when nothing is selected or installed", () => {
-    expect(mcpHealth(probe, [])).toEqual([]);
-    expect(mcpHealth({}, null)).toEqual([]);
-  });
-});
-
 describe("readStatus", () => {
   it("shows only the segments this machine has", () => {
     const home = join(mkdtempSync(join(tmpdir(), "cp-status-")), ".claude");
@@ -63,12 +41,15 @@ describe("readStatus", () => {
     writeFileSync(join(home, "cache", "rate-limits.json"), JSON.stringify({
       five_hour: { used_percentage: 10, resets_at: NOW / 1000 + 60 },
     }));
-    writeFileSync(join(home, "cache", "mcp-status.json"), JSON.stringify({ servers: { wiki: { ok: true } } }));
     writeFileSync(join(home, ".ponytail-active"), "full\n");
-    const status = readStatus(home, { mcp: null, outlook: true, ponytail: true, usage: true }, NOW);
+    const status = readStatus(home, { outlook: true, ponytail: true, usage: true }, NOW);
     expect(status.windows).toHaveLength(1);
-    expect(status.health.map((h) => h.key)).toEqual(["mcp:wiki"]);
     expect(status.ponytail).toBe("full");
+
+    // An MCP cache left over from an older version is not a source any more: the dot reported a
+    // separate handshake, never this session's connection, so reconnecting a server never moved it.
+    writeFileSync(join(home, "cache", "mcp-status.json"), JSON.stringify({ servers: { wiki: { ok: true } } }));
+    expect(readStatus(home, { outlook: true, ponytail: true, usage: true }, NOW).health).toEqual([]);
   });
 });
 
@@ -103,15 +84,5 @@ describe("metrics", () => {
     expect(history.get("s1")).toHaveLength(3);
     history.keepOnly([]);
     expect(history.keys()).toEqual([SYSTEM_SERIES]);
-  });
-});
-
-describe("the MCP tooltips", () => {
-  it("says what each dot means, in words", () => {
-    const probe = { servers: { wiki: { ok: true }, github: { ok: false } } };
-    const items = mcpHealth(probe, ["wiki", "github", "never-probed"]);
-    expect(items.find((i) => i.label === "wiki")?.detail).toContain("connected");
-    expect(items.find((i) => i.label === "github")?.detail).toContain("not responding");
-    expect(items.find((i) => i.label === "never-probed")?.detail).toContain("no verdict");
   });
 });

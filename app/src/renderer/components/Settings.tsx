@@ -274,7 +274,7 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
         </div>
       </Card>
 
-      <Card title="Status line" section="status" focused={focused} hint="which MCP servers to report">
+      <Card title="Status line" section="status" focused={focused} hint="what the strip along the top shows">
         <div className="space-y-1" onMouseEnter={() => onFocus("status")}>
           {/* The other things the strip can show. Each appears only when its source exists, so a
               switch here is "show it when there is one", not "invent one". */}
@@ -296,52 +296,6 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
             </label>
           ))}
 
-          <div className="text-[11px] text-bone-500 pt-2">MCP servers</div>
-          {draft.mcpServers.length === 0 ? (
-            <div className="text-xs text-bone-500">No MCP server is configured on this machine.</div>
-          ) : null}
-          {draft.mcpServers.map((server) => {
-            const chosen = draft.status.mcp;
-            const on = chosen === null || chosen.includes(server);
-            return (
-              <label key={server} className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink-700/60">
-                <input
-                  type="checkbox"
-                  checked={on}
-                  onChange={() => {
-                    const current = chosen ?? draft.mcpServers;
-                    const next = on ? current.filter((s) => s !== server) : [...current, server];
-                    update({ ...draft, status: { ...draft.status, mcp: next } });
-                  }}
-                  className="accent-accent"
-                />
-                <span className="text-sm text-bone-100">{server}</span>
-              </label>
-            );
-          })}
-          {draft.mcpServers.length ? (
-            <div className="flex flex-wrap gap-2 mt-2">
-              {/* "All" ticks the servers this machine has right now; "Every server" keeps following
-                  the list, so one installed later is reported without coming back here. */}
-              <button
-                type="button"
-                className="btn"
-                onClick={() => update({ ...draft, status: { ...draft.status, mcp: [...draft.mcpServers] } })}
-              >
-                Select all
-              </button>
-              <button type="button" className="btn" onClick={() => update({ ...draft, status: { ...draft.status, mcp: [] } })}>
-                Select none
-              </button>
-              <button
-                type="button"
-                className={`btn ${draft.status.mcp === null ? "btn-accent" : ""}`}
-                onClick={() => update({ ...draft, status: { ...draft.status, mcp: null } })}
-              >
-                Every server, always
-              </button>
-            </div>
-          ) : null}
         </div>
       </Card>
 

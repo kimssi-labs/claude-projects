@@ -14,7 +14,7 @@ import { ConfigStore, percentFloor } from "../core/config.js";
 import { launchCommand, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
 import { MetricsHistory, SYSTEM_SERIES } from "../core/metrics.js";
 import { claudeHome } from "../core/paths.js";
-import { readStatus, installedMcpServers } from "../core/status.js";
+import { readStatus } from "../core/status.js";
 import { clipFileName, Store } from "../core/store.js";
 import type { DockConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
 import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
@@ -518,16 +518,11 @@ function settingsPayload(): SettingsPayload {
   const dockConfig = config.dock(null, setupKey());
   const { display } = pickDisplay(dockConfig.device);
   const span = bandThickness(display.workArea, dockConfig.edge);
-  const probe = readStatus(undefined, config.status()).health;
-  void probe;
-  const claudeJson = safeJson(store.paths.claudeJson);
-  const mcpProbe = safeJson(store.paths.mcpStatus);
   return {
     dock: dockConfig,
     status: config.status(),
     launch: config.launch(),
     ui: config.ui(),
-    mcpServers: installedMcpServers(claudeJson, mcpProbe),
     dockDevices: config.dockDevices(),
     dockFloor: config.dockFloor(dockConfig.edge),
     pasteHotkeyActive,

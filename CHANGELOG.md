@@ -3,6 +3,18 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.5.0
+
+- **Every usage window says when it resets** — in the docked band too, which used to drop it for
+  want of room, and that is the shape the app is left in all day. The reading leads with the time
+  left rather than a bare clock time, because "when does this free up" is the question a percentage
+  provokes: `9% ↻ 4h 43m left · 19:00`. A weekly window counts in days, not in three-digit hours.
+- **The usage strip is legible from across the desk.** The percentage went from 12 px to 16 px and
+  the bar from 6 px to 10 px tall, with brighter labels.
+- **The MCP segment is gone.** Claude Code exposes no live MCP state, so the dot could only report a
+  separate handshake against one configured server — it never moved when a server was reconnected in
+  the session, which is the only thing it was being read for. Its settings section went with it.
+
 ## v2.4.0
 
 - **Your ordinary paste key now works for screenshots.** Copy one and Hangar writes it out and
