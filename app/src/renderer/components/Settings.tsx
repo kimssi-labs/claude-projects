@@ -142,7 +142,9 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
         <button type="button" className="btn shrink-0" onClick={onClose} aria-label="Back">
           ← Back (Esc)
         </button>
-        <span className="text-[11px] text-bone-500 truncate">Settings are saved as you change them.</span>
+        <Truncated as="span" className="text-[11px] text-bone-500">
+          Settings are saved as you change them.
+        </Truncated>
       </div>
 
       <Card title="Appearance" section="appearance" focused={focused} hint="Tab moves between cards">

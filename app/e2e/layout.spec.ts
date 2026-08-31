@@ -158,19 +158,25 @@ test("text that does not fit says the whole of itself on hover", async () => {
 
     const clipping = () => page.evaluate(() => {
       const all = [...document.querySelectorAll("div,span")]
-        .filter((n) => n.className.includes("truncate"));
+        .filter((n) => typeof n.className === "string" && n.className.includes("truncate"));
       const cut = all.filter((n) => n.scrollWidth > n.clientWidth + 1);
       return {
         cut: cut.length,
         titled: cut.filter((n) => (n.getAttribute("title") ?? "").length > 0).length,
+        // Named, not counted: a failure should say which label went quiet.
+        silent: cut.filter((n) => !(n.getAttribute("title") ?? "").length)
+          .map((n) => (n.textContent ?? "").slice(0, 40)),
       };
     });
 
     // Narrow: the name cannot fit, and every cut label carries its full self.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(430, 800));
     await expect.poll(async () => (await clipping()).cut, { timeout: 8000 }).toBeGreaterThan(0);
-    const narrow = await clipping();
-    expect(narrow.titled, "every cut-off label has a tooltip").toBe(narrow.cut);
+    // Polled, not sampled: a label is measured after layout, and the assertion should not race the
+    // frame in which it happens.
+    await expect
+      .poll(async () => (await clipping()).silent, { timeout: 8000 })
+      .toEqual([]);
   } finally {
     await app.close();
   }

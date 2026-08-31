@@ -12,6 +12,8 @@ notes. Add the section **before** tagging.
   also says.)
 - **A Back button on the settings screen**, since `Esc` is only obvious to someone who already knows
   it. `Esc` still works.
+- A cut-off label carries its tooltip in the same frame it is cut, not one render later — and the
+  test that checks it now names the labels that went quiet instead of counting them.
 - The window no longer grows by three pixels each time it is reopened: the saved rectangle was
   restored through the constructor, which does not measure a window the same way `setBounds` does.
 
