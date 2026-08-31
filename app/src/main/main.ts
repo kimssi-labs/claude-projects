@@ -21,7 +21,7 @@ import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from
 import { sendPaste } from "./keystroke.js";
 import { startClipboardWatch, stopClipboardWatch } from "./clipboardWatch.js";
 import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 import { Worker } from "node:worker_threads";
 
 import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
@@ -270,7 +270,7 @@ async function createWindow(): Promise<void> {
       // window at `percent` rounded to a whole number — up to twenty pixels away from where the
       // drag ended — which is the jump-and-flicker at the end of every resize. The outer edges
       // cannot be dragged at all now, so there is no longer a band to pull back onto its edge.
-      void dock.reserveCurrent().then(() => {
+      void dock.resizeTo(thickness).then(() => {
         window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
       });
     }, DOCK_RESIZE_SETTLE_MS);
@@ -711,6 +711,31 @@ function registerIpc(): void {
   });
 
   ipcMain.handle(CHANNEL.applyDock, async (_event, wanted: DockConfig) => applyDockConfig(wanted));
+
+  /**
+   * The band's own resize grip.
+   *
+   * The window frame does not resize while docked — that is what takes the resize cursor off the
+   * three sides that are against the screen — so the one side that may be dragged is a handle in
+   * the page. Each step only moves the window, which is cheap; the shell is told once, at the end,
+   * because reserving costs the best part of half a second.
+   */
+  ipcMain.on(CHANNEL.dragDock, (_event, { thickness, done }: DockDrag) => {
+    if (!dock?.isDocked) return;
+    if (!done) {
+      dock.preview(thickness);
+      return;
+    }
+    const current = config.dock(null, setupKey());
+    if (!current.enabled) return;
+    const { display } = pickDisplay(current.device);
+    const span = bandThickness(dock.workArea(display), current.edge);
+    const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
+    config.saveDock({ ...current, percent }, setupKey());
+    void dock.resizeTo(thickness).then(() => {
+      window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
+    });
+  });
 
 
   ipcMain.handle(CHANNEL.releaseDock, async () => {

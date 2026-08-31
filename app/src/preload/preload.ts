@@ -49,6 +49,9 @@ const api = {
     ipcRenderer.on(CHANNEL.pasteResult, handler);
     return () => ipcRenderer.removeListener(CHANNEL.pasteResult, handler);
   },
+  /** Drag the docked band's inner edge. `done` marks the end, when the size is written down. */
+  dragDock: (thickness: number, done: boolean): void =>
+    ipcRenderer.send(CHANNEL.dragDock, { thickness, done }),
   windowState: (): Promise<WindowState> => ipcRenderer.invoke(CHANNEL.windowState),
   windowCommand: (command: WindowCommand): Promise<WindowState> =>
     ipcRenderer.invoke(CHANNEL.windowCommand, command),

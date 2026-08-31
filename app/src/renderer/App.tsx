@@ -10,6 +10,7 @@ import { nextIndex, resolveAction, SHORTCUTS, type Screen } from "@core/keymap";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
 import { api, type AppInfo, type DisplayInfo, type SettingsPayload } from "./api";
+import { DockGrip } from "./components/DockGrip";
 import { AreaChart } from "./components/Chart";
 import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./components/Lists";
 import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./components/Settings";
@@ -347,7 +348,11 @@ export function App() {
   );
 
   return (
-    <div className="h-full flex flex-col bg-ink-900 overflow-hidden">
+    <div className="relative h-full flex flex-col bg-ink-900 overflow-hidden">
+      {/* Docked, the frame does not resize; this is the one side that does. */}
+      {windowState.docked && settings ? (
+        <DockGrip edge={settings.dock.edge} onDrag={(thickness, done) => api.dragDock(thickness, done)} />
+      ) : null}
       <StatusBar
         status={status}
         appVersion={info?.version ?? "—"}

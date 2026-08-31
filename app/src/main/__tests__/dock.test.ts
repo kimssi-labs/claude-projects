@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { bandRect, bandThickness, keepThickness, OPEN_FACE, resizeAllowed } from "../dock.js";
+import { bandOfThickness, bandRect, bandThickness, keepThickness, OPEN_FACE, resizeAllowed } from "../dock.js";
 
 const AREA = { x: 0, y: 0, width: 2000, height: 1000 };
 
@@ -79,5 +79,35 @@ describe("which edges a docked band accepts", () => {
   it("leaves an undocked window alone", () => {
     expect(resizeAllowed(undefined, "top-left")).toBe(true);
     expect(resizeAllowed(undefined, undefined)).toBe(true);
+  });
+});
+
+/**
+ * A resized band is anchored to its edge, at the pixel thickness the drag ended on.
+ *
+ * The bug this pins: the resize used to reserve "wherever the window is" and let the shell answer.
+ * With our own 580 px band already reserved at the top of the screen, the shell offered the free
+ * space BELOW it, so the band walked down the screen by its own height on every resize — measured
+ * as y = -81 becoming y = 499.
+ */
+describe("bandOfThickness", () => {
+  const AREA_2 = { x: -1080, y: -81, width: 1080, height: 1920 };
+
+  it("stays flush with the edge whatever the thickness", () => {
+    expect(bandOfThickness(AREA_2, "top", 680)).toEqual({ x: -1080, y: -81, width: 1080, height: 680 });
+    expect(bandOfThickness(AREA_2, "top", 580).y).toBe(bandOfThickness(AREA_2, "top", 680).y);
+  });
+
+  it("grows inward from the far edges too", () => {
+    expect(bandOfThickness(AREA_2, "bottom", 300)).toEqual({ x: -1080, y: 1539, width: 1080, height: 300 });
+    expect(bandOfThickness(AREA_2, "right", 200)).toEqual({ x: -200, y: -81, width: 200, height: 1920 });
+  });
+
+  it("is what the percentage band is made of, so the two cannot drift", () => {
+    expect(bandRect(AREA_2, "top", 25)).toEqual(bandOfThickness(AREA_2, "top", 480));
+  });
+
+  it("never reserves nothing", () => {
+    expect(bandOfThickness(AREA_2, "top", 0).height).toBe(1);
   });
 });

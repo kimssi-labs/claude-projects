@@ -5,14 +5,19 @@ notes. Add the section **before** tagging.
 
 ## v2.5.0
 
-- **A docked band cannot be dragged or pulled off its edge.** Docking is the maximised state, so the
-  title bar no longer drags the window, and of the four sides only the open one — the bottom of a
-  top-docked band — resizes; the three against the screen, and every corner, are refused outright.
-  They used to be allowed and then undone, so the band visibly jumped and came back.
-- **Resizing the band no longer flickers.** Settling a drag re-applied the whole dock, which
-  recomputed the band from a percentage rounded to a whole number and placed the window there — up
-  to twenty pixels from where the drag ended. Only the reservation is updated now, and the window is
-  left exactly where it was let go. Measured: unchanged to the pixel for two seconds after release.
+- **A docked band cannot be dragged or pulled off its edge, and does not pretend it can.** Docking
+  is the maximised state, so the title bar no longer drags the window and the frame no longer
+  resizes at all — Windows draws the resize cursor for every side of a frame at once, so the only
+  way to stop three sides offering a resize that cannot happen was to stop the frame resizing and
+  give the fourth side a grip of its own. Measured: arrow on all four sides of the frame, and the
+  resize cursor only on the band's inner edge.
+- **Resizing the band no longer jumps or flickers.** Two faults, both measured on a top-docked band:
+  settling a drag re-applied the whole dock, which recomputed the band from a percentage rounded to
+  a whole number and placed the window up to twenty pixels from where the drag ended; and the new
+  reservation was asked for at the window's own position, which the shell answers with the free
+  space **below the band's existing reservation** — so the band walked down the screen by its own
+  height, `y = -81` becoming `y = 499`. The band is now reserved anchored to its edge at exactly the
+  thickness dragged to, and the window is not moved at all unless the shell insists.
 - **Every usage window says when it resets** — in the docked band too, which used to drop it for
   want of room, and that is the shape the app is left in all day. The reading leads with the time
   left rather than a bare clock time, because "when does this free up" is the question a percentage
