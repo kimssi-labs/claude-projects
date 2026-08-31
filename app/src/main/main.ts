@@ -265,12 +265,12 @@ async function createWindow(): Promise<void> {
       const { display } = pickDisplay(current.device);
       const span = bandThickness(dock?.workArea(display) ?? display.workArea, current.edge);
       const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
-      const resized = { ...current, percent };
-      config.saveDock(resized, setupKey());
-      // Re-apply, always: a band is anchored to its edge, and dragging the OUTER edge of a
-      // right- or bottom-docked window changes its size without moving it, which leaves a strip of
-      // desktop between the band and the screen edge. Applying the size puts it back on the edge.
-      void dock.apply(resized).then(() => {
+      config.saveDock({ ...current, percent }, setupKey());
+      // Tell the shell the new extent, and nothing else. Re-applying the dock would place the
+      // window at `percent` rounded to a whole number — up to twenty pixels away from where the
+      // drag ended — which is the jump-and-flicker at the end of every resize. The outer edges
+      // cannot be dragged at all now, so there is no longer a band to pull back onto its edge.
+      void dock.reserveCurrent().then(() => {
         window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
       });
     }, DOCK_RESIZE_SETTLE_MS);

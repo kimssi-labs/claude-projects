@@ -50,10 +50,11 @@ function UsageColumn({ window: usage }: { window: RateWindow }) {
           {usage.resetsAt ? `↻ ${resetLabel(usage.resetsAt)}` : ""}
         </Truncated>
       </div>
+      {/* The number reads as the bar's own label, so it sits close to it rather than at the far
+          side of the column; the bar takes up the slack, so the columns still line up. */}
       <div className="mt-1.5 flex items-center gap-2">
         <Bar percent={usage.usedPercent} className="flex-1" />
-        {/* Fixed width, right-aligned: the numbers still line up down the strip. */}
-        <span className={`text-base font-semibold tabular-nums w-12 text-right ${usageTone(usage.usedPercent)}`}>
+        <span className={`text-base font-semibold tabular-nums leading-none ${usageTone(usage.usedPercent)}`}>
           {formatPercent(usage.usedPercent)}
         </span>
       </div>
@@ -71,8 +72,9 @@ function UsageRow({ window: usage }: { window: RateWindow }) {
   return (
     <div className="flex items-center gap-1.5 shrink-0" title={`${usage.label} usage`}>
       <span className="text-xs font-medium uppercase tracking-wide text-bone-300 whitespace-nowrap">{usage.label}</span>
+      {/* Bar and number are one reading, centred on the same line. */}
       <Bar percent={usage.usedPercent} className="w-20" />
-      <span className={`text-base font-semibold tabular-nums w-12 text-right ${usageTone(usage.usedPercent)}`}>
+      <span className={`text-base font-semibold tabular-nums leading-none ml-0.5 ${usageTone(usage.usedPercent)}`}>
         {formatPercent(usage.usedPercent)}
       </span>
       {usage.resetsAt ? (
@@ -87,9 +89,11 @@ function UsageRow({ window: usage }: { window: RateWindow }) {
   );
 }
 
-export function StatusBar({ status, appVersion, compact = false, onRefresh, controls }: {
+export function StatusBar({ status, appVersion, compact = false, draggable = true, onRefresh, controls }: {
   status: StatusSnapshot | null;
   appVersion: string;
+  /** False while docked: the band is not a window to be dragged around. */
+  draggable?: boolean;
   /** The caption buttons, drawn at the right end of this strip. */
   controls?: React.ReactNode;
   /** Re-read the usage cache now, instead of waiting for the next poll. */
@@ -99,7 +103,7 @@ export function StatusBar({ status, appVersion, compact = false, onRefresh, cont
 }) {
   const hasAnything = !!status && (status.windows.length || status.health.length || !!status.ponytail);
   return (
-    <header className={`drag flex items-center border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8 gap-3 pl-5 pr-0" : "h-14 gap-4 pl-3 pr-0"}`}
+    <header className={`${draggable ? "drag" : ""} flex items-center border-b border-ink-600 bg-ink-800/60 backdrop-blur ${compact ? "h-8 gap-3 pl-5 pr-0" : "h-14 gap-4 pl-3 pr-0"}`}
       // The caption buttons are drawn over the right end of this strip.
       >
       {/* No wordmark here: the title bar already says Hangar, and the strip needs the width. */}

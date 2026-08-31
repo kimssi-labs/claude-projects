@@ -59,6 +59,31 @@ export function bandRect(area: Rectangle, edge: DockEdge, percent: number): Rect
   return { x: area.x + area.width - thickness, y: area.y, width: thickness, height: area.height };
 }
 
+/**
+ * The one side of a docked band that is not against the screen edge.
+ *
+ * A band docked to the top occupies the whole width and is flush with three sides of the screen;
+ * only its bottom is free. Dragging any of the other three cannot make a band — it can only pull
+ * the window off the edge it is reserving.
+ */
+export const OPEN_FACE: Record<DockEdge, string> = {
+  top: "bottom",
+  bottom: "top",
+  left: "right",
+  right: "left",
+};
+
+/**
+ * Whether a resize that grabbed `grabbed` is one a band docked to `edge` should accept.
+ *
+ * Only the open face, and only on its own: a corner grip ("bottom-left") moves two sides at once,
+ * one of which is pinned to the screen.
+ */
+export function resizeAllowed(edge: DockEdge | undefined, grabbed: string | undefined): boolean {
+  if (!edge) return true;                       // not docked: an ordinary window resizes anywhere
+  return grabbed === OPEN_FACE[edge];
+}
+
 export function bandThickness(rect: Rectangle, edge: DockEdge): number {
   return edge === "left" || edge === "right" ? rect.width : rect.height;
 }
@@ -288,6 +313,17 @@ export class Dock {
     };
     window.on("move", reassert);
     window.on("resize", reassert);
+
+    // Refusing the gesture beats undoing it. `reassert` above puts a dragged band back, but the
+    // window has already moved by then, so the user sees it jump and return. These two events are
+    // emitted before the window manager acts and only for a real drag, so nothing moves at all.
+    window.on("will-move", (event) => {
+      if (this.isDocked && !this.placing) event.preventDefault();
+    });
+    window.on("will-resize", (event, _newBounds, details) => {
+      if (!this.isDocked || this.placing) return;
+      if (!resizeAllowed(this.current?.edge, details?.edge)) event.preventDefault();
+    });
   }
 
   /** Put the window exactly on `rect` (physical pixels), without anyone second-guessing it. */
@@ -380,6 +416,30 @@ export class Dock {
       : band;
     const applied = this.window.getBounds();
     return { bounds: target, applied, note };
+  }
+
+  /**
+   * Re-reserve the edge at the size the band already has, leaving the window where it is.
+   *
+   * The alternative — re-applying the dock — recomputes the band from a percentage rounded to a
+   * whole number, so a drag settled at 487 px was answered by placing the window at 480: the band
+   * visibly jumped once, at the end of every resize. One percent of a tall screen is twenty pixels.
+   * The shell only needs to be told the new extent; the window is already correct.
+   */
+  async reserveCurrent(): Promise<void> {
+    const config = this.current;
+    if (!config?.enabled) return;
+    const here = this.window.getBounds();
+    this.assertUntil = Date.now() + SETTLE_MS;
+    if (process.platform === "win32") await this.reserveWindows(here, config.edge);
+    else await this.reserveX11(here, config.edge, pickDisplay(config.device).display.bounds);
+    if (!this.reserved || process.platform !== "win32") return;
+    // Only if the shell moved the reservation out from under us — otherwise nothing moves at all.
+    const want = screen.screenToDipRect(null, this.reserved);
+    const now = this.window.getBounds();
+    if (want.x !== now.x || want.y !== now.y || want.width !== now.width || want.height !== now.height) {
+      this.place(this.reserved);
+    }
   }
 
   /**
