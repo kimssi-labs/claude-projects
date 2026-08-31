@@ -7,7 +7,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import { CHANNEL } from "../main/ipc.js";
-import type { ActionResult, AppInfo, DeleteRequest, DisplayInfo, OpenSessionRequest, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
+import type { ActionResult, AppInfo, DeleteRequest, DisplayInfo, OpenSessionRequest, PastedImage, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
 import type { DockConfig, LaunchConfig, MetricSample, MetricsSnapshot, ProjectInfo, StatusConfig, StatusSnapshot, UiConfig } from "../core/types.js";
 
 export interface MetricsHistoryPayload {
@@ -43,6 +43,12 @@ const api = {
   releaseDock: (): Promise<SettingsPayload> => ipcRenderer.invoke(CHANNEL.releaseDock),
   saveUi: (ui: Partial<UiConfig>): Promise<void> => ipcRenderer.invoke(CHANNEL.saveUi, ui),
   appInfo: (): Promise<AppInfo> => ipcRenderer.invoke(CHANNEL.appInfo),
+  pasteImage: (): Promise<PastedImage> => ipcRenderer.invoke(CHANNEL.pasteImage),
+  onPasteResult: (listener: (result: PastedImage) => void): (() => void) => {
+    const handler = (_event: unknown, result: PastedImage): void => listener(result);
+    ipcRenderer.on(CHANNEL.pasteResult, handler);
+    return () => ipcRenderer.removeListener(CHANNEL.pasteResult, handler);
+  },
   windowState: (): Promise<WindowState> => ipcRenderer.invoke(CHANNEL.windowState),
   windowCommand: (command: WindowCommand): Promise<WindowState> =>
     ipcRenderer.invoke(CHANNEL.windowCommand, command),

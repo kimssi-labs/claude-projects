@@ -91,6 +91,14 @@ export type OpenTarget = "sessionsWindow" | "currentWindow" | "newWindow";
 export interface LaunchConfig {
   /** Executable that hosts a session when `shell` is "custom" — a full path, or a name on PATH. */
   customShell: string;
+  /**
+   * System-wide shortcut that turns a screenshot into something a terminal can paste.
+   *
+   * Empty means the shortcut is off. Pressed anywhere, it writes the clipboard image to a file and
+   * leaves that file's path on the clipboard — a terminal cannot take a bitmap, but it can take a
+   * path, and Claude Code opens the image from it.
+   */
+  pasteHotkey: string;
   shell: ShellChoice;
   permission: PermissionMode;
   /** Terminal command used on Linux; empty means "detect". */

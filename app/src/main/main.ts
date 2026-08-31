@@ -6,20 +6,21 @@
  * wiring: the parts worth testing are tested without Electron.
  */
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, screen, shell } from "electron";
 
 import { ConfigStore, percentFloor } from "../core/config.js";
 import { launchCommand, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
 import { MetricsHistory, SYSTEM_SERIES } from "../core/metrics.js";
 import { claudeHome } from "../core/paths.js";
 import { readStatus, installedMcpServers } from "../core/status.js";
-import { Store } from "../core/store.js";
+import { clipFileName, Store } from "../core/store.js";
 import type { DockConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
 import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
+import { sendPaste } from "./keystroke.js";
 import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 import { Worker } from "node:worker_threads";
 
 import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
@@ -36,6 +37,8 @@ const SPLASH = { width: 380, height: 96 } as const;
 const FIRST_PAINT_CAP_MS = 4000;
 /** How long the app waits for the loading window to paint before getting on with it. */
 const SPLASH_PAINT_CAP_MS = 450;
+/** A moment for the clipboard write to settle before the paste is sent. */
+const PASTE_KEY_DELAY_MS = 60;
 /** Electron's indeterminate value for the taskbar progress; -1 clears it. */
 const TASKBAR_BUSY = 2;
 const TASKBAR_IDLE = -1;
@@ -414,6 +417,50 @@ async function applyDockConfig(wanted: DockConfig): Promise<ActionResult & { set
   return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
 }
 
+/**
+ * A screenshot on the clipboard, as a file a terminal session can be pointed at.
+ *
+ * Claude Code takes an image by path and a terminal cannot paste a bitmap, so the clipboard's image
+ * is written out and its PATH put back on the clipboard. Nobody has to save anything by hand.
+ */
+function pasteClipboardImage(): PastedImage {
+  const image = clipboard.readImage();
+  if (image.isEmpty()) return { ok: false, message: "No image on the clipboard." };
+  try {
+    const dir = store.paths.clips;
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, clipFileName());
+    writeFileSync(file, image.toPNG());
+    clipboard.writeText(file);
+    return { ok: true, file, message: `Image ready to paste: ${file}` };
+  } catch (error) {
+    return { ok: false, message: `Could not save the image: ${(error as Error).message}` };
+  }
+}
+
+/**
+ * Register the system-wide paste shortcut, replacing whatever was registered before.
+ *
+ * Pressed in a terminal, it turns the clipboard's image into a path and presses Ctrl+V there, so
+ * the path arrives where the cursor already is.
+ */
+function registerPasteHotkey(): boolean {
+  globalShortcut.unregisterAll();
+  const accelerator = config.launch().pasteHotkey.trim();
+  if (!accelerator) return true;                  // deliberately off
+  try {
+    return globalShortcut.register(accelerator, () => {
+      const result = pasteClipboardImage();
+      window?.webContents.send(CHANNEL.pasteResult, result);
+      // Only paste for the user when there is something worth pasting.
+      if (result.ok) setTimeout(() => sendPaste(), PASTE_KEY_DELAY_MS);
+    });
+  } catch (error) {
+    console.error("[hangar] paste shortcut unavailable:", (error as Error).message);
+    return false;
+  }
+}
+
 /** Tell the sampler which sessions to follow; called after every scan. */
 function pushTargets(): void {
   worker?.postMessage({ targets: sampleTargets() });
@@ -566,6 +613,13 @@ function registerIpc(): void {
   ipcMain.handle(CHANNEL.loadSettings, () => settingsPayload());
   ipcMain.handle(CHANNEL.displays, () => displays());
 
+  /**
+   * A screenshot on the clipboard, as a file a terminal session can be pointed at.
+   *
+   * Claude Code takes an image by path, and a terminal cannot paste a bitmap — so the useful move
+   * is to write the clipboard image out and put its PATH back on the clipboard, ready to paste.
+   */
+  ipcMain.handle(CHANNEL.pasteImage, (): PastedImage => pasteClipboardImage());
   ipcMain.handle(CHANNEL.windowState, () => windowState());
 
   ipcMain.handle(CHANNEL.windowCommand, async (_event, command: WindowCommand) => {
@@ -595,7 +649,10 @@ function registerIpc(): void {
     // and wins on the next read, so changing the dock in Settings looked like it did nothing.
     if (payload.dock) config.saveDock(payload.dock, setupKey());
     if (payload.status) config.saveStatus(payload.status);
-    if (payload.launch) config.saveLaunch(payload.launch);
+    if (payload.launch) {
+      config.saveLaunch(payload.launch);
+      registerPasteHotkey();                      // the shortcut may have just changed
+    }
     // The theme lives with the rest of the remembered position, so it comes back with it.
     if (payload.ui) {
       config.saveUi({ ...config.ui(), ...payload.ui });
@@ -662,6 +719,7 @@ app.whenReady().then(async () => {
   await createWindow();
   splashSays("Starting the monitor…");
   startSampling();
+  registerPasteHotkey();
 
   closeSplash();
   window?.show();
@@ -696,6 +754,8 @@ app.on("window-all-closed", () => {
 // Windows is already handled synchronously on close; X11 needs an `xprop` call, which does need
 // waiting for — so hold the quit open exactly once, for that.
 let clearingStruts = false;
+app.on("will-quit", () => globalShortcut.unregisterAll());
+
 app.on("before-quit", (event) => {
   dock?.releaseSync();                            // never leave a reserved edge behind
   if (process.platform === "win32" || clearingStruts) return;

@@ -24,6 +24,19 @@ const DPI_SETTLE_MS = 80;
 const SETTLE_MS = 1500;
 /** A docked band is a strip, not a window: its own minimum size must not fight the thickness. */
 const BAND_MINIMUM = 60;
+/**
+ * DWM attributes that decide what Windows 11 paints around a window.
+ *
+ * Measured on a docked band: the top row, the bottom row and about three columns at each side were
+ * the desktop showing through — the 1 px border and the rounded corners. Against a screen edge that
+ * reads as the band not quite fitting, and anything behind it glows through the gap.
+ */
+const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+const DWMWA_BORDER_COLOR = 34;
+const DWMWCP_DEFAULT = 0;
+const DWMWCP_DONOTROUND = 1;
+const DWMWA_COLOR_DEFAULT = 0xffffffff;
+const DWMWA_COLOR_NONE = 0xfffffffe;
 const SWP_NOZORDER = 0x0004;
 const SWP_NOACTIVATE = 0x0010;
 // Without this, Chromium sees WM_WINDOWPOSCHANGING and drags the window back inside the work
@@ -121,6 +134,8 @@ interface Win32Api {
   /** Physical-pixel placement. Electron's setBounds speaks DIP and keeps the window out of the
    *  work area it just shrank; an appbar has to sit in exactly the rectangle it reserved. */
   setWindowPos: (hwnd: number, rect: Rectangle) => void;
+  /** Square corners and no border while docked; the window's usual look when not. */
+  setEdges: (hwnd: number, flush: boolean) => void;
   make: (hwnd: number, edge: number, rect?: Rectangle) => AppBarData;
 }
 
@@ -138,6 +153,7 @@ function loadWin32(): Win32Api | null {
     const koffi = require("koffi") as typeof import("koffi");
     const shell32 = koffi.load("shell32.dll");
     const user32 = koffi.load("user32.dll");
+    const dwmapi = koffi.load("dwmapi.dll");
     const RECT = koffi.struct("RECT", { left: "long", top: "long", right: "long", bottom: "long" });
     // hWnd as an integer, not a pointer type: the value IS the handle, and koffi marshals intptr
     // straight through — which also keeps the struct layout right on both 32- and 64-bit.
@@ -152,6 +168,9 @@ function loadWin32(): Win32Api | null {
     const SetWindowPos = user32.func("__stdcall", "SetWindowPos", "bool", [
       "intptr", "intptr", "int", "int", "int", "int", "uint32",
     ]);
+    const DwmSetWindowAttribute = dwmapi.func("__stdcall", "DwmSetWindowAttribute", "int32", [
+      "intptr", "uint32", koffi.pointer("uint32"), "uint32",
+    ]);
     win32 = {
       SHAppBarMessage: (message, data) => Number(SHAppBarMessage(message, data)),
       SHAppBarMessageAsync: (message, data) => new Promise((resolve, reject) => {
@@ -160,6 +179,13 @@ function loadWin32(): Win32Api | null {
           else resolve(Number(result));               // koffi fills `data` before calling back
         });
       }),
+      setEdges: (hwnd, flush) => {
+        // Both attributes take a DWORD by pointer; koffi wants that as a one-element array.
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+          [flush ? DWMWCP_DONOTROUND : DWMWCP_DEFAULT], 4);
+        DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR,
+          [flush ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT], 4);
+      },
       setWindowPos: (hwnd, rect) =>
         void SetWindowPos(hwnd, 0, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING),
       make: (hwnd, edge, rect) => ({
@@ -325,6 +351,7 @@ export class Dock {
     if (this.window.isMaximized()) this.window.unmaximize();
     this.window.setMaximizable(false);
     this.window.setMovable(false);
+    loadWin32()?.setEdges(nativeHandle(this.window), true);
 
     // Move to the target monitor BEFORE reserving anything.
     //
@@ -378,6 +405,7 @@ export class Dock {
     this.window.setMinimumSize(this.minimum[0] ?? 1, this.minimum[1] ?? 1);
     this.window.setMaximizable(true);
     this.window.setMovable(true);
+    loadWin32()?.setEdges(nativeHandle(this.window), false);
   }
 
   /** Give the space back; safe to call when nothing was reserved. */

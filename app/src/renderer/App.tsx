@@ -189,6 +189,9 @@ export function App() {
     if (result.ok) await refresh();
   }, [screen, session, openProject, project, notify, refresh]);
 
+  // The global shortcut can fire while another window has focus; its verdict still belongs here.
+  useEffect(() => api.onPasteResult(notify), [notify]);
+
   const applySettings = useCallback(async (next: SettingsPayload) => {
     const saved = await api.saveSettings({ dock: next.dock, status: next.status, launch: next.launch, ui: next.ui });
     setSettings(saved);
@@ -238,6 +241,7 @@ export function App() {
           break;
         }
         case "openNewWindow": void open("newWindow"); break;
+        case "pasteImage": void api.pasteImage().then(notify); break;
         case "rename": {
           const id = now.screen === "sessions" ? now.session?.id : now.project?.dir;
           if (id) setEditing(id);

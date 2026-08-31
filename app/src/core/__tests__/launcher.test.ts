@@ -11,7 +11,9 @@ const CLAUDE = "C:\\Users\\me\\.local\\bin\\claude.EXE";
 const SESSION = "abc123";
 
 function request(overrides: Partial<LaunchRequest> = {}): LaunchRequest {
-  const config: Config = { shell: "auto", permission: "default", terminal: "", customShell: "" };
+  const config: Config = {
+    shell: "auto", permission: "default", terminal: "", customShell: "", pasteHotkey: "",
+  };
   return {
     cwd: "C:\\proj",
     claudeExe: CLAUDE,
@@ -26,7 +28,7 @@ function request(overrides: Partial<LaunchRequest> = {}): LaunchRequest {
 }
 
 function withConfig(overrides: Partial<Config>): Config {
-  return { shell: "auto", permission: "default", terminal: "", customShell: "", ...overrides };
+  return { shell: "auto", permission: "default", terminal: "", customShell: "", pasteHotkey: "", ...overrides };
 }
 
 describe("claude argv", () => {

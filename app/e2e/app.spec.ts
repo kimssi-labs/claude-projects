@@ -4,7 +4,7 @@
  * Every run gets its own CLAUDE_HOME fixture, so the test sees a known set of projects and can
  * assert on what a rename actually wrote to disk.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
@@ -166,6 +166,34 @@ test("the help overlay lists the shortcuts", async () => {
     await expect(page.getByText("Rename (alias for a project)")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByText("Keyboard")).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("a screenshot on the clipboard becomes a file, with its path ready to paste", async () => {
+  const { home } = fixture();
+  const { app, page } = await launch(home);
+  try {
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+
+    // Nothing on the clipboard: say so rather than writing an empty file.
+    await app.evaluate(({ clipboard }) => clipboard.clear());
+    expect(await page.evaluate(() => window.hangar.pasteImage())).toMatchObject({ ok: false });
+
+    // A real image, put on the clipboard the way a screenshot tool would.
+    await app.evaluate(({ clipboard, nativeImage }) => {
+      const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGO8WR7OgA0wYRUdtBIATsMBtyGIWZMAAAAASUVORK5CYII=", "base64");
+      clipboard.writeImage(nativeImage.createFromBuffer(png));
+    });
+
+    const pasted = await page.evaluate(() => window.hangar.pasteImage());
+    expect(pasted.ok, pasted.message).toBe(true);
+    expect(pasted.file).toMatch(new RegExp(String.raw`hangar-clips[\\/]clip-\d{8}-\d{6}-\d{3}\.png$`));
+    expect(existsSync(pasted.file as string), "the file is really there").toBe(true);
+
+    // The path is what a terminal can use, so that is what is on the clipboard now.
+    expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(pasted.file);
   } finally {
     await app.close();
   }

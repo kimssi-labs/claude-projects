@@ -17,5 +17,7 @@ export const EDGE_AXIS: Record<DockEdge, "width" | "height"> = {
 
 export const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 export const LAYOUT_MODES: LayoutMode[] = ["auto", "horizontal", "vertical"];
+/** Ctrl+Alt+V: near the paste it assists, and not a shortcut a terminal or editor already wants. */
+export const DEFAULT_PASTE_HOTKEY = "CommandOrControl+Alt+V";
 /** The stacking width is a real window width, so the useful range is a real window's range. */
 export const STACK_BELOW = { min: 360, max: 1600, default: 520, step: 20 } as const;
