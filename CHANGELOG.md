@@ -3,6 +3,13 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.6.2
+
+- **An upright usage bar still says when the window frees up.** Narrowing the pane stood the rate
+  cards up and dropped the reset line with the rest of the text — losing the one thing the gauge is
+  consulted for. The upright card now carries the time remaining (`↻ 2h 11m`) under the percentage,
+  with the exact clock time still in the tooltip.
+
 ## v2.6.1
 
 - **A card at the boundary no longer flickers between its two shapes.** Standing a card upright

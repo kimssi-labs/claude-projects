@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resetLabel } from "../format";
+import { resetLabel, resetRemaining } from "../format";
 
 // Built from today, not a fixed date: formatClock drops the date for a time on the same day, so a
 // hard-coded NOW made these tests pass until midnight and fail afterwards.
@@ -44,5 +44,13 @@ describe("resetLabel", () => {
   it("never counts backwards past zero", () => {
     // A window whose reset has just gone by reads as due, not as negative time.
     expect(resetLabel(minutes(-5), NOW.getTime())).toBe(`0m left · ${CLOCK(minutes(-5))}`);
+  });
+});
+
+describe("resetRemaining", () => {
+  it("is the time left with nothing else — what an upright card has room for", () => {
+    expect(resetRemaining(minutes(42), NOW.getTime())).toBe("42m");
+    expect(resetRemaining(minutes(185), NOW.getTime())).toBe("3h 5m");
+    expect(resetRemaining(minutes(167 * 60 + 47), NOW.getTime())).toBe("6d 23h");
   });
 });

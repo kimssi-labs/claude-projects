@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { MetricSample, RateWindow } from "@core/types";
 
-import { formatClock, formatPercent, resetLabel, usageTone } from "../format";
+import { formatClock, formatPercent, resetLabel, resetRemaining, usageTone } from "../format";
 import { Truncated } from "./Truncated";
 
 const ACCENT = "#d97757";
@@ -253,6 +253,12 @@ export function UsageCard({ window: usage, className = "", compact = false }: {
         <div className={`mt-1 text-[10px] font-medium tabular-nums text-center ${usageTone(usage.usedPercent)}`}>
           {formatPercent(usage.usedPercent)}
         </div>
+        {/* Standing the card up must not cost the only thing the gauge is asked: how long until it frees up. */}
+        {usage.resetsAt ? (
+          <div className="text-[10px] text-bone-400 tabular-nums text-center whitespace-nowrap">
+            ↻ {resetRemaining(usage.resetsAt)}
+          </div>
+        ) : null}
       </div>
     );
   }
