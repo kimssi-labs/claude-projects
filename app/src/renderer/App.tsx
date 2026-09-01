@@ -623,7 +623,7 @@ export function App() {
                   // Band and compact: the machine graphs stay — they are the reason to keep the
                   // window on screen — but as a narrow column with no detail panel behind them.
                   <aside
-                    className={`${asideWidth ? "" : "w-52"} shrink-0 border-l border-ink-600 p-1 flex gap-1 overflow-y-auto no-bar [&>*]:flex-1 [&>*]:min-w-0`}
+                    className={`${asideWidth ? "" : "w-52"} shrink-0 border-l border-ink-600 p-1 space-y-1 overflow-y-auto no-bar`}
                     style={asideWidth ? { width: asideWidth } : undefined}
                   >
                     {usageWindows.map((usage) => <UsageCard key={usage.key} window={usage} compact />)}
