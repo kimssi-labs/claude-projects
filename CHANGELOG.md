@@ -3,6 +3,15 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.6.1
+
+- **A card at the boundary no longer flickers between its two shapes.** Standing a card upright
+  frees width, which put it back over the threshold, which laid it down again — one threshold
+  cannot decide a question whose answer changes the measurement. Going upright now happens below
+  132 px and lying back across only above 168 px, so a card at any width settles.
+- **Memory reads as a share as well as a quantity** — `47% · 15 GB` beside CPU's `27% · 1.7 GHz`,
+  so both machine gauges answer the same two questions.
+
 ## v2.6.0
 
 A day of living in the docked band, fixing what it made visible.

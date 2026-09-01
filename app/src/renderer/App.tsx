@@ -313,9 +313,17 @@ export function App() {
   const totalMemory = memoryTotal || (systemHistory.length ? Math.max(...systemHistory.map((s) => s.memoryBytes)) : 1);
   const usageWindows = status?.windows ?? [];
   const latestSystem = systemHistory.length ? systemHistory[systemHistory.length - 1] : null;
+  // Both machine gauges read the same way: the share first, then the quantity behind it — a load
+  // without its clock, or a percentage of memory without the gigabytes, is half a reading.
   const cpuValue = latestSystem
     ? `${latestSystem.cpu.toFixed(0)}%${cpuGhz ? ` · ${cpuGhz.toFixed(1)} GHz` : ""}`
     : "\u2014";
+  const memoryPercent = latestSystem && totalMemory
+    ? Math.round((latestSystem.memoryBytes / totalMemory) * 100)
+    : null;
+  const memoryValue = latestSystem
+    ? `${memoryPercent === null ? "" : `${memoryPercent}% · `}${formatBytes(latestSystem.memoryBytes)}`
+    : "—";
   const liveSessions = projects.flatMap((p) => p.sessions.filter((s) => s.live));
 
   // Monitoring off means there is nothing to draw — and nothing being measured, which is the point.
@@ -609,7 +617,7 @@ export function App() {
                       max={totalMemory}
                       label="Memory (machine)"
                       short="Mem"
-                      value={latestSystem ? formatBytes(latestSystem.memoryBytes) : "—"}
+                      value={memoryValue}
                       total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                     />
                     <div className="text-[11px] text-bone-500">
@@ -640,7 +648,7 @@ export function App() {
                       max={totalMemory}
                       label="Memory"
                       short="Mem"
-                      value={latestSystem ? formatBytes(latestSystem.memoryBytes) : "—"}
+                      value={memoryValue}
                       total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                     />
                     <div className="text-[11px] text-bone-500">
@@ -670,7 +678,7 @@ export function App() {
                     max={totalMemory}
                     label="Memory"
                     short="Mem"
-                    value={latestSystem ? formatBytes(latestSystem.memoryBytes) : "\u2014"}
+                    value={memoryValue}
                     total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                   />
                 </div>

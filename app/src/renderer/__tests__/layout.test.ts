@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BAND_MAX_HEIGHT, COLUMN_MAX_WIDTH, COMPACT_MAX_WIDTH, layoutFor, STACK_MIN, stackedTopHeight } from "../useLayoutMode";
+import { isNarrow, NARROW_CARD, WIDE_CARD } from "../components/Chart";
 
 describe("layoutFor", () => {
   it("treats a wide, short dock as a band", () => {
@@ -68,5 +69,38 @@ describe("stackedTopHeight", () => {
   it("leaves the even split alone, and waits until it has been measured", () => {
     expect(stackedTopHeight(0, BAND_PANES)).toBe(0);
     expect(stackedTopHeight(661, 0)).toBe(0);          // nothing measured yet: split evenly
+  });
+});
+
+/**
+ * A card's shape must not chase its own width.
+ *
+ * Standing a card upright frees width, which put it back over the threshold, which laid it down
+ * again: at the boundary the two shapes alternated forever. One threshold cannot do this job.
+ */
+describe("isNarrow", () => {
+  it("keeps the shape it is in through the gap between the thresholds", () => {
+    const between = (NARROW_CARD + WIDE_CARD) / 2;
+    expect(isNarrow(between, true), "upright stays upright").toBe(true);
+    expect(isNarrow(between, false), "and across stays across").toBe(false);
+  });
+
+  it("still changes shape when the width really leaves the gap", () => {
+    expect(isNarrow(NARROW_CARD - 20, false)).toBe(true);
+    expect(isNarrow(WIDE_CARD + 20, true)).toBe(false);
+  });
+
+  it("never oscillates: one width, applied over and over, settles", () => {
+    for (const width of [100, NARROW_CARD, 150, WIDE_CARD, 200]) {
+      let shape = isNarrow(width, false);
+      const settled = shape;
+      for (let i = 0; i < 10; i += 1) shape = isNarrow(width, shape);
+      expect(shape, `width ${width} settles`).toBe(settled);
+    }
+  });
+
+  it("does not guess before the card has been measured", () => {
+    expect(isNarrow(0, true)).toBe(true);
+    expect(isNarrow(0, false)).toBe(false);
   });
 });
