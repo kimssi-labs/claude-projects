@@ -339,6 +339,24 @@ export function App() {
   // Both thin shapes lose the same things: the labels on buttons, and the space for two panes.
   const tight = band || column;
 
+  // The same four gauges whichever way they are laid out — down a column when the window is narrow,
+  // across a row when it is short.
+  const machineCards = (
+    <>
+      {usageWindows.map((usage) => <UsageCard key={usage.key} window={usage} compact />)}
+      <AreaChart samples={systemHistory} field="cpu" max={100} label="CPU" value={cpuValue} />
+      <AreaChart
+        samples={systemHistory}
+        field="memoryBytes"
+        max={totalMemory}
+        label="Memory"
+        short="Mem"
+        value={memoryValue}
+        total={memoryTotal ? formatBytes(memoryTotal) : undefined}
+      />
+    </>
+  );
+
   const projectPane = (
     <>
           <div className={tight ? "p-1" : "p-2"}>
@@ -629,29 +647,20 @@ export function App() {
                 </aside>
                 ) : (
                   // Band and compact: the machine graphs stay — they are the reason to keep the
-                  // window on screen — but as a narrow column with no detail panel behind them.
+                  // window on screen — but with no detail panel behind them.
+                  //
+                  // A band is short, not narrow: four cards down a column ran off the bottom of a
+                  // 320 px strip and the last two were only reachable by scrolling, which for a
+                  // gauge is the same as not being drawn. Short means lay them across.
                   <aside
-                    className={`${asideWidth ? "" : "w-52"} shrink-0 border-l border-ink-600 p-1 space-y-1 overflow-y-auto no-bar`}
+                    className={`${asideWidth ? "" : band ? "w-80" : "w-52"} shrink-0 border-l border-ink-600 p-1 ${
+                      band ? "flex flex-col gap-1 min-h-0" : "space-y-1 overflow-y-auto no-bar"}`}
                     style={asideWidth ? { width: asideWidth } : undefined}
                   >
-                    {usageWindows.map((usage) => <UsageCard key={usage.key} window={usage} compact />)}
-                    <AreaChart
-                      samples={systemHistory}
-                      field="cpu"
-                      max={100}
-                      label="CPU"
-                      value={cpuValue}
-                    />
-                    <AreaChart
-                      samples={systemHistory}
-                      field="memoryBytes"
-                      max={totalMemory}
-                      label="Memory"
-                      short="Mem"
-                      value={memoryValue}
-                      total={memoryTotal ? formatBytes(memoryTotal) : undefined}
-                    />
-                    <div className="text-[11px] text-bone-500">
+                    {band
+                      ? <div className="flex-1 min-h-0 flex items-start gap-1 [&>*]:min-w-0 [&>*]:flex-1">{machineCards}</div>
+                      : machineCards}
+                    <div className={`text-[11px] text-bone-500 ${band ? "shrink-0 text-center" : ""}`}>
                       {liveSessions.length ? `${liveSessions.length} running` : "idle"}
                     </div>
                   </aside>

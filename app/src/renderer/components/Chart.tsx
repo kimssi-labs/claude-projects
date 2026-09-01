@@ -199,6 +199,9 @@ export function AreaChart({ samples, field, max, label, value, total, short, cla
     ? Math.min(100, ((field === "cpu" ? latest.cpu : latest.memoryBytes) / (max || 1)) * 100)
     : 0;
 
+  // "31% · 1.8 GHz" is two readings; upright they go on two lines rather than one that overflows.
+  const [head, detail] = value.split(" · ");
+
   // Too narrow to read a label and a number across: stand the reading up instead of overlapping it.
   if (narrow) {
     return (
@@ -206,8 +209,15 @@ export function AreaChart({ samples, field, max, label, value, total, short, cla
         <div className="text-[10px] text-bone-400 text-center whitespace-nowrap">{short ?? label}</div>
         <UprightBar percent={percent} tone="bg-accent" />
         <div className="mt-1 text-[10px] font-medium text-bone-100 tabular-nums text-center">
-          {value.split(" · ")[0]}
+          {head}
         </div>
+        {/* The share alone is half the reading: a busy CPU still has a clock, and a percentage of
+            memory means nothing without the quantity it is a percentage of. */}
+        {detail ? (
+          <div className="text-[10px] text-bone-400 tabular-nums text-center whitespace-nowrap">
+            {detail}
+          </div>
+        ) : null}
       </div>
     );
   }

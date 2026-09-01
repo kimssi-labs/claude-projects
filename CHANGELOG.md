@@ -3,6 +3,16 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.6.3
+
+- **Upright gauges keep their second reading.** Standing a card up dropped everything but the
+  percentage: an upright CPU card lost its clock speed and memory lost the quantity. All four now
+  carry it on a line of its own — `31%` over `1.8 GHz`, `34%` over `↻ 2h 11m`.
+- **The docked band shows all four gauges instead of scrolling two of them out of sight.** A band is
+  short, not narrow, and the gauges were stacked down a column: in a 320 px strip the machine graphs
+  fell off the bottom. They now lie across the panel, upright and side by side, with the running
+  count under them.
+
 ## v2.6.2
 
 - **An upright usage bar still says when the window frees up.** Narrowing the pane stood the rate
