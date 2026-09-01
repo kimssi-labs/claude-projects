@@ -125,17 +125,22 @@ describe("launch command", () => {
   });
 });
 
-describe("a custom host program", () => {
-  it("is started with the claude command as its arguments", () => {
-    const custom = "C:\tools\my-terminal.exe";
-    const hosted = hostedCommand(["claude", "--resume", SESSION], "custom", "win32", true, custom);
-    expect(hosted.exe).toBe(custom);
-    expect(hosted.args).toEqual(["claude", "--resume", SESSION]);
+describe("a custom program", () => {
+  it("is opened on the project folder, with no terminal and no claude command", () => {
+    // "Custom program" means a program like VS Code: what runs inside it is its own business, so
+    // it is handed the project — not the claude invocation, which it would read as files to open.
+    const custom = "C:\\tools\\Code.exe";
+    const command = launchCommand(request({ config: withConfig({ shell: "custom", customShell: custom }) }));
+    expect(command.exe).toBe(custom);
+    expect(command.args).toEqual(["C:\\proj"]);
+    expect(command.cwd).toBe("C:\\proj");
+    expect(command.ownsWindow).toBe(true);
   });
 
   it("falls back to the platform default when no path was given", () => {
     // "custom" with an empty path is a half-finished setting, not a reason to fail to open.
-    const hosted = hostedCommand(["claude"], "custom", "win32", true, "   ");
-    expect(hosted.exe).toBe("pwsh.exe");
+    const command = launchCommand(request({ config: withConfig({ shell: "custom", customShell: "   " }) }));
+    expect(command.exe).toBe(WT_EXE);
+    expect(command.args.join(" ")).toContain("pwsh.exe");
   });
 });

@@ -293,7 +293,18 @@ test("every monitor: each edge reserves on the axis it belongs to", async () => 
   }
 });
 
-test("a docked window that is dragged or maximised stays docked; restoring it undocks", async () => {
+/**
+ * Docking and maximising are separate states, and separate buttons.
+ *
+ * They shared a button once, so "restore" gave back a screen edge in one state and a window size in
+ * the other — the same glyph meaning two things depending on how the window got where it was.
+ */
+/** The thinner of the band's two spans — what "the band's shape" means for the test above. */
+function bandThicknessOf(rect: { width: number; height: number }): number {
+  return Math.min(rect.width, rect.height);
+}
+
+test("the dock button toggles the band; maximise is a different thing entirely", async () => {
   const { app, page } = await launch(fixture());
   try {
     const displays = await monitors(page);
@@ -315,35 +326,44 @@ test("a docked window that is dragged or maximised stays docked; restoring it un
     }, { timeout: 8000 }).toBe(true);
     expect((await settingsOf(page)).dock.enabled, "still docked after a drag").toBe(true);
 
-    // A docked window cannot be dragged off its edge at all — the window manager is told so.
+    // A docked window cannot be dragged off its edge, resized by its frame, or maximised into.
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMovable()),
       "a band is not movable").toBe(false);
-    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMaximizable()),
-      "a band is already the full state").toBe(false);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isResizable()),
+      "a band's frame does not resize — that is what takes the cursor off three sides").toBe(false);
 
-    // Maximising keeps it too — there is nothing to maximise into, so the band simply stays.
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.maximize());
-    await page.waitForTimeout(1200);
-    expect((await settingsOf(page)).dock.enabled, "still docked after maximise").toBe(true);
-    expect((await workAreaOf(app, display.id)).height, "band still reserved").toBeLessThan(before.height);
-    const afterMaximise = await bounds(app);
-    samePixels(afterMaximise.height, band.height, "still the band it was");
-
-    // The caption button says so: docked is the maximised state, so it offers to restore.
-    await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
-
-    // Restoring is the gesture that asks for an ordinary window, and gives the edge back.
-    await page.getByRole("button", { name: "Restore" }).click();
+    // The dock button is the one that lets the edge go, and it says so.
+    await expect(page.getByRole("button", { name: "Undock" })).toBeVisible();
+    await page.getByRole("button", { name: "Undock" }).click();
     await expect.poll(async () => (await workAreaOf(app, display.id)).height, { timeout: 8000 })
       .toBe(before.height);
     await expect.poll(async () => (await settingsOf(page)).dock.enabled).toBe(false);
-    // ...and the button goes back to offering the maximise it now means.
-    await expect(page.getByRole("button", { name: "Maximise" })).toBeVisible();
+
+    // Undocked, the window is a window again — not the band's strip left pressed against the edge,
+    // and wholly inside a display's work area rather than hanging past it.
+    const floated = await bounds(app);
+    const inside = await app.evaluate(({ screen: s }, rect) => s.getAllDisplays().some((d) =>
+      rect.x >= d.workArea.x && rect.y >= d.workArea.y
+      && rect.x + rect.width <= d.workArea.x + d.workArea.width
+      && rect.y + rect.height <= d.workArea.y + d.workArea.height), floated);
+    expect(inside, "the undocked window sits wholly inside a work area").toBe(true);
+    expect(floated.height, "and has a window's shape back, not the band's").toBeGreaterThan(bandThicknessOf(band) + 40);
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMovable()),
       "an ordinary window moves again").toBe(true);
+    await expect(page.getByRole("button", { name: "Dock to the edge" })).toBeVisible();
 
-    // And maximising from here goes back to the band this arrangement remembers.
+    // Maximise is now only ever maximise: it fills the screen and reserves nothing.
     await page.getByRole("button", { name: "Maximise" }).click();
+    await expect.poll(async () => app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.isMaximized()), { timeout: 8000 }).toBe(true);
+    expect((await settingsOf(page)).dock.enabled, "maximising does not dock").toBe(false);
+    expect((await workAreaOf(app, display.id)).height, "and reserves nothing").toBe(before.height);
+    await page.getByRole("button", { name: "Restore" }).click();
+    await expect.poll(async () => app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.isMaximized()), { timeout: 8000 }).toBe(false);
+
+    // And the dock button still brings the band back.
+    await page.getByRole("button", { name: "Dock to the edge" }).click();
     await expect.poll(async () => (await settingsOf(page)).dock.enabled, { timeout: 8000 }).toBe(true);
     await expect.poll(async () => (await workAreaOf(app, display.id)).height, { timeout: 8000 })
       .toBeLessThan(before.height);
@@ -413,7 +433,9 @@ test("a dock change made in settings sticks", async () => {
 });
 
 test("the layout setting decides the shape, and the panes remember their sizes", async () => {
-  const home = fixture({ layout: "vertical", navWidth: 300, asideWidth: 260, stackTop: 200 });
+  // Pane sizes are fractions of the window, not pixels: the same setting has to mean the same
+  // thing in a wide window and in a thin docked band.
+  const home = fixture({ layout: "vertical", navWidth: 0.25, asideWidth: 0.2, stackTop: 0.4 });
   const { app, page } = await launch(home);
   try {
     // Stacked was asked for, so a wide window is stacked too: the project list is the main pane.
@@ -422,7 +444,7 @@ test("the layout setting decides the shape, and the panes remember their sizes",
     expect(nav).toBe(false);                                  // stacked has no sidebar
 
     const saved = await settingsOf(page);
-    expect(saved.ui).toMatchObject({ layout: "vertical", navWidth: 300, asideWidth: 260, stackTop: 200 });
+    expect(saved.ui).toMatchObject({ layout: "vertical", navWidth: 0.25, asideWidth: 0.2, stackTop: 0.4 });
 
     // Switching to side-by-side brings the sidebar back without a restart.
     const horizontal: typeof saved.ui = { ...saved.ui, layout: "horizontal" };

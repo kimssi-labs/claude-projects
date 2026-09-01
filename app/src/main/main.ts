@@ -189,6 +189,41 @@ function rectsOverlap(a: Electron.Rectangle, b: Electron.Rectangle): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+/** `rect` moved and, if need be, shrunk until the whole of it is inside `area`. */
+function clampInto(rect: Electron.Rectangle, area: Electron.Rectangle): Electron.Rectangle {
+  const width = Math.min(rect.width, area.width);
+  const height = Math.min(rect.height, area.height);
+  return {
+    width, height,
+    x: Math.min(Math.max(rect.x, area.x), area.x + area.width - width),
+    y: Math.min(Math.max(rect.y, area.y), area.y + area.height - height),
+  };
+}
+
+/**
+ * Give an undocked window a window's shape and place, wholly on screen.
+ *
+ * `release()` only gives the reservation back: the window itself stayed exactly where the band
+ * was — a strip pressed against a screen edge, half of it sometimes past it. The remembered
+ * floating rectangle comes back when there is one; otherwise the default size, centred on the
+ * display the band was on. Either way the result is clamped inside that display's work area.
+ */
+function placeFloating(): void {
+  if (!window || window.isDestroyed()) return;
+  const display = screen.getDisplayMatching(window.getBounds());
+  const area = display.workArea;
+  const saved = config.ui().window;
+  const rect = saved && screen.getAllDisplays().some((d) => rectsOverlap(d.workArea, saved))
+    ? saved
+    : {
+      width: WINDOW.width,
+      height: WINDOW.height,
+      x: area.x + Math.round((area.width - WINDOW.width) / 2),
+      y: area.y + Math.round((area.height - WINDOW.height) / 2),
+    };
+  window.setBounds(clampInto(rect, screen.getDisplayMatching(rect).workArea));
+}
+
 function scanProjects(): ProjectInfo[] {
   const t0 = Date.now();
   lastProjects = store.scan();
@@ -670,16 +705,26 @@ function registerIpc(): void {
     if (!window || window.isDestroyed()) return windowState();
     if (command === "minimize") window.minimize();
     else if (command === "close") window.close();
-    else if (dock?.isDocked) {
-      // Docked IS the maximised state, so "restore" here means: be an ordinary window again.
-      await dock.release();
-      dock.onUserUndock?.();
-    } else if (window.isMaximized()) {
-      window.unmaximize();
+    else if (command === "dock") {
+      if (dock?.isDocked) {
+        await dock.release();
+        placeFloating();
+        dock.onUserUndock?.();
+      } else {
+        // Back to the band this arrangement of monitors remembers.
+        await applyDockConfig({ ...config.dock(null, setupKey()), enabled: true });
+      }
     } else {
-      // ...and "maximise" means go back to the band, when this arrangement has one to go back to.
-      const saved = config.dock(null, setupKey());
-      if (saved.device || saved.percent) await applyDockConfig({ ...saved, enabled: true });
+      // Maximise means fill the screen, and never the band: a docked window gives the edge back
+      // first, so the two states cannot be held at once. It is placed as a window before it is
+      // maximised, so the restore AFTER the maximise has a window shape to come back to — without
+      // this, restoring returned to the band's rectangle, pressed against the edge.
+      if (dock?.isDocked) {
+        await dock.release();
+        placeFloating();
+        dock.onUserUndock?.();
+      }
+      if (window.isMaximized()) window.unmaximize();
       else window.maximize();
     }
     pushWindowState();
@@ -740,6 +785,7 @@ function registerIpc(): void {
 
   ipcMain.handle(CHANNEL.releaseDock, async () => {
     await dock?.release();
+    placeFloating();
     pushWindowState();
     const current = config.dock(null, setupKey());
     config.saveDock({ ...current, enabled: false }, setupKey());

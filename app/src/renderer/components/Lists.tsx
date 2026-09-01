@@ -8,9 +8,22 @@ import { useEffect, useRef } from "react";
 
 import type { MetricSample, ProjectInfo, SessionInfo } from "@core/types";
 
-import { Sparkline } from "./Chart";
+import { Sparkline, useElementWidth } from "./Chart";
 import { Truncated } from "./Truncated";
 import { formatBytes, formatSince, formatTime } from "../format";
+
+/**
+ * Below these widths a row cannot hold its name and its numbers on one line.
+ *
+ * They differ because the rows carry different fixed content, measured: a project row spends about
+ * 110 px on the session count and the time, while a LIVE session row spends 324 — a 96 px
+ * sparkline, 96 px of CPU and memory, and a 112 px size-and-time column. At a 460 px row that left
+ * the name 90 px and "Claude Projects" became "Claude Pro…", which is the half a reader needs.
+ * Narrow, the numbers drop to a second line: the row is taller and all of it is legible.
+ */
+const PROJECT_STACK_WIDTH = 300;
+const SESSION_STACK_WIDTH = 300;
+const LIVE_SESSION_STACK_WIDTH = 520;
 
 function LiveDot({ live }: { live: boolean }) {
   return (
@@ -39,13 +52,16 @@ export function ProjectRow({
   onOpen: () => void;
 }) {
   const ref = useScrollIntoView(selected);
+  const [box, width] = useElementWidth<HTMLDivElement>();
+  const stacked = width > 0 && width < PROJECT_STACK_WIDTH;
   return (
     <div
       ref={ref}
-      className={`row ${selected ? "row-selected" : "hover:bg-ink-700/60"}`}
+      className={`row ${selected ? "row-selected" : "hover:bg-ink-700/60"} ${stacked ? "flex-wrap" : ""}`}
       onClick={onSelect}
       onDoubleClick={onOpen}
     >
+      <div ref={box} className="absolute inset-x-0 h-0" aria-hidden="true" />
       <LiveDot live={project.liveCount > 0} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -60,9 +76,9 @@ export function ProjectRow({
         </div>
         <Truncated className="text-[11px] text-bone-500">{project.cwd ?? "folder unknown"}</Truncated>
       </div>
-      <div className="text-right shrink-0">
-        <div className="text-xs text-bone-300 tabular-nums">{project.sessions.length} sessions</div>
-        <div className="text-[11px] text-bone-500 tabular-nums">{formatSince(project.lastUsed)}</div>
+      <div className={`shrink-0 tabular-nums ${stacked ? "w-full pl-5 flex gap-2 text-[11px] text-bone-400" : "text-right"}`}>
+        <div className={stacked ? "" : "text-xs text-bone-300"}>{project.sessions.length} sessions</div>
+        <div className={stacked ? "text-bone-500" : "text-[11px] text-bone-500"}>{formatSince(project.lastUsed)}</div>
       </div>
     </div>
   );
@@ -78,14 +94,17 @@ export function SessionRow({
   onOpen: () => void;
 }) {
   const ref = useScrollIntoView(selected);
+  const [box, width] = useElementWidth<HTMLDivElement>();
+  const stacked = width > 0 && width < (session.live ? LIVE_SESSION_STACK_WIDTH : SESSION_STACK_WIDTH);
   const latest = samples.length ? samples[samples.length - 1] : null;
   return (
     <div
       ref={ref}
-      className={`row ${selected ? "row-selected" : "hover:bg-ink-700/60"}`}
+      className={`row ${selected ? "row-selected" : "hover:bg-ink-700/60"} ${stacked ? "flex-wrap" : ""}`}
       onClick={onSelect}
       onDoubleClick={onOpen}
     >
+      <div ref={box} className="absolute inset-x-0 h-0" aria-hidden="true" />
       <LiveDot live={session.live} />
       <div className="min-w-0 flex-1">
         <Truncated className="text-sm text-bone-100">{session.title}</Truncated>
@@ -94,16 +113,25 @@ export function SessionRow({
         </Truncated>
       </div>
       {session.live ? (
-        <div className="flex items-center gap-2 shrink-0">
-          <Sparkline samples={samples} />
-          <span className="text-[11px] text-bone-400 tabular-nums w-24 text-right">
-            {latest ? `${latest.cpu.toFixed(0)}% · ${formatBytes(latest.memoryBytes)}` : "—"}
+        // CPU and memory are different questions, so each gets its own line and its own number.
+        <div className={`flex items-center gap-3 shrink-0 ${stacked ? "w-full pl-5" : ""}`}>
+          <span className="flex items-center gap-1.5" title="CPU — this session's whole process tree">
+            <Sparkline samples={samples} field="cpu" className="w-16" />
+            <span className="text-[11px] text-bone-400 tabular-nums">
+              {latest ? `${latest.cpu.toFixed(0)}%` : "—"}
+            </span>
+          </span>
+          <span className="flex items-center gap-1.5" title="Memory — this session's whole process tree">
+            <Sparkline samples={samples} field="memoryBytes" className="w-16" />
+            <span className="text-[11px] text-bone-400 tabular-nums">
+              {latest ? formatBytes(latest.memoryBytes) : "—"}
+            </span>
           </span>
         </div>
       ) : null}
-      <div className="text-right shrink-0 w-28">
-        <div className="text-xs text-bone-300 tabular-nums">{formatBytes(session.bytes)}</div>
-        <div className="text-[11px] text-bone-500 tabular-nums">{formatTime(session.modifiedAt)}</div>
+      <div className={`shrink-0 tabular-nums ${stacked ? "w-full pl-5 flex gap-2 text-[11px] text-bone-400" : "text-right w-28"}`}>
+        <div className={stacked ? "" : "text-xs text-bone-300"}>{formatBytes(session.bytes)}</div>
+        <div className={stacked ? "text-bone-500" : "text-[11px] text-bone-500"}>{formatTime(session.modifiedAt)}</div>
       </div>
     </div>
   );

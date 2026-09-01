@@ -10,15 +10,15 @@ import type { MetricsSnapshot } from "../types.js";
 const NOW = 1_800_000_000_000;
 
 describe("rate windows", () => {
-  it("reports every bucket Claude Code publishes, including the model-specific weeks", () => {
+  it("reports the two buckets Claude Code publishes, and ignores ones it never sends", () => {
     const windows = rateWindows({
       five_hour: { used_percentage: 78, resets_at: NOW / 1000 + 3600 },
       seven_day: { used_percentage: 57, resets_at: NOW / 1000 + 86400 },
+      // Per-model weekly buckets were drawn for a while and never once arrived; if one ever shows
+      // up in a cache it is not a window this app knows how to label, so it is left out.
       seven_day_opus: { used_percentage: 41, resets_at: NOW / 1000 + 86400 },
-      seven_day_sonnet: { used_percentage: 12, resets_at: NOW / 1000 + 86400 },
     }, NOW);
-    expect(windows.map((w) => w.key)).toEqual(["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"]);
-    expect(windows.find((w) => w.key === "seven_day_opus")).toMatchObject({ usedPercent: 41, label: "7d Fable/Opus" });
+    expect(windows.map((w) => w.key)).toEqual(["five_hour", "seven_day"]);
   });
 
   it("skips a bucket that is not there and zeroes one that already rolled", () => {
@@ -33,23 +33,35 @@ describe("rate windows", () => {
 });
 
 describe("readStatus", () => {
-  it("shows only the segments this machine has", () => {
+  it("reports the windows Claude Code published, and nothing this machine happens to have", () => {
     const home = join(mkdtempSync(join(tmpdir(), "cp-status-")), ".claude");
     mkdirSync(join(home, "cache"), { recursive: true });
-    expect(readStatus(home)).toEqual({ windows: [], health: [], ponytail: null });
+    expect(readStatus(home)).toEqual({ windows: [] });
 
     writeFileSync(join(home, "cache", "rate-limits.json"), JSON.stringify({
       five_hour: { used_percentage: 10, resets_at: NOW / 1000 + 60 },
+      seven_day: { used_percentage: 40, resets_at: NOW / 1000 + 6000 },
     }));
-    writeFileSync(join(home, ".ponytail-active"), "full\n");
-    const status = readStatus(home, { outlook: true, ponytail: true, usage: true }, NOW);
-    expect(status.windows).toHaveLength(1);
-    expect(status.ponytail).toBe("full");
+    expect(readStatus(home, { windows: null }, NOW).windows.map((w) => w.key))
+      .toEqual(["five_hour", "seven_day"]);
 
-    // An MCP cache left over from an older version is not a source any more: the dot reported a
-    // separate handshake, never this session's connection, so reconnecting a server never moved it.
+    // Caches from the segments that were removed are not sources any more.
     writeFileSync(join(home, "cache", "mcp-status.json"), JSON.stringify({ servers: { wiki: { ok: true } } }));
-    expect(readStatus(home, { outlook: true, ponytail: true, usage: true }, NOW).health).toEqual([]);
+    writeFileSync(join(home, "cache", "outlook-status.json"), JSON.stringify({ servers: { web: { ok: true } } }));
+    writeFileSync(join(home, ".ponytail-active"), "full");
+    expect(Object.keys(readStatus(home, { windows: null }, NOW))).toEqual(["windows"]);
+  });
+
+  it("draws only the windows that were chosen", () => {
+    const home = join(mkdtempSync(join(tmpdir(), "cp-status-")), ".claude");
+    mkdirSync(join(home, "cache"), { recursive: true });
+    writeFileSync(join(home, "cache", "rate-limits.json"), JSON.stringify({
+      five_hour: { used_percentage: 10, resets_at: NOW / 1000 + 60 },
+      seven_day: { used_percentage: 40, resets_at: NOW / 1000 + 6000 },
+    }));
+    expect(readStatus(home, { windows: ["seven_day"] }, NOW).windows.map((w) => w.key)).toEqual(["seven_day"]);
+    // Unticking every one is how the gauges are turned off.
+    expect(readStatus(home, { windows: [] }, NOW).windows).toEqual([]);
   });
 });
 

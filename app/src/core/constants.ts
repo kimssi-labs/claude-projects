@@ -21,3 +21,16 @@ export const LAYOUT_MODES: LayoutMode[] = ["auto", "horizontal", "vertical"];
 export const DEFAULT_PASTE_HOTKEY = "CommandOrControl+Alt+V";
 /** The stacking width is a real window width, so the useful range is a real window's range. */
 export const STACK_BELOW = { min: 360, max: 1600, default: 520, step: 20 } as const;
+
+/**
+ * Rate-limit buckets Claude Code reports, in the order they are shown.
+ *
+ * Only the two it actually sends. Per-model weekly windows (seven_day_opus, seven_day_sonnet) were
+ * listed here for a while and never once arrived — verified against the real status-line payload
+ * with Fable 5 running, which carried exactly these two keys — so the gauges for them could never
+ * draw and only made the settings list lie about what the strip can show.
+ */
+export const RATE_WINDOWS: { key: string; label: string; short: string }[] = [
+  { key: "five_hour", label: "5h", short: "5h" },
+  { key: "seven_day", label: "7d", short: "7d" },
+];

@@ -159,7 +159,7 @@ test("stacked: entering a project shows its sessions, even with a tall remembere
   const home = fixture();
   mkdirSync(join(home, "config"), { recursive: true });
   writeFileSync(join(home, "config", "manager.json"), JSON.stringify({
-    ui: { layout: "vertical", stackTop: 661 },
+    ui: { layout: "vertical", stackTop: 0.94 },
   }));
 
   const { app, page } = await launch(home);
@@ -181,6 +181,43 @@ test("stacked: entering a project shows its sessions, even with a tall remembere
     expect(box, "the session row has a box").not.toBeNull();
     expect(box!.y + box!.height).toBeLessThanOrEqual(await page.evaluate(() => window.innerHeight));
     expect(await overflow(page)).toEqual({ x: 0, y: 0 });
+  } finally {
+    await app.close();
+  }
+});
+
+/**
+ * The usage gauges sit with the machine graphs now, in every shape.
+ *
+ * They were in the title bar, where a narrow window cut them off. Moving them meant adding them to
+ * four places, and the stacked strip — the shape this app is usually left in — was the one that got
+ * missed: the window showed CPU and memory and no usage at all.
+ */
+test("every shape draws the usage gauges beside the machine graphs", async () => {
+  const home = fixture();
+  mkdirSync(join(home, "cache"), { recursive: true });
+  const now = Math.floor(Date.now() / 1000);
+  writeFileSync(join(home, "cache", "rate-limits.json"), JSON.stringify({
+    five_hour: { used_percentage: 16, resets_at: now + 3600 },
+    seven_day: { used_percentage: 7, resets_at: now + 500_000 },
+  }));
+
+  const { app, page } = await launch(home);
+  try {
+    // The first line of a card is its label — that is what says whether a gauge is drawn.
+    const labels = async (): Promise<string[]> =>
+      page.evaluate(() => [...document.querySelectorAll(".card")]
+        .map((c) => ((c as HTMLElement).innerText.trim().split(String.fromCharCode(10))[0] ?? "")));
+
+    // Stacked, as a docked band is: the gauges share the bottom strip with CPU and memory.
+    // 430, not narrower: the window has a 420 px minimum and will not shrink past it.
+    await resize(app, page, 430, 900);
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+    await expect.poll(labels, { timeout: 8000 }).toEqual(expect.arrayContaining(["5h", "7d"]));
+
+    // Wide, where the graphs live in the side panel.
+    await resize(app, page, 1200, 800);
+    await expect.poll(labels, { timeout: 8000 }).toEqual(expect.arrayContaining(["5h", "7d"]));
   } finally {
     await app.close();
   }

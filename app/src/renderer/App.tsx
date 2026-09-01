@@ -11,10 +11,10 @@ import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSna
 
 import { api, type AppInfo, type DisplayInfo, type SettingsPayload } from "./api";
 import { DockGrip } from "./components/DockGrip";
-import { AreaChart } from "./components/Chart";
+import { AreaChart, UsageCard } from "./components/Chart";
 import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./components/Lists";
 import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./components/Settings";
-import { StatusBar } from "./components/StatusBar";
+import { TitleBar } from "./components/TitleBar";
 import { formatBytes } from "./format";
 import { Splitter } from "./components/Splitter";
 import { Truncated } from "./components/Truncated";
@@ -53,20 +53,23 @@ export function App() {
   const [systemHistory, setSystemHistory] = useState<MetricSample[]>([]);
   // Not part of the history: a clock speed is a reading of right now, not a series.
   const [cpuGhz, setCpuGhz] = useState<number | null>(null);
+  /** What the machine has, as the sampler reports it — the ceiling the memory graph is drawn to. */
+  const [memoryTotal, setMemoryTotal] = useState(0);
   // Docked counts as maximised: the band is the window at its full extent, so the middle caption
   // button offers to restore, and restoring is what gives the edge back.
   const [windowState, setWindowState] = useState({ maximized: false, docked: false });
   const [sessionHistory, setSessionHistory] = useState<Record<string, MetricSample[]>>({});
   const [theme, setTheme] = useState<ThemeMode>("system");
-  // 0 = the width the layout would have chosen; anything else is what the user dragged it to.
-  const [navWidth, setNavWidth] = useState(0);
-  const [asideWidth, setAsideWidth] = useState(0);
-  const [stackTop, setStackTop] = useState(0);
+  // Fractions of the window, not pixels: 0 = the size the layout would have chosen, anything else
+  // is where the user left the divider — and it means the same thing when the window changes shape.
+  const [navFraction, setNavFraction] = useState(0);
+  const [asideFraction, setAsideFraction] = useState(0);
+  const [stackFraction, setStackFraction] = useState(0);
   /** Measured height of the stacked pair, so the divider can be kept inside it. */
   const [stackHeight, setStackHeight] = useState(0);
   const stackRef = useRef<HTMLDivElement | null>(null);
   useTheme(theme);
-  const { mode, height: windowHeight } = useLayoutMode(settings?.ui.layout ?? "auto", settings?.ui.stackBelow ?? 520);
+  const { mode, width: windowWidth, height: windowHeight } = useLayoutMode(settings?.ui.layout ?? "auto", settings?.ui.stackBelow ?? 520);
   const searchRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLInputElement>(null);
 
@@ -83,9 +86,9 @@ export function App() {
         api.scan(), api.status(), api.appInfo(), api.metrics(), api.loadSettings(),
       ]);
       setTheme(saved.ui.theme);
-      setNavWidth(saved.ui.navWidth);
-      setAsideWidth(saved.ui.asideWidth);
-      setStackTop(saved.ui.stackTop);
+      setNavFraction(saved.ui.navWidth);
+      setAsideFraction(saved.ui.asideWidth);
+      setStackFraction(saved.ui.stackTop);
       setSettings(saved);
       setProjects(scanned);
       setStatus(statusSnapshot);
@@ -122,6 +125,7 @@ export function App() {
 
   useEffect(() => api.onMetrics((snapshot: MetricsSnapshot) => {
     setCpuGhz(snapshot.system.cpuGhz);
+    setMemoryTotal(snapshot.system.memoryTotalBytes);
     setSystemHistory((previous) => cap([...previous, {
       at: snapshot.at, cpu: snapshot.system.cpu, memoryBytes: snapshot.system.memoryBytes,
     }]));
@@ -305,7 +309,9 @@ export function App() {
     await refresh();
   }, [screen, session, openProject, project, notify, refresh]);
 
-  const totalMemory = systemHistory.length ? Math.max(...systemHistory.map((s) => s.memoryBytes)) : 1;
+  // The machine's memory when the sampler has said so; until then, the largest reading seen.
+  const totalMemory = memoryTotal || (systemHistory.length ? Math.max(...systemHistory.map((s) => s.memoryBytes)) : 1);
+  const usageWindows = status?.windows ?? [];
   const latestSystem = systemHistory.length ? systemHistory[systemHistory.length - 1] : null;
   const cpuValue = latestSystem
     ? `${latestSystem.cpu.toFixed(0)}%${cpuGhz ? ` · ${cpuGhz.toFixed(1)} GHz` : ""}`
@@ -314,8 +320,11 @@ export function App() {
 
   // Monitoring off means there is nothing to draw — and nothing being measured, which is the point.
   const monitoring = settings?.ui.monitor ?? true;
-  // The remembered height, cut down to what the two stacked panes actually have between them.
-  const topHeight = stackedTopHeight(stackTop, stackHeight);
+  // Fractions turned back into pixels against what is on screen right now, then clamped so no pane
+  // is squeezed out. Saving happens on release, so a drag writes one line, not one per frame.
+  const navWidth = navFraction ? Math.round(navFraction * windowWidth) : 0;
+  const asideWidth = asideFraction ? Math.round(asideFraction * windowWidth) : 0;
+  const topHeight = stackedTopHeight(Math.round(stackFraction * stackHeight), stackHeight);
   const band = mode === "band";
   const column = mode === "column";
   const showDetail = mode === "full";
@@ -371,17 +380,17 @@ export function App() {
       {windowState.docked && settings ? (
         <DockGrip edge={settings.dock.edge} onDrag={(thickness, done) => api.dragDock(thickness, done)} />
       ) : null}
-      <StatusBar
-        status={status}
-        appVersion={info?.version ?? "—"}
-        compact={mode !== "full"}
+      <TitleBar
+        version={info?.version ?? "—"}
         draggable={!windowState.docked}
-        onRefresh={() => void api.status().then(setStatus)}
         controls={
           <WindowControls
-            restorable={windowState.maximized || windowState.docked}
+            maximized={windowState.maximized}
+            docked={windowState.docked}
+            edge={settings?.dock.edge ?? "top"}
             onMinimize={() => void api.windowCommand("minimize")}
-            onToggle={() => void api.windowCommand("toggle")}
+            onMaximize={() => void api.windowCommand("maximize")}
+            onDock={() => void api.windowCommand("dock")}
             onClose={() => void api.windowCommand("close")}
           />
         }
@@ -401,8 +410,8 @@ export function App() {
               side="left"
               min={NAV_MIN}
               max={NAV_MAX}
-              onDrag={setNavWidth}
-              onCommit={(width) => void api.saveUi({ navWidth: width })}
+              onDrag={(width) => setNavFraction(windowWidth ? width / windowWidth : 0)}
+              onCommit={(width) => void api.saveUi({ navWidth: windowWidth ? width / windowWidth : 0 })}
             />
           </>
         )}
@@ -430,14 +439,22 @@ export function App() {
                 </Truncated>
                 <span className="chip">{screen === "sessions" ? `${sessions.length} sessions` : `${filtered.length} projects`}</span>
                 <div className="flex-1" />
+                {/* The key belongs in the tooltip: on the face of a button it is width spent on
+                    something only worth learning once. */}
                 {screen === "sessions" ? (
-                  <button type="button" className="btn" onClick={back}>{tight ? "Back" : "Back (Esc)"}</button>
+                  <button type="button" className="btn" title="Back to the projects (Esc)" onClick={back}>Back</button>
                 ) : null}
-                <button type="button" className="btn" onClick={() => void open("sessionsWindow")} disabled={!project}>
-                  {tight ? "Open" : "Open (Enter)"}
+                <button
+                  type="button"
+                  className="btn"
+                  title="Open the selected project's sessions (Enter)"
+                  onClick={() => void open("sessionsWindow")}
+                  disabled={!project}
+                >
+                  Open
                 </button>
-                <button type="button" className="btn" onClick={() => void openSettings()} aria-label="Settings">
-                  {tight ? "\u2699" : "Settings (S)"}
+                <button type="button" className="btn" title="Settings (S)" onClick={() => void openSettings()} aria-label="Settings">
+                  {tight ? "\u2699" : "Settings"}
                 </button>
               </div>
 
@@ -457,8 +474,8 @@ export function App() {
                       side="top"
                       min={STACK_MIN}
                       max={Math.max(STACK_MIN, stackHeight - STACK_MIN)}
-                      onDrag={setStackTop}
-                      onCommit={(height) => void api.saveUi({ stackTop: height })}
+                      onDrag={(height) => setStackFraction(stackHeight ? height / stackHeight : 0)}
+                      onCommit={(height) => void api.saveUi({ stackTop: stackHeight ? height / stackHeight : 0 })}
                     />
                     <div data-testid="stack-sessions" className="flex-1 min-h-0 overflow-auto p-1 space-y-0.5">
                   {screen === "sessions"
@@ -562,8 +579,8 @@ export function App() {
                     side="right"
                     min={ASIDE_MIN}
                     max={ASIDE_MAX}
-                    onDrag={setAsideWidth}
-                    onCommit={(width) => void api.saveUi({ asideWidth: width })}
+                    onDrag={(width) => setAsideFraction(windowWidth ? width / windowWidth : 0)}
+                    onCommit={(width) => void api.saveUi({ asideWidth: windowWidth ? width / windowWidth : 0 })}
                   />
                 )}
                 {column || !monitoring ? null : showDetail ? (
@@ -578,6 +595,7 @@ export function App() {
                   ) : null}
 
                   <div className="p-3 space-y-2 border-t border-ink-600">
+                    {usageWindows.map((usage) => <UsageCard key={usage.key} window={usage} />)}
                     <AreaChart
                       samples={systemHistory}
                       field="cpu"
@@ -590,7 +608,9 @@ export function App() {
                       field="memoryBytes"
                       max={totalMemory}
                       label="Memory (machine)"
+                      short="Mem"
                       value={latestSystem ? formatBytes(latestSystem.memoryBytes) : "—"}
+                      total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                     />
                     <div className="text-[11px] text-bone-500">
                       {liveSessions.length
@@ -603,9 +623,10 @@ export function App() {
                   // Band and compact: the machine graphs stay — they are the reason to keep the
                   // window on screen — but as a narrow column with no detail panel behind them.
                   <aside
-                    className={`${asideWidth ? "" : "w-52"} shrink-0 border-l border-ink-600 p-1 space-y-1 overflow-y-auto no-bar`}
+                    className={`${asideWidth ? "" : "w-52"} shrink-0 border-l border-ink-600 p-1 flex gap-1 overflow-y-auto no-bar [&>*]:flex-1 [&>*]:min-w-0`}
                     style={asideWidth ? { width: asideWidth } : undefined}
                   >
+                    {usageWindows.map((usage) => <UsageCard key={usage.key} window={usage} compact />)}
                     <AreaChart
                       samples={systemHistory}
                       field="cpu"
@@ -618,7 +639,9 @@ export function App() {
                       field="memoryBytes"
                       max={totalMemory}
                       label="Memory"
+                      short="Mem"
                       value={latestSystem ? formatBytes(latestSystem.memoryBytes) : "—"}
+                      total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                     />
                     <div className="text-[11px] text-bone-500">
                       {liveSessions.length ? `${liveSessions.length} running` : "idle"}
@@ -627,8 +650,11 @@ export function App() {
                 )}
               </div>
 
+              {/* Everything shares the strip and shrinks to fit: scrolling some of it out of
+                  sight is the same as not showing it. */}
               {column && monitoring ? (
-                <div className="shrink-0 border-t border-ink-600 p-1 flex gap-1 overflow-x-auto no-bar [&>*]:min-w-[9rem] [&>*]:flex-1">
+                <div className="shrink-0 border-t border-ink-600 p-1 flex gap-1 [&>*]:min-w-0 [&>*]:flex-1">
+                  {usageWindows.map((usage) => <UsageCard key={usage.key} window={usage} compact />)}
                   <AreaChart
                     compact
                     samples={systemHistory}
@@ -642,8 +668,10 @@ export function App() {
                     samples={systemHistory}
                     field="memoryBytes"
                     max={totalMemory}
-                    label="Mem"
+                    label="Memory"
+                    short="Mem"
                     value={latestSystem ? formatBytes(latestSystem.memoryBytes) : "\u2014"}
+                    total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                   />
                 </div>
               ) : null}
