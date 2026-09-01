@@ -133,16 +133,19 @@ test("every shape says when the usage window resets", async () => {
   const { app, page } = await launch(home);
   try {
     await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
-    const reset = page.getByText(/left ·/).first();
+    // By handle, not by wording: a card that stands up says "↻ 2h 15m" where a wide one says
+    // "2h 15m left · 01:30", and the test is about the answer being there, not how it is phrased.
+    const reset = page.getByTestId("usage-reset").first();
 
     // Wide: the full column.
     await resize(app, page, 1200, 800);
     await expect(reset).toBeVisible();
     await expect(reset).toContainText("2h 1");                  // 2h 15m, give or take a minute
 
-    // Docked as a band along an edge: the same answer, on one line.
+    // Docked as a band along an edge: the same answer, upright beside the machine graphs.
     await resize(app, page, 1200, 300);
-    await expect(page.getByText(/left ·/).first()).toBeVisible();
+    await expect(page.getByTestId("usage-reset").first()).toBeVisible();
+    await expect(page.getByTestId("usage-reset").first()).toContainText("2h 1");
     expect(await overflow(page)).toEqual({ x: 0, y: 0 });
   } finally {
     await app.close();

@@ -14,9 +14,11 @@ export interface TruncatedProps {
   className?: string;
   /** `div` by default; a `span` where the surrounding layout expects inline. */
   as?: "div" | "span";
+  /** Handle for the end-to-end suite, where the wording is free to change but the element is not. */
+  testId?: string;
 }
 
-export function Truncated({ children, title, className = "", as = "div" }: TruncatedProps) {
+export function Truncated({ children, title, className = "", as = "div", testId }: TruncatedProps) {
   const ref = useRef<HTMLElement | null>(null);
 
   const measure = useCallback(() => {
@@ -46,7 +48,7 @@ export function Truncated({ children, title, className = "", as = "div" }: Trunc
 
   const Tag = as;
   return (
-    <Tag ref={ref as never} className={`truncate ${className}`}>
+    <Tag ref={ref as never} data-testid={testId} className={`truncate ${className}`}>
       {children}
     </Tag>
   );
