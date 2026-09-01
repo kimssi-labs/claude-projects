@@ -38,17 +38,17 @@ export function formatClock(ms: number): string {
  * The clock time alone made the reader do arithmetic to answer the only question they had — how
  * long until this frees up — so the remaining time leads and the absolute time follows it.
  */
-export function resetLabel(resetsAt: number, now = Date.now()): string {
+export function resetRemaining(resetsAt: number, now = Date.now()): string {
   const minutes = Math.max(0, Math.round((resetsAt - now) / 60000));
   const hours = Math.floor(minutes / 60);
   // Past a couple of days, hours stop meaning anything — "167h left" is a number to be decoded,
   // "6d 23h left" is a week that is nearly up.
-  const left = hours >= 48
-    ? `${Math.floor(hours / 24)}d ${hours % 24}h`
-    : hours >= 1
-      ? `${hours}h ${minutes % 60}m`
-      : `${minutes}m`;
-  return `${left} left · ${formatClock(resetsAt)}`;
+  if (hours >= 48) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  return hours >= 1 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+export function resetLabel(resetsAt: number, now = Date.now()): string {
+  return `${resetRemaining(resetsAt, now)} left · ${formatClock(resetsAt)}`;
 }
 
 /** "3 minutes ago" — for a list where the exact second never matters. */
