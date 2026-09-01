@@ -13,6 +13,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { cpus, freemem, totalmem } from "node:os";
 
 import type { ProcessRow } from "../core/metrics.js";
+import { liveClockGhz } from "./cpuClock.js";
 
 /** Busy time of one process since it started, and what it is holding in memory right now. */
 export interface ProcessUsage {
@@ -204,6 +205,11 @@ export function processUsage(pid: number): ProcessUsage | null {
 /**
  * Total busy/idle jiffies across cores, the core count and the clock — from ONE `os.cpus()` call.
  *
+ * The clock is the NOMINAL one. On Windows `os.cpus()` reports the same figure on every core and
+ * never changes it — 2995 MHz here while the live clock was swinging — so it is the base clock, and
+ * the window says so. A live reading needs the `% Processor Performance` counter, which is a PDH
+ * query per sample; not worth the cost for a number that is decoration beside the busy percentage.
+ *
  * It is the most expensive thing left in a sample (it walks every core), so it is read once and
  * everything the sampler needs comes out of that single reading.
  */
@@ -218,11 +224,10 @@ export function cpuTotals(): { busy: number; total: number; ghz: number | null; 
     total += t.user + t.nice + t.sys + t.irq + t.idle;
     speed += core.speed;
   }
-  return {
-    busy, total,
-    ghz: cores.length && speed ? speed / cores.length / 1000 : null,
-    cores: cores.length || 1,
-  };
+  // The live clock when the platform will give one; otherwise the nominal figure os.cpus() reports,
+  // which on Windows is what the registry was told at boot and never changes.
+  const nominal = cores.length && speed ? speed / cores.length / 1000 : null;
+  return { busy, total, ghz: liveClockGhz() ?? nominal, cores: cores.length || 1 };
 }
 
 export function machineMemory(): { used: number; total: number } {

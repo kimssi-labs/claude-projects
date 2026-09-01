@@ -35,25 +35,18 @@ export interface ProjectInfo {
   liveCount: number;
 }
 
-/** One rate-limit window as Claude Code reports it (five_hour, seven_day, seven_day_opus, …). */
+/** One rate-limit window as Claude Code reports it (five_hour, seven_day). */
 export interface RateWindow {
   key: string;
   label: string;
+  /** The label a narrow card uses; the full one goes in its tooltip. */
+  short: string;
   usedPercent: number;
   resetsAt: number | null;
 }
 
-export interface HealthItem {
-  key: string;
-  label: string;
-  ok: boolean | null;
-  detail: string;
-}
-
 export interface StatusSnapshot {
   windows: RateWindow[];
-  health: HealthItem[];
-  ponytail: string | null;
 }
 
 /** One sample of a session's (or the machine's) resource use. */
@@ -125,10 +118,15 @@ export interface UiConfig {
   stackBelow: number;
   /** Where the window was last left, when it was not docked. */
   window: { x: number; y: number; width: number; height: number } | null;
-  /** Pane widths in pixels; 0 means "whatever the layout would pick". */
+  /**
+   * Pane sizes as a fraction of the window (0 < f < 1); 0 means "whatever the layout would pick".
+   *
+   * Fractions, not pixels: the same window is a wide desktop one minute and a thin docked band the
+   * next, and a pixel count set in one is wrong in the other.
+   */
   navWidth: number;
   asideWidth: number;
-  /** Height of the project list when the layout is stacked; 0 means "half". */
+  /** Height of the project list when the layout is stacked, as a fraction of the pair. */
   stackTop: number;
   /** Whether CPU and memory are sampled at all. Off costs nothing — the timer stops. */
   monitor: boolean;
@@ -139,10 +137,11 @@ export interface UiConfig {
 }
 
 export interface StatusConfig {
-  /** Show the Outlook reachability segment, when that probe writes a cache here. */
-  outlook: boolean;
-  /** Show the ponytail mode chip, when the flag file is present. */
-  ponytail: boolean;
-  /** Show the rate-limit bars. */
-  usage: boolean;
+  /**
+   * Which rate-limit windows to show, by key, or null for every one Claude Code reports.
+   *
+   * An empty list is "none": the gauges disappear. One list rather than a switch and a list —
+   * unticking the last window is the same wish as turning the segment off.
+   */
+  windows: string[] | null;
 }

@@ -6,6 +6,9 @@ import { resolve } from "node:path";
 export default defineConfig({
   root: resolve(__dirname, "src/renderer"),
   base: "./",
+  // The app's mark, copied in verbatim: the title bar shows it, and the same file is the icon
+  // electron-builder stamps into the executable, so the two can never drift apart.
+  publicDir: resolve(__dirname, "build/renderer-assets"),
   plugins: [react()],
   resolve: { alias: { "@core": resolve(__dirname, "src/core") } },
   build: {

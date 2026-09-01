@@ -3,6 +3,65 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.6.0
+
+A day of living in the docked band, fixing what it made visible.
+
+### The window
+
+- **Docking has its own caption button** — leftmost, before the three the OS always has. Maximise
+  and docking used to share a button, so "restore" gave back a screen edge in one state and a window
+  size in the other; now maximise always means fill the screen, restore always means the last window
+  size, and the dock button toggles the band. Its glyph is drawn for the configured edge: a wall on
+  that side, an arrow into it to dock, out of it to undock.
+- **Undocking puts the window back on screen.** Releasing the band used to leave the window exactly
+  where the band was — a strip pressed against the edge, sometimes past it. It now returns to the
+  remembered window rectangle, or centred at the default size, clamped inside the work area either
+  way. Maximising from a docked state gets the same placement first, so the restore after it has a
+  window shape to come back to.
+- **The title bar is a title bar**: icon, name, version, caption buttons. Keys moved off button faces
+  into tooltips.
+
+### Usage and monitoring
+
+- **The usage gauges moved off the title bar**, where a narrow window cut them off, and sit with the
+  CPU and memory graphs in every shape — same cards, same format. **Settings · Status line** ticks
+  which windows are drawn.
+- **The CPU clock is live now.** `os.cpus()` reports the figure the registry was given at boot — a
+  flat 2995 MHz on all twenty cores here while the real clock swung — so the reading came from PDH's
+  `% Processor Performance` times the base clock instead, the same sum Task Manager shows. Verified
+  against a one-core burner (expected 5.0 % of 20 cores, read 4.9 %) and an independent
+  measurement of a live session's tree (5.8 % vs 4.6 %).
+- **Memory says what it is out of** (`12 GB / 31.7 GB`), and the label is Memory, not Mem — the
+  abbreviation only appears where the card is too narrow for the word.
+- **Narrow cards shrink first, then stand up.** Cards share the row's width evenly however many
+  there are; below reading width each becomes an upright bar with the short label, and the full
+  reading lives in its tooltip.
+- **A live session row draws CPU and memory as separate sparklines**, each with its own number, on a
+  shared baseline with headroom — one line no longer rides the canvas top while the other sits on
+  the bottom border.
+- **Rows wrap instead of overlapping.** Too narrow for a name and its numbers on one line, the
+  numbers drop to a second line; the thresholds are measured per row kind, because a live session
+  row carries 324 px of fixed content and a project row about 110.
+- **The per-model weekly gauges are gone.** Verified against the real payload with Fable 5 running:
+  Claude Code sends `five_hour` and `seven_day`, and nothing else — so the Fable/Opus and Sonnet
+  windows could never draw, and only made the settings list lie.
+- **The Outlook and ponytail segments are gone** for the same reason as MCP before them: each read a
+  cache only this one machine's own scripts write.
+
+### Settings and launch
+
+- **Pane sizes are remembered as fractions of the window**, saved as you let go of the divider — a
+  pixel count set in a wide window was wrong in a docked band, which is how the stacked sessions
+  pane ended up eight pixels tall.
+- **Custom program means a program like VS Code**: opening a session starts it on the project folder
+  — no terminal around it, no claude command passed, which such a program would read as files to
+  open. An empty path still falls back to Auto.
+- The launch screen now says plainly that the automatic screenshot path has **no shortcut of its
+  own** — plain Ctrl+V is the whole gesture — and that Ctrl+Alt+V is a fallback for a clipboard that
+  already carries text.
+- The stack-below slider is gone from Layout: auto simply stacks when the window is narrow.
+
 ## v2.5.1
 
 Both faults were found by living with a docked band, and both are fixed with a case that fails

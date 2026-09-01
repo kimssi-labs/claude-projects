@@ -79,7 +79,7 @@ test("shows the fixture's project and its sessions, and moves with the keyboard"
 
     // Enter opens the project's sessions — the same key the terminal version used.
     await page.keyboard.press("Enter");
-    await expect(page.getByText("Back (Esc)")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Back" })).toBeVisible();
     // The title shows twice — once in the row, once as the detail heading — so match the row.
     await expect(page.getByText("프롬프트 1").first()).toBeVisible();
     await expect(page.getByText("프롬프트 2").first()).toBeVisible();
@@ -99,7 +99,7 @@ test("F2 renames a session the way /rename does", async () => {
     // Wait for the list before typing: keys sent before the first scan lands have nothing to act on.
     await expect(page.getByText("프롬프트 1").first()).toBeVisible();
     await page.keyboard.press("Enter");
-    await expect(page.getByText("Back (Esc)")).toBeVisible();      // the sessions screen is up
+    await expect(page.getByRole("button", { name: "Back" })).toBeVisible();      // the sessions screen is up
     await page.keyboard.press("F2");
     const input = page.getByTestId("rename-input");
     await expect(input).toBeVisible();

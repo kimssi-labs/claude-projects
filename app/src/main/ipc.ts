@@ -70,7 +70,13 @@ export interface WindowState {
   docked: boolean;
 }
 
-export type WindowCommand = "minimize" | "toggle" | "close";
+/**
+ * Docking and maximising are separate commands.
+ *
+ * They shared one before, so "restore" gave back an edge in one state and a window size in the
+ * other — the same button meaning two things depending on how the window got where it was.
+ */
+export type WindowCommand = "minimize" | "maximize" | "dock" | "close";
 
 export interface DisplayInfo {
   id: string;

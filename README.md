@@ -109,10 +109,10 @@ edge without a scrollbar:
 | Full | wide and tall | project list, session list, detail panel, machine graphs |
 | Compact | narrow | list and graphs, no detail panel |
 | Band | short (top/bottom dock) | one strip: list plus graphs |
-| Stacked | narrower than the width you set | project list, its sessions and the graphs, one under the other |
+| Stacked | narrow | project list, its sessions and the graphs, one under the other |
 
-**Settings · Layout** decides: side by side, stacked, or stacked below a width of your choosing.
-The three panes can also be dragged to any width; double-click a divider for the default back.
+**Settings · Layout** decides: side by side, stacked, or automatic — which stacks when the window
+is narrow. The panes can be dragged to any size; double-click a divider for the default back.
 
 ## What it reads
 
@@ -129,9 +129,8 @@ Everything comes from files Claude Code maintains under `~/.claude` (override wi
 | `config/project-aliases.json` | display aliases for projects |
 
 The status strip is optional: each segment appears only if that source exists on your machine — rate
-limits from `cache/rate-limits.json` (5 h, 7 d, and the weekly Fable/Opus and Sonnet windows when
-Claude Code reports them), Outlook reachability from its probe's cache. On a machine without them
-the segment is not drawn at all.
+limits from `cache/rate-limits.json` (the 5-hour and 7-day windows Claude Code reports). On a
+machine without that cache nothing is drawn at all.
 
 Each window shows how much is used, how long until it resets, and the clock time it resets at — in
 every shape, the docked band included.
@@ -161,12 +160,14 @@ also remembers which of them was docked, so plugging a screen in or out brings b
 shrink below some minimum; the first refusal is measured and becomes the lower bound of the size
 setting, so what the screen shows is what docking will give you.
 
-**Status line** turns each segment of the strip on or off — usage bars, Outlook, ponytail. A segment
-whose source this machine does not have is not drawn either way.
+**Status line** ticks which usage gauges are drawn beside the machine graphs. A window Claude Code
+has not reported is not drawn either way.
 
 **Launch** picks the terminal and shell that host an opened session: PowerShell 7, Windows
 PowerShell, Command Prompt or none on Windows; on Linux the first terminal emulator found, or a named
-one. A missing executable is marked rather than failing when a session is opened.
+one. **Custom program** is different in kind: name an editor like VS Code and opening a session opens
+that program on the project folder instead of a terminal — what runs inside it is its own business.
+A missing executable is marked rather than failing when a session is opened.
 
 **Permissions** picks the mode a session starts in — ask (default), bypass, accept edits, plan, or
 auto.

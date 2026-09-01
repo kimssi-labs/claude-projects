@@ -34,10 +34,17 @@ function asRecord(value: unknown): Json {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
 }
 
-/** A remembered pixel width, or 0 for "let the layout decide". */
-function pixels(value: unknown): number {
+/**
+ * A remembered pane size as a fraction of the window, or 0 for "let the layout decide".
+ *
+ * Sizes used to be kept in pixels, which is only right until the window changes: a divider set in
+ * a tall window put the pane below it eight pixels tall in a docked band. Anything above 1 is a
+ * pixel count from an older settings file and is dropped — the layout picks again, once.
+ */
+function fraction(value: unknown): number {
   const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+  if (!Number.isFinite(number) || number <= 0 || number >= 1) return 0;
+  return Math.round(number * 1000) / 1000;
 }
 
 /** A remembered window rectangle, or null when there is none worth restoring. */
@@ -140,13 +147,10 @@ export class ConfigStore {
   // -- status line -------------------------------------------------------------------------------
   status(): StatusConfig {
     const raw = this.section(SECTION.status);
-    return {
-      // Every segment is on unless it was turned off; a machine without the source shows nothing
-      // either way, so "on" is the harmless default.
-      outlook: raw["outlook"] !== false,
-      ponytail: raw["ponytail"] !== false,
-      usage: raw["usage"] !== false,
-    };
+    const chosen = raw["windows"];
+    // Null unless a choice was written down: every window Claude Code reports, which on a machine
+    // it reports none for is nothing either way.
+    return { windows: Array.isArray(chosen) ? chosen.map(String) : null };
   }
 
   saveStatus(config: StatusConfig): void {
@@ -189,9 +193,9 @@ export class ConfigStore {
         ? clamp(Math.round(Number(raw["stackBelow"])), STACK_BELOW.min, STACK_BELOW.max)
         : STACK_BELOW.default,
       window: windowBounds(raw["window"]),
-      navWidth: pixels(raw["navWidth"]),
-      asideWidth: pixels(raw["asideWidth"]),
-      stackTop: pixels(raw["stackTop"]),
+      navWidth: fraction(raw["navWidth"]),
+      asideWidth: fraction(raw["asideWidth"]),
+      stackTop: fraction(raw["stackTop"]),
     };
   }
 

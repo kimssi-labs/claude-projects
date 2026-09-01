@@ -6,7 +6,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { DEFAULT_PASTE_HOTKEY, DOCK_EDGES, DOCK_PERCENT, STACK_BELOW } from "@core/constants";
+import { DEFAULT_PASTE_HOTKEY, DOCK_EDGES, DOCK_PERCENT, RATE_WINDOWS } from "@core/constants";
+
 
 import { Truncated } from "./Truncated";
 import type { DockEdge, LayoutMode, PermissionMode, ShellChoice, ThemeMode } from "@core/types";
@@ -34,7 +35,7 @@ const SHELLS: { key: ShellChoice; label: string; note: string }[] = [
   { key: "powershell", label: "Windows PowerShell", note: "powershell.exe" },
   { key: "cmd", label: "Command Prompt", note: "cmd.exe /k" },
   { key: "bash", label: "bash", note: "bash -lc" },
-  { key: "custom", label: "Custom program", note: "a path you name, started with the claude command" },
+  { key: "custom", label: "Custom program", note: "an editor like VS Code, opened on the project folder" },
   { key: "none", label: "No shell", note: "claude directly — the window closes when it exits" },
 ];
 
@@ -139,8 +140,8 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
       {/* Esc still closes the screen; a button is for the times the keyboard is not where the hand
           is, and for anyone who never learns that Esc goes back. */}
       <div className="flex items-center gap-2 min-w-0">
-        <button type="button" className="btn shrink-0" onClick={onClose} aria-label="Back">
-          ← Back (Esc)
+        <button type="button" className="btn shrink-0" title="Back (Esc)" onClick={onClose} aria-label="Back">
+          ← Back
         </button>
         <Truncated as="span" className="text-[11px] text-bone-500">
           Settings are saved as you change them.
@@ -173,22 +174,6 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
                 onSelect={() => update({ ...draft, ui: { ...draft.ui, layout: option.key } })}
               />
             ))}
-          </div>
-          <div className={`flex items-center gap-3 ${draft.ui.layout === "auto" ? "" : "opacity-40"}`}>
-            <span className="text-[11px] text-bone-500 shrink-0">Stack below</span>
-            <input
-              type="range"
-              min={STACK_BELOW.min}
-              max={STACK_BELOW.max}
-              step={STACK_BELOW.step}
-              value={draft.ui.stackBelow}
-              disabled={draft.ui.layout !== "auto"}
-              onChange={(event) => update({ ...draft, ui: { ...draft.ui, stackBelow: Number(event.target.value) } })}
-              className="flex-1 min-w-0 accent-accent"
-            />
-            <span className="text-xs tabular-nums text-bone-200 shrink-0 whitespace-nowrap">
-              {draft.ui.stackBelow} px
-            </span>
           </div>
         </div>
       </Card>
@@ -274,28 +259,52 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
         </div>
       </Card>
 
-      <Card title="Status line" section="status" focused={focused} hint="what the strip along the top shows">
+      <Card title="Status line" section="status" focused={focused} hint="which usage gauges are drawn">
         <div className="space-y-1" onMouseEnter={() => onFocus("status")}>
           {/* The other things the strip can show. Each appears only when its source exists, so a
               switch here is "show it when there is one", not "invent one". */}
-          <div className="text-[11px] text-bone-500 pt-1">Segments</div>
-          {([
-            ["usage", "Usage bars", "5 h / 7 d limits from Claude Code's cache"],
-            ["outlook", "Outlook", "reachability, from the Outlook probe's cache"],
-            ["ponytail", "Ponytail", "the mode flag, when one is set"],
-          ] as const).map(([key, label, note]) => (
-            <label key={key} className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink-700/60">
-              <input
-                type="checkbox"
-                checked={draft.status[key] !== false}
-                onChange={() => update({ ...draft, status: { ...draft.status, [key]: draft.status[key] === false } })}
-                className="accent-accent"
-              />
-              <Truncated as="span" className="text-sm text-bone-100">{label}</Truncated>
-              <Truncated as="span" className="text-[11px] text-bone-500">{note}</Truncated>
-            </label>
-          ))}
-
+          {/* Which gauges appear beside the machine graphs. Unticking them all is how the
+              usage segment is turned off — there is no separate switch to disagree with. */}
+          <div className="text-[11px] text-bone-500 pt-1">Usage windows</div>
+          {RATE_WINDOWS.map(({ key, label }) => {
+            const chosen = draft.status.windows;
+            const on = chosen === null || chosen.includes(key);
+            return (
+              <label key={key} className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink-700/60">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => {
+                    const current = chosen ?? RATE_WINDOWS.map((w) => w.key);
+                    const next = on ? current.filter((k) => k !== key) : [...current, key];
+                    update({ ...draft, status: { ...draft.status, windows: next } });
+                  }}
+                  className="accent-accent"
+                />
+                <Truncated as="span" className="text-sm text-bone-100">{label}</Truncated>
+              </label>
+            );
+          })}
+          <div className="text-[11px] text-bone-500">
+            A window appears only once Claude Code has reported it, so a machine with no weekly
+            limit shows nothing for one however it is ticked.
+          </div>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button
+              type="button"
+              className={`btn ${draft.status.windows === null ? "btn-accent" : ""}`}
+              onClick={() => update({ ...draft, status: { ...draft.status, windows: null } })}
+            >
+              Every window, always
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => update({ ...draft, status: { ...draft.status, windows: [] } })}
+            >
+              None
+            </button>
+          </div>
         </div>
       </Card>
 
@@ -344,11 +353,16 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
             <Truncated as="span" className="text-sm text-bone-100">Give copied screenshots a path</Truncated>
           </label>
           <div className="text-[11px] text-bone-500">
-            Copy a screenshot and your ordinary paste key does the rest: the clipboard is left
-            holding the picture <em>and</em> the file it was written to, so a terminal pastes the
-            path and an image editor still pastes the image. Nothing is intercepted.
+            No shortcut of its own — plain <b>Ctrl+V</b> is the whole gesture. Copy a screenshot and
+            the clipboard is left holding the picture <em>and</em> the file it was written to, so a
+            terminal pastes the path and an image editor still pastes the image.
           </div>
 
+          {/* A separate, secondary thing: reading it as "the shortcut for the checkbox above" is
+              exactly the misreading this heading exists to prevent. */}
+          <div className="pt-2 text-[11px] text-bone-500">
+            Fallback shortcut — only for a clipboard that already carries text
+          </div>
           <div className="flex items-center gap-2">
             <input
               type="text"
@@ -376,9 +390,9 @@ export function SettingsView({ settings, displays, focused, onFocus, onChange, o
             </button>
           </div>
           <div className="text-[11px] text-bone-500">
-            A shortcut for the same thing, for a clipboard that already carries text: pressed in the
-            terminal, it writes the image out and pastes the path where the cursor is. Hangar has to
-            be running either way.
+            When something copied text after the screenshot, the automatic path stands aside; this
+            key, pressed in the terminal, writes the image out and pastes its path anyway.
+            (CommandOrControl is Electron's spelling of Ctrl.) Hangar has to be running either way.
           </div>
           {draft.launch.pasteHotkey.trim() && !draft.pasteHotkeyActive ? (
             <div className="text-[11px] text-bad">
