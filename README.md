@@ -10,11 +10,18 @@ tokens spent.
 It can also **dock to a screen edge**: not merely a window parked at the side, but a reserved band
 the desktop works around, so a maximised window stops at it instead of covering it.
 
+![Every project you have opened, with what is running right now](docs/screens/projects.png)
+
 ## Why
 
 `/resume` shows one flat list of sessions for the current folder. This shows **every project**, what
 is running right now, what each session is costing in CPU and memory, and lets you jump straight into
 any of them in a new terminal — while the manager stays open for the next one.
+
+Open a project and its sessions are listed with their first prompt, their size and when they were
+last written; a running one carries its own CPU and memory line.
+
+![A project's sessions, one of them running](docs/screens/sessions.png)
 
 ## Install
 
@@ -114,6 +121,16 @@ edge without a scrollbar:
 **Settings · Layout** decides: side by side, stacked, or automatic — which stacks when the window
 is narrow. The panes can be dragged to any size; double-click a divider for the default back.
 
+Docked along the top of a screen, the whole thing is one strip — the gauges lie across the end of it
+rather than scrolling out of sight:
+
+![The band: list, sessions and gauges in one strip](docs/screens/band.png)
+
+Narrow it instead and the lists stack, the gauges stand upright, and each keeps both of its readings
+— the share on one line, the clock speed, the quantity or the time until reset on the next:
+
+<img src="docs/screens/stacked.png" width="430" alt="Stacked: lists one above the other, gauges upright">
+
 ## What it reads
 
 Everything comes from files Claude Code maintains under `~/.claude` (override with `CLAUDE_HOME`):
@@ -132,14 +149,17 @@ The status strip is optional: each segment appears only if that source exists on
 limits from `cache/rate-limits.json` (the 5-hour and 7-day windows Claude Code reports). On a
 machine without that cache nothing is drawn at all.
 
-Each window shows how much is used, how long until it resets, and the clock time it resets at — in
-every shape, the docked band included.
+Each window shows how much is used and how long until it resets — in every shape, the docked band
+included. Wide enough and the clock time it resets at is printed beside it; upright it moves to the
+tooltip, which is also where a card's full label goes when it has been shortened.
 
 ## Settings (`S`)
 
 One screen of cards — **Appearance**, **Layout**, **Monitoring**, **Dock**, **Status line**,
 **Launch**, **Permissions**. `Tab` moves between them, `Esc` closes. Every choice, and the project and row you were last on, is kept in
 `config/manager.json`.
+
+![Appearance, layout and monitoring](docs/screens/settings.png)
 
 **Appearance** — light, dark, or system. System follows the OS setting and changes with it, without
 a restart.
