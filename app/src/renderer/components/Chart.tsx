@@ -121,6 +121,20 @@ export function useElementWidth<T extends HTMLElement>(): [React.RefObject<T>, n
 
 /** Under this, a label and its number cannot sit on one line without touching. */
 export const NARROW_CARD = 132;
+/**
+ * ...and this much wider before it goes back to lying across.
+ *
+ * One threshold oscillated: standing a card up frees width, which put it back over the line, which
+ * laid it down again — a card at the boundary flickered between the two shapes forever. The gap
+ * has to be wider than the width the change itself gives back.
+ */
+export const WIDE_CARD = 168;
+
+/** Which shape a card should be, given the shape it is in now — sticky at the boundary. */
+export function isNarrow(width: number, wasNarrow: boolean): boolean {
+  if (width <= 0) return wasNarrow;                       // not measured yet: do not flip on a guess
+  return wasNarrow ? width < WIDE_CARD : width < NARROW_CARD;
+}
 
 /** The upright bar a card falls back to when it is too narrow to read across. */
 function UprightBar({ percent, tone }: { percent: number; tone: string }) {
@@ -151,7 +165,8 @@ export interface AreaChartProps {
 
 export function AreaChart({ samples, field, max, label, value, total, short, className = "", compact = false }: AreaChartProps) {
   const [box, boxWidth] = useElementWidth<HTMLDivElement>();
-  const narrow = boxWidth > 0 && boxWidth < NARROW_CARD;
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => setNarrow((was) => isNarrow(boxWidth, was)), [boxWidth]);
   const ref = useCanvas((context, width, height) => {
     context.strokeStyle = token("--text", 0.08);
     context.lineWidth = 1;
@@ -223,7 +238,8 @@ export function UsageCard({ window: usage, className = "", compact = false }: {
   compact?: boolean;
 }) {
   const [box, boxWidth] = useElementWidth<HTMLDivElement>();
-  const narrow = boxWidth > 0 && boxWidth < NARROW_CARD;
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => setNarrow((was) => isNarrow(boxWidth, was)), [boxWidth]);
   const tone = usage.usedPercent >= 80 ? "bg-bad" : usage.usedPercent >= 50 ? "bg-warn" : "bg-ok";
   const reset = usage.resetsAt ? resetLabel(usage.resetsAt) : "";
   const title = `${usage.label} — ${formatPercent(usage.usedPercent)} used${
