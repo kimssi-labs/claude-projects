@@ -265,7 +265,7 @@ export function UsageCard({ window: usage, className = "", compact = false }: {
         </div>
         {/* Standing the card up must not cost the only thing the gauge is asked: how long until it frees up. */}
         {usage.resetsAt ? (
-          <div className="text-[10px] text-bone-400 tabular-nums text-center whitespace-nowrap">
+          <div data-testid="usage-reset" className="text-[10px] text-bone-400 tabular-nums text-center whitespace-nowrap">
             ↻ {resetRemaining(usage.resetsAt)}
           </div>
         ) : null}
@@ -285,7 +285,7 @@ export function UsageCard({ window: usage, className = "", compact = false }: {
         <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.max(2, Math.min(100, usage.usedPercent))}%` }} />
       </div>
       {reset ? (
-        <Truncated className={`${compact ? "mt-0.5" : "mt-1"} text-[11px] text-bone-400 tabular-nums`}>
+        <Truncated testId="usage-reset" className={`${compact ? "mt-0.5" : "mt-1"} text-[11px] text-bone-400 tabular-nums`}>
           ↻ {reset}
         </Truncated>
       ) : null}
