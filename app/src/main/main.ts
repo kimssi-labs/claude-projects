@@ -8,10 +8,10 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, Notification, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, screen, shell } from "electron";
 
 import { ConfigStore, percentFloor } from "../core/config.js";
-import { launchCommand, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
+import { launchCommand, sessionEnvironment, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
 import { MetricsHistory, SYSTEM_SERIES } from "../core/metrics.js";
 import { claudeHome } from "../core/paths.js";
 import { readStatus } from "../core/status.js";
@@ -21,7 +21,7 @@ import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from
 import { sendPaste } from "./keystroke.js";
 import { startClipboardWatch, stopClipboardWatch } from "./clipboardWatch.js";
 import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, type ActionResult, type AppInfo, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, MENU_SEPARATOR, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 import { Worker } from "node:worker_threads";
 
 import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
@@ -625,6 +625,9 @@ function registerIpc(): void {
     try {
       const child = spawn(command.exe, command.args, {
         cwd: command.cwd,
+        // Not process.env as it is: started from inside a Claude Code session, this app carries that
+        // session's markers, and a claude that inherits them stops saving its transcript.
+        env: sessionEnvironment(process.env),
         detached: true,
         stdio: "ignore",
         // Without a terminal of its own the shell needs a console window to appear in.
@@ -687,6 +690,46 @@ function registerIpc(): void {
     if (!project?.cwd || !project.exists) return { ok: false, message: "Folder is not available." };
     shell.openPath(project.cwd);
     return { ok: true };
+  });
+
+  /**
+   * A folder chosen in a dialog becomes a project — one with no sessions yet, from which the
+   * first can be started. Until now the only way in was to run claude in a terminal there first.
+   */
+  ipcMain.handle(CHANNEL.addProject, async (): Promise<AddProjectResult> => {
+    if (!window) return { ok: false };
+    const picked = await dialog.showOpenDialog(window, {
+      title: "Add a project folder",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    const folder = picked.filePaths[0];
+    if (picked.canceled || !folder) return { ok: false };
+    const dir = store.addProject(folder);
+    scanProjects();
+    return { ok: true, dir, message: `Added ${folder}` };
+  });
+
+  /** A right-click menu — the OS's own, so it looks and behaves like every other one on the machine. */
+  ipcMain.handle(CHANNEL.contextMenu, (event, items: MenuItemSpec[]) => new Promise<string | null>((resolve) => {
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const menu = Menu.buildFromTemplate(items.map((item) => (item.id === MENU_SEPARATOR
+      ? { type: "separator" as const }
+      : {
+        label: item.label,
+        enabled: item.enabled !== false,
+        type: item.checked === undefined ? ("normal" as const) : ("checkbox" as const),
+        checked: item.checked,
+        click: () => resolve(item.id),
+      })));
+    // Closed without a choice. The close callback can run before a click lands, so it waits a beat;
+    // a promise settles once, so whichever comes first is the answer.
+    menu.popup({ window: owner, callback: () => setTimeout(() => resolve(null), 100) });
+  }));
+
+  ipcMain.handle(CHANNEL.togglePin, (_event, request: PinRequest): ActionResult => {
+    const pinned = config.togglePin(request.kind, request.key);
+    scanProjects();
+    return { ok: true, message: pinned ? "Pinned to the top." : "Unpinned." };
   });
 
   ipcMain.handle(CHANNEL.loadSettings, () => settingsPayload());

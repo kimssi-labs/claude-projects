@@ -7,7 +7,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import { CHANNEL } from "../main/ipc.js";
-import type { ActionResult, AppInfo, DeleteRequest, DisplayInfo, OpenSessionRequest, PastedImage, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
+import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PinRequest, DeleteRequest, DisplayInfo, OpenSessionRequest, PastedImage, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
 import type { DockConfig, LaunchConfig, MetricSample, MetricsSnapshot, ProjectInfo, StatusConfig, StatusSnapshot, UiConfig } from "../core/types.js";
 
 export interface MetricsHistoryPayload {
@@ -35,6 +35,11 @@ const api = {
   deleteSession: (request: DeleteRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.deleteSession, request),
   deleteProject: (request: DeleteRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.deleteProject, request),
   revealProject: (dir: string): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.revealProject, dir),
+  /** Opens the folder picker; resolves with the new project's dir, or ok:false when nothing was chosen. */
+  addProject: (): Promise<AddProjectResult> => ipcRenderer.invoke(CHANNEL.addProject),
+  /** Shows a native menu at the pointer; resolves with the chosen id, or null when it was dismissed. */
+  contextMenu: (items: MenuItemSpec[]): Promise<string | null> => ipcRenderer.invoke(CHANNEL.contextMenu, items),
+  togglePin: (request: PinRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.togglePin, request),
   loadSettings: (): Promise<SettingsPayload> => ipcRenderer.invoke(CHANNEL.loadSettings),
   saveSettings: (payload: { dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: Partial<UiConfig> }): Promise<SettingsPayload> =>
     ipcRenderer.invoke(CHANNEL.saveSettings, payload),

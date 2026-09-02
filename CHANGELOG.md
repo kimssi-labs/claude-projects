@@ -3,6 +3,28 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.7.0
+
+- **A project can be added before it has a session.** The list only ever knew folders Claude Code
+  had already written a transcript for, so a new folder had to be started from a terminal first. The
+  **+** beside the search box opens a folder picker; the folder joins the list at once, selected,
+  and its first session can be started from there.
+- **New session, as a button**, on both screens, with `N` as its key — the sessions screen had
+  `Enter` and `O` to resume the one under the cursor, and nothing to start a fresh one.
+- **Right-click menus on every row.** A project offers open sessions, new session (here or in a new
+  window), rename, show folder and delete; a session offers resume (here or in a new window), rename
+  and delete. Each names the row it was opened on, so it works on a row that was not selected.
+- **Pin to top.** In that menu, for projects and sessions alike: a pinned row stays at the head of its
+  list, marked with a pin, until it is unpinned. Pins are kept in `config/manager.json`.
+- **A leaner toolbar.** **Back** and **Open** are gone: the project list is always one click away and
+  `Esc`/`←` still go back, while a row's double-click or `Enter` was already what Open did.
+- **A session opened from Hangar is a top-level session, whatever started Hangar.** Started from
+  inside a Claude Code session — `claude --p` at its prompt, or a tool call — the app inherited that
+  session's environment markers and passed them on, and the new `claude` took itself for a child
+  session: "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker". Those markers
+  are now stripped from the environment of every session launched; a user's own `CLAUDE_CODE_*`
+  settings pass through.
+
 ## v2.6.3
 
 - **Upright gauges keep their second reading.** Standing a card up dropped everything but the

@@ -62,3 +62,11 @@ describe("nextIndex", () => {
     expect(nextIndex("moveDown", 0, 0, 10)).toBe(0);
   });
 });
+
+describe("newSession", () => {
+  it("is N on both list screens, and never while typing", () => {
+    expect(resolveAction({ key: "n" }, "projects")).toBe("newSession");
+    expect(resolveAction({ key: "N" }, "sessions")).toBe("newSession");
+    expect(resolveAction({ key: "n" }, "projects", true)).toBeNull();
+  });
+});

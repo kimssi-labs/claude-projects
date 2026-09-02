@@ -79,7 +79,7 @@ test("shows the fixture's project and its sessions, and moves with the keyboard"
 
     // Enter opens the project's sessions — the same key the terminal version used.
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("button", { name: "Back" })).toBeVisible();
+    await expect(page.getByText("2 sessions").first()).toBeVisible();
     // The title shows twice — once in the row, once as the detail heading — so match the row.
     await expect(page.getByText("프롬프트 1").first()).toBeVisible();
     await expect(page.getByText("프롬프트 2").first()).toBeVisible();
@@ -99,7 +99,7 @@ test("F2 renames a session the way /rename does", async () => {
     // Wait for the list before typing: keys sent before the first scan lands have nothing to act on.
     await expect(page.getByText("프롬프트 1").first()).toBeVisible();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("button", { name: "Back" })).toBeVisible();      // the sessions screen is up
+    await expect(page.getByText("2 sessions").first()).toBeVisible();            // the sessions screen is up
     await page.keyboard.press("F2");
     const input = page.getByTestId("rename-input");
     await expect(input).toBeVisible();
@@ -231,6 +231,37 @@ test("a copied screenshot is given a path without anyone pressing a shortcut", a
     expect(existsSync(file), "the file the path points at is really there").toBe(true);
     // And the picture is still on the clipboard, so an image editor is unaffected.
     expect(await app.evaluate(({ clipboard }) => !clipboard.readImage().isEmpty())).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+/**
+ * The + beside the search box: a folder that has never had a session becomes a project.
+ *
+ * The folder picker is the OS's own dialog, which nothing can drive from here, so the test stands
+ * in for it and checks everything after the choice — the row appears, is selected, and is a
+ * project a session can be started from.
+ */
+test("the + button adds a folder as a project and lands on it", async () => {
+  const { home } = fixture();
+  const fresh = join(home, "..", "fresh-folder");
+  mkdirSync(fresh, { recursive: true });
+
+  const { app, page } = await launch(home);
+  try {
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+    await app.evaluate(({ dialog }, folder) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [folder] })) as typeof dialog.showOpenDialog;
+    }, fresh);
+
+    await page.getByRole("button", { name: "Add a project" }).click();
+
+    await expect(page.getByText("fresh-folder", { exact: true }).first()).toBeVisible();
+    // Landed on it: the detail panel names the folder, and New is offered for it.
+    await expect(page.getByText(fresh, { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "New" })).toBeEnabled();
+    expect(existsSync(join(home, "projects", fresh.replace(/[^A-Za-z0-9]/g, "-")))).toBe(true);
   } finally {
     await app.close();
   }

@@ -16,6 +16,8 @@ export interface SessionInfo {
   live: boolean;
   /** Process id of that session, when it is running. */
   pid: number | null;
+  /** Kept at the top of its list, by the user's choice. */
+  pinned: boolean;
 }
 
 export interface ProjectInfo {
@@ -33,6 +35,8 @@ export interface ProjectInfo {
   lastUsed: number;
   totalBytes: number;
   liveCount: number;
+  /** Kept at the top of the list, by the user's choice. */
+  pinned: boolean;
 }
 
 /** One rate-limit window as Claude Code reports it (five_hour, seven_day). */

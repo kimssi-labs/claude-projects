@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  claudeArgv, cmdQuote, hostedCommand, launchCommand, psEncode, psQuote, shQuote,
+  claudeArgv, cmdQuote, hostedCommand, launchCommand, psEncode, psQuote, sessionEnvironment, shQuote,
   CURRENT_WINDOW, NEW_WINDOW, SESSIONS_WINDOW, WT_EXE,
 } from "../launcher.js";
 import type { LaunchRequest } from "../launcher.js";
@@ -142,5 +142,33 @@ describe("a custom program", () => {
     const command = launchCommand(request({ config: withConfig({ shell: "custom", customShell: "   " }) }));
     expect(command.exe).toBe(WT_EXE);
     expect(command.args.join(" ")).toContain("pwsh.exe");
+  });
+});
+
+describe("sessionEnvironment", () => {
+  it("drops the marks of the Claude Code session the app was started from, and nothing else", () => {
+    // Hangar opened from a `claude` prompt: a session it then launches told the user
+    // "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker".
+    const inherited = {
+      CLAUDECODE: "1",
+      CLAUDE_CODE_CHILD_SESSION: "1",
+      CLAUDE_CODE_SESSION_ID: "6bf15f8f",
+      CLAUDE_CODE_ENTRYPOINT: "cli",
+      CLAUDE_PID: "11980",
+      CLAUDE_EFFORT: "high",
+      CLAUDE_CODE_MESSAGING_SOCKET: "\\\\.\\pipe\\x",
+      CLAUDE_CODE_MESSAGING_TOKEN: "t",
+      CLAUDE_CODE_EXECPATH: "C:\\claude.exe",
+      // A user's own settings, and the app's own home override, are not marks of a session.
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_HOME: "D:\\home\\.claude",
+      PATH: "C:\\bin",
+    };
+    expect(sessionEnvironment(inherited)).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_HOME: "D:\\home\\.claude",
+      PATH: "C:\\bin",
+    });
+    expect(inherited.CLAUDECODE).toBe("1");                   // the caller's copy is untouched
   });
 });

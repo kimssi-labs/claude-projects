@@ -16,6 +16,9 @@ export const CHANNEL = {
   renameProject: "project:rename",
   deleteProject: "project:delete",
   revealProject: "project:reveal",
+  addProject: "project:add",
+  contextMenu: "menu:context",
+  togglePin: "pin:toggle",
   loadSettings: "settings:load",
   saveSettings: "settings:save",
   displays: "settings:displays",
@@ -105,4 +108,24 @@ export interface PastedImage {
 export interface ActionResult {
   ok: boolean;
   message?: string;
+}
+
+/** One entry of a right-click menu; an id of MENU_SEPARATOR draws a line instead. */
+export interface MenuItemSpec {
+  id: string;
+  label: string;
+  enabled?: boolean;
+  /** Present at all: the item is a checkbox, ticked or not. */
+  checked?: boolean;
+}
+export const MENU_SEPARATOR = "-";
+
+export interface PinRequest {
+  kind: "projects" | "sessions";
+  key: string;
+}
+
+/** Adding a project: where it landed, when a folder was actually picked. */
+export interface AddProjectResult extends ActionResult {
+  dir?: string;
 }
