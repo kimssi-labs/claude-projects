@@ -9,7 +9,7 @@ export type Screen = "projects" | "sessions" | "settings";
 
 export type Action =
   | "moveUp" | "moveDown" | "pageUp" | "pageDown" | "moveFirst" | "moveLast"
-  | "enter" | "openNewWindow" | "pasteImage"
+  | "enter" | "openNewWindow" | "newSession" | "pasteImage"
   | "rename" | "delete" | "back" | "refresh" | "settings" | "quit"
   | "search" | "help" | "nextSection" | "previousSection";
 
@@ -28,6 +28,7 @@ export const SHORTCUTS: { keys: string; action: Action; description: string; scr
   { keys: "Home End", action: "moveLast", description: "First / last row", screens: ["projects", "sessions"] },
   { keys: "Enter", action: "enter", description: "Open sessions / resume a session", screens: ["projects", "sessions"] },
   { keys: "O", action: "openNewWindow", description: "Open in a new window", screens: ["projects", "sessions"] },
+  { keys: "N", action: "newSession", description: "Start a new session in the project", screens: ["projects", "sessions"] },
   { keys: "V", action: "pasteImage", description: "Save the clipboard image, copy its path", screens: ["projects", "sessions"] },
   { keys: "F2", action: "rename", description: "Rename (alias for a project)", screens: ["projects", "sessions"] },
   { keys: "Del", action: "delete", description: "Delete, after a confirmation", screens: ["projects", "sessions"] },
@@ -79,6 +80,7 @@ export function resolveAction(event: KeyEventLike, screen: Screen, typing = fals
 
   switch (key.toLowerCase()) {
     case "o": return "openNewWindow";
+    case "n": return "newSession";
     case "v": return "pasteImage";
     case "s": return "settings";
     default: return null;

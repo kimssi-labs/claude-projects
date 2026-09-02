@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { ConfigStore } from "../config.js";
 import { encodeProjectPath } from "../paths.js";
 import { Store } from "../store.js";
 
@@ -164,5 +165,56 @@ describe("paths that do not answer", () => {
     expect(projects.length).toBeGreaterThan(0);
     // The probe runs in the background; the scan itself may not wait for it.
     expect(elapsed, `scan took ${elapsed} ms`).toBeLessThan(2000);
+  });
+});
+
+describe("Store.addProject", () => {
+  it("lists a folder that has never had a session, under its real path", () => {
+    const fixture = makeHome();
+    const store = new Store(fixture.home, { isAlive: () => false, folderExists: () => true });
+    const cwd = join(fixture.home, "..", "Work", "Fresh");
+    mkdirSync(cwd, { recursive: true });
+
+    const dir = store.addProject(cwd);
+
+    expect(dir).toBe(encodeProjectPath(cwd));
+    expect(existsSync(join(fixture.home, "projects", dir))).toBe(true);
+    // No transcript and no .claude.json entry name this folder — the app's own note has to.
+    const added = store.scan().find((p) => p.dir === dir);
+    expect(added?.cwd).toBe(cwd);
+    expect(added?.name).toBe("Fresh");
+    expect(added?.sessions).toHaveLength(0);
+  });
+});
+
+describe("pins", () => {
+  it("puts a pinned project and a pinned session first, and takes the pin off again", () => {
+    const fixture = makeHome();
+    const store = new Store(fixture.home, { isAlive: () => false, folderExists: () => true });
+    // A second project, used more recently than the fixture's, and a second, newer session in it.
+    const other = join(fixture.home, "..", "Work", "Other");
+    const otherDir = store.addProject(other);
+    const newer = "99999999-2222-3333-4444-555555555555";
+    writeFileSync(join(fixture.home, "projects", otherDir, `${newer}.jsonl`), `${JSON.stringify({ type: "user", cwd: other, sessionId: newer })}\n`);
+    expect(store.scan()[0]?.dir).toBe(otherDir);                 // newest use first, as before
+
+    const config = new ConfigStore(fixture.home);
+    expect(config.togglePin("projects", fixture.dir)).toBe(true);
+    const [first] = store.scan();
+    expect(first?.dir).toBe(fixture.dir);
+    expect(first?.pinned).toBe(true);
+
+    expect(config.togglePin("projects", fixture.dir)).toBe(false);
+    expect(store.scan()[0]?.dir).toBe(otherDir);
+
+    // Sessions pin the same way, inside their project.
+    const older = fixture.sessionId;
+    writeFileSync(join(fixture.home, "projects", fixture.dir, `${newer}.jsonl`), `${JSON.stringify({ type: "user", cwd: fixture.cwd, sessionId: newer })}\n`);
+    expect(store.scan().find((p) => p.dir === fixture.dir)?.sessions[0]?.id).toBe(newer);
+    config.togglePin("sessions", older);
+    const sessions = store.scan().find((p) => p.dir === fixture.dir)?.sessions ?? [];
+    expect(sessions[0]?.id).toBe(older);
+    expect(sessions[0]?.pinned).toBe(true);
+    expect(sessions[1]?.pinned).toBe(false);
   });
 });

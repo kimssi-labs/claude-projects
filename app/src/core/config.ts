@@ -11,7 +11,7 @@ import { DEFAULT_PASTE_HOTKEY, DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES
 import { homePaths } from "./paths.js";
 import type { DockConfig, DockEdge, LaunchConfig, LayoutMode, PermissionMode, ShellChoice, StatusConfig, ThemeMode, UiConfig } from "./types.js";
 
-export const SECTION = { dock: "dock", status: "status", launch: "launch", ui: "ui" } as const;
+export const SECTION = { dock: "dock", status: "status", launch: "launch", ui: "ui", projects: "projects", pins: "pins" } as const;
 export const DOCK_MONITORS_KEY = "monitors";
 export const DOCK_SETUPS_KEY = "setups";
 export const DOCK_FLOOR_KEY = "floor";
@@ -201,6 +201,42 @@ export class ConfigStore {
 
   saveUi(config: UiConfig): void {
     this.saveSection(SECTION.ui, { ...config });
+  }
+
+  // -- projects added by hand -------------------------------------------------------------------
+  /**
+   * Folders added through the app, keyed by their encoded directory name.
+   *
+   * A project normally exists because Claude Code wrote a transcript into it, and the transcript
+   * says which folder it is. One added here has no transcript yet, so this is the only place its
+   * path is written down — until Claude Code has run there once and the transcript takes over.
+   */
+  addedProjects(): Record<string, string> {
+    const raw = asRecord(this.section(SECTION.projects)["added"]);
+    return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v)]));
+  }
+
+  saveAddedProject(dir: string, cwd: string): void {
+    const raw = this.section(SECTION.projects);
+    this.saveSection(SECTION.projects, { ...raw, added: { ...asRecord(raw["added"]), [dir]: cwd } });
+  }
+
+  // -- pinned rows ----------------------------------------------------------------------------------
+  /** Rows kept at the top of their list: project directory names, and session ids. */
+  pins(): { projects: string[]; sessions: string[] } {
+    const raw = this.section(SECTION.pins);
+    const list = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
+    return { projects: list(raw["projects"]), sessions: list(raw["sessions"]) };
+  }
+
+  /** Pin `key` if it is not pinned, unpin it if it is; true when it ends up pinned. */
+  togglePin(kind: "projects" | "sessions", key: string): boolean {
+    const pins = this.pins();
+    const index = pins[kind].indexOf(key);
+    if (index >= 0) pins[kind].splice(index, 1);
+    else pins[kind].push(key);
+    this.saveSection(SECTION.pins, pins);
+    return index < 0;
   }
 
   // -- project aliases ------------------------------------------------------------------------------

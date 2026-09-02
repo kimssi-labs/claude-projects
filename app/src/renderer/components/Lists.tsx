@@ -34,6 +34,15 @@ function LiveDot({ live }: { live: boolean }) {
   );
 }
 
+/** The mark of a pinned row: a pushpin, drawn rather than an emoji so it takes the theme's colour. */
+function Pin() {
+  return (
+    <svg viewBox="0 0 16 16" className="w-3 h-3 shrink-0 text-accent" fill="currentColor" aria-label="pinned" role="img">
+      <path d="M9.6 1.2 14.8 6.4l-1.9.5-2.5 2.5.4 3.2-1.2 1.2-3-3-4 4-.9-.9 4-4-3-3 1.2-1.2 3.2.4 2.5-2.5z" />
+    </svg>
+  );
+}
+
 /** Keeps the selected row in view when the keyboard moves it off screen. */
 function useScrollIntoView(selected: boolean): React.RefObject<HTMLDivElement> {
   const ref = useRef<HTMLDivElement>(null);
@@ -44,12 +53,13 @@ function useScrollIntoView(selected: boolean): React.RefObject<HTMLDivElement> {
 }
 
 export function ProjectRow({
-  project, selected, onSelect, onOpen,
+  project, selected, onSelect, onOpen, onContextMenu,
 }: {
   project: ProjectInfo;
   selected: boolean;
   onSelect: () => void;
   onOpen: () => void;
+  onContextMenu?: () => void;
 }) {
   const ref = useScrollIntoView(selected);
   const [box, width] = useElementWidth<HTMLDivElement>();
@@ -60,11 +70,13 @@ export function ProjectRow({
       className={`row ${selected ? "row-selected" : "hover:bg-ink-700/60"} ${stacked ? "flex-wrap" : ""}`}
       onClick={onSelect}
       onDoubleClick={onOpen}
+      onContextMenu={(event) => { event.preventDefault(); onContextMenu?.(); }}
     >
       <div ref={box} className="absolute inset-x-0 h-0" aria-hidden="true" />
       <LiveDot live={project.liveCount > 0} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
+          {project.pinned ? <Pin /> : null}
           <Truncated
             as="span"
             title={project.cwd ?? project.dir}
@@ -85,13 +97,14 @@ export function ProjectRow({
 }
 
 export function SessionRow({
-  session, selected, samples, onSelect, onOpen,
+  session, selected, samples, onSelect, onOpen, onContextMenu,
 }: {
   session: SessionInfo;
   selected: boolean;
   samples: MetricSample[];
   onSelect: () => void;
   onOpen: () => void;
+  onContextMenu?: () => void;
 }) {
   const ref = useScrollIntoView(selected);
   const [box, width] = useElementWidth<HTMLDivElement>();
@@ -103,11 +116,15 @@ export function SessionRow({
       className={`row ${selected ? "row-selected" : "hover:bg-ink-700/60"} ${stacked ? "flex-wrap" : ""}`}
       onClick={onSelect}
       onDoubleClick={onOpen}
+      onContextMenu={(event) => { event.preventDefault(); onContextMenu?.(); }}
     >
       <div ref={box} className="absolute inset-x-0 h-0" aria-hidden="true" />
       <LiveDot live={session.live} />
       <div className="min-w-0 flex-1">
-        <Truncated className="text-sm text-bone-100">{session.title}</Truncated>
+        <div className="flex items-center gap-1.5">
+          {session.pinned ? <Pin /> : null}
+          <Truncated as="span" className="text-sm text-bone-100">{session.title}</Truncated>
+        </div>
         <Truncated className="text-[11px] text-bone-500">
           {session.named && session.prompt ? session.prompt : session.id}
         </Truncated>

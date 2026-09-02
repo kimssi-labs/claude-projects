@@ -125,6 +125,38 @@ export function windowArgument(target: OpenTarget): string {
  * Windows Terminal is present; on Linux it is the detected terminal emulator; and where neither
  * exists the hosted shell is started directly.
  */
+/**
+ * What Claude Code stamps on the environment of every process it starts, to tell a child session
+ * from a top-level one. Config a user sets in their profile (CLAUDE_CODE_USE_BEDROCK, say) is not
+ * in this list and passes through.
+ */
+export const SESSION_MARKERS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT",
+];
+
+/**
+ * The environment a launched session runs in: ours, minus the marks of a session we were started
+ * from.
+ *
+ * Hangar started from inside a Claude Code session — a `claude --p` typed at its prompt, or a tool
+ * call — inherits that session's markers, and a `claude` we then spawn inherits them again and takes
+ * itself for a child session: it stops saving its transcript and says so on start. Every session
+ * this app opens is a top-level one, whatever started the app.
+ */
+export function sessionEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean = { ...env };
+  for (const key of SESSION_MARKERS) delete clean[key];
+  return clean;
+}
+
 export function launchCommand(request: LaunchRequest, pwshAvailable = true): LaunchCommand {
   // "Custom program" is a program like VS Code, not another shell to host claude in. It is opened
   // ON the project — started in the project folder, with that folder as its argument — and what

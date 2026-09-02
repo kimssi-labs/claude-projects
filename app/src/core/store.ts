@@ -208,6 +208,10 @@ export class Store {
       const encoded = encodeProjectPath(path);
       if (!known.has(encoded)) known.set(encoded, path);
     }
+    // A folder added by hand has neither a transcript nor a .claude.json entry yet.
+    for (const [dir, path] of Object.entries(this.config.addedProjects())) {
+      if (!known.has(dir)) known.set(dir, path);
+    }
     return known;
   }
 
@@ -222,14 +226,16 @@ export class Store {
     const titles = this.historyTitles();
     const known = this.knownPaths();
     const aliases = this.config.aliases();
+    const pins = this.config.pins();
     let dirs: string[] = [];
     try {
       dirs = readdirSync(this.paths.projects, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
       return [];
     }
-    const projects = dirs.map((name) => this.readProject(name, live, titles, known, aliases));
-    return projects.sort((a, b) => b.lastUsed - a.lastUsed);
+    const projects = dirs.map((name) => this.readProject(name, live, titles, known, aliases, pins));
+    // Pinned rows first, then newest use first — a pin is the user overruling the clock.
+    return projects.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastUsed - a.lastUsed);
   }
 
   private readProject(
@@ -238,6 +244,7 @@ export class Store {
     titles: Map<string, string>,
     known: Map<string, string>,
     aliases: Record<string, string>,
+    pins: { projects: string[]; sessions: string[] },
   ): ProjectInfo {
     const dir = join(this.paths.projects, dirName);
     // Stat once per file and sort on that: comparing with statSync() inside the comparator asks
@@ -273,8 +280,9 @@ export class Store {
         bytes: st.size,
         live: live.has(id),
         pid: live.get(id) ?? null,
+        pinned: pins.sessions.includes(id),
       };
-    });
+    }).sort((a, b) => Number(b.pinned) - Number(a.pinned));   // stable: newest first within each group
 
     const dirMtime = statSync(dir).mtimeMs;
     const alias = (cwd && aliases[cwd]) || aliases[dirName] || null;
@@ -289,6 +297,7 @@ export class Store {
       lastUsed: sessions.length ? Math.max(...sessions.map((s) => s.modifiedAt)) : dirMtime,
       totalBytes: sessions.reduce((sum, s) => sum + s.bytes, 0),
       liveCount: sessions.filter((s) => s.live).length,
+      pinned: pins.projects.includes(dirName),
     };
   }
 
@@ -313,6 +322,20 @@ export class Store {
     if (alias) aliases[key] = alias;
     else delete aliases[key];
     this.config.saveAliases(aliases);
+  }
+
+  /**
+   * A folder that has never had a session, made into a project.
+   *
+   * Claude Code creates a project's directory the first time it writes a transcript there; this
+   * makes the same directory ahead of time, so the folder is in the list and a session can be
+   * started from it instead of from a terminal. Once one has run, the transcript's cwd takes over.
+   */
+  addProject(cwd: string): string {
+    const dir = encodeProjectPath(cwd);
+    mkdirSync(join(this.paths.projects, dir), { recursive: true });
+    this.config.saveAddedProject(dir, cwd);
+    return dir;
   }
 
   deleteSession(session: SessionInfo): void {

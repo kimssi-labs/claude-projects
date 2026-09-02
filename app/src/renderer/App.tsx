@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nextIndex, resolveAction, SHORTCUTS, type Screen } from "@core/keymap";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
-import { api, type AppInfo, type DisplayInfo, type SettingsPayload } from "./api";
+import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload } from "./api";
 import { DockGrip } from "./components/DockGrip";
 import { AreaChart, UsageCard } from "./components/Chart";
 import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./components/Lists";
@@ -77,6 +77,7 @@ export function App() {
     const [scanned, statusSnapshot] = await Promise.all([api.scan(), api.status()]);
     setProjects(scanned);
     setStatus(statusSnapshot);
+    return scanned;
   }, []);
 
   // First paint: everything the window needs, plus the position the last run ended on.
@@ -182,6 +183,26 @@ export function App() {
     void refresh();
   }, [screen, openProject, project, session, notify, refresh]);
 
+  /** A fresh session in the project on screen — the one open, or the one under the cursor. */
+  const startNew = useCallback(async () => {
+    const now = latest.current;
+    const dir = now.screen === "sessions" ? now.openProject : now.project?.dir;
+    if (!dir) return;
+    notify(await api.openSession({ projectDir: dir, sessionId: null, target: "sessionsWindow" }));
+    void refresh();
+  }, [notify, refresh]);
+
+  /** Pick a folder, make it a project, and land on its row. */
+  const addProject = useCallback(async () => {
+    const result = await api.addProject();
+    notify(result);
+    if (!result.ok || !result.dir) return;
+    const scanned = await refresh();
+    setQuery("");                                       // a filter could hide the row just added
+    setScreen("projects");
+    setProjectIndex(Math.max(0, scanned.findIndex((p) => p.dir === result.dir)));
+  }, [notify, refresh]);
+
   const enterSessions = useCallback((dir: string) => {
     setOpenProject(dir);
     setScreen("sessions");
@@ -209,6 +230,75 @@ export function App() {
     notify(result);
     if (result.ok) await refresh();
   }, [screen, session, openProject, project, notify, refresh]);
+
+  /**
+   * The right-click menu of a project row: what the keys do, plus pinning and the folder itself.
+   * Every action names its target outright rather than going through the selection, so the menu
+   * works the same on a row that was not selected when it was clicked.
+   */
+  const projectMenu = useCallback(async (target: ProjectInfo, index: number) => {
+    setProjectIndex(index);
+    setScreen("projects");
+    const choice = await api.contextMenu([
+      { id: "sessions", label: "Open sessions" },
+      { id: "new", label: "New session" },
+      { id: "newWindow", label: "New session in a new window" },
+      { id: MENU_SEPARATOR, label: "" },
+      { id: "pin", label: "Pin to top", checked: target.pinned },
+      { id: "rename", label: "Rename…" },
+      { id: "reveal", label: "Show folder", enabled: Boolean(target.cwd && target.exists) },
+      { id: MENU_SEPARATOR, label: "" },
+      { id: "delete", label: "Delete…", enabled: target.liveCount === 0 },
+    ]);
+    switch (choice) {
+      case "sessions": enterSessions(target.dir); break;
+      case "new": notify(await api.openSession({ projectDir: target.dir, sessionId: null, target: "sessionsWindow" })); break;
+      case "newWindow": notify(await api.openSession({ projectDir: target.dir, sessionId: null, target: "newWindow" })); break;
+      case "pin": notify(await api.togglePin({ kind: "projects", key: target.dir })); await refresh(); break;
+      case "rename": setEditing(target.dir); break;
+      case "reveal": notify(await api.revealProject(target.dir)); break;
+      case "delete": {
+        const result = await api.deleteProject({ projectDir: target.dir });
+        notify(result);
+        if (result.ok) await refresh();
+        break;
+      }
+      default: break;
+    }
+  }, [enterSessions, notify, refresh]);
+
+  /** The right-click menu of a session row, on either screen it is listed on. */
+  const sessionMenu = useCallback(async (projectDir: string, target: SessionInfo, index: number) => {
+    if (latest.current.screen === "sessions") setSessionIndex(index);
+    const choice = await api.contextMenu([
+      { id: "resume", label: "Resume", enabled: !target.live },
+      { id: "resumeWindow", label: "Resume in a new window", enabled: !target.live },
+      { id: MENU_SEPARATOR, label: "" },
+      { id: "pin", label: "Pin to top", checked: target.pinned },
+      { id: "rename", label: "Rename…" },
+      { id: MENU_SEPARATOR, label: "" },
+      { id: "delete", label: "Delete…", enabled: !target.live },
+    ]);
+    switch (choice) {
+      case "resume": notify(await api.openSession({ projectDir, sessionId: target.id, target: "sessionsWindow" })); break;
+      case "resumeWindow": notify(await api.openSession({ projectDir, sessionId: target.id, target: "newWindow" })); break;
+      case "pin": notify(await api.togglePin({ kind: "sessions", key: target.id })); await refresh(); break;
+      case "rename": {
+        // The editor replaces the row on the sessions screen only, so the preview list gets there first.
+        if (latest.current.screen !== "sessions") enterSessions(projectDir);
+        setSessionIndex(index);
+        setEditing(target.id);
+        break;
+      }
+      case "delete": {
+        const result = await api.deleteSession({ projectDir, sessionId: target.id });
+        notify(result);
+        if (result.ok) await refresh();
+        break;
+      }
+      default: break;
+    }
+  }, [enterSessions, notify, refresh]);
 
   // The global shortcut can fire while another window has focus; its verdict still belongs here.
   useEffect(() => api.onPasteResult(notify), [notify]);
@@ -262,6 +352,7 @@ export function App() {
           break;
         }
         case "openNewWindow": void open("newWindow"); break;
+        case "newSession": void startNew(); break;
         case "pasteImage": void api.pasteImage().then(notify); break;
         case "rename": {
           const id = now.screen === "sessions" ? now.session?.id : now.project?.dir;
@@ -287,7 +378,7 @@ export function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [screen, filtered, sessions, project, session, editing, helpOpen, settingsSection, open, back, remove, refresh, openSettings, enterSessions]);
+  }, [screen, filtered, sessions, project, session, editing, helpOpen, settingsSection, open, startNew, back, remove, refresh, openSettings, enterSessions]);
 
   useEffect(() => {
     if (editing) editRef.current?.focus();
@@ -359,15 +450,25 @@ export function App() {
 
   const projectPane = (
     <>
-          <div className={tight ? "p-1" : "p-2"}>
+          <div className={`flex gap-1 ${tight ? "p-1" : "p-2"}`}>
             <input
               ref={searchRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => { if (event.key === "Escape") { setQuery(""); searchRef.current?.blur(); } }}
               placeholder="Search projects  ( / )"
-              className="w-full bg-ink-800 border border-ink-600 rounded-lg px-3 py-1.5 text-sm placeholder:text-bone-500 focus:border-accent/60"
+              className="flex-1 min-w-0 bg-ink-800 border border-ink-600 rounded-lg px-3 py-1.5 text-sm placeholder:text-bone-500 focus:border-accent/60"
             />
+            {/* A folder that has never had a session has no other way into this list. */}
+            <button
+              type="button"
+              className="btn px-2.5 shrink-0"
+              title="Add a project folder…"
+              aria-label="Add a project"
+              onClick={() => void addProject()}
+            >
+              +
+            </button>
           </div>
           <div className={`flex-1 overflow-auto space-y-0.5 ${tight ? "px-1 pb-1" : "px-2 pb-2"}`}>
             {filtered.map((item, index) => (
@@ -392,6 +493,7 @@ export function App() {
                   selected={screen !== "settings" && (screen === "projects" ? index === projectIndex : item.dir === openProject)}
                   onSelect={() => { setProjectIndex(index); setScreen("projects"); }}
                   onOpen={() => enterSessions(item.dir)}
+                  onContextMenu={() => void projectMenu(item, index)}
                 />
               )
             ))}
@@ -467,17 +569,14 @@ export function App() {
                 <div className="flex-1" />
                 {/* The key belongs in the tooltip: on the face of a button it is width spent on
                     something only worth learning once. */}
-                {screen === "sessions" ? (
-                  <button type="button" className="btn" title="Back to the projects (Esc)" onClick={back}>Back</button>
-                ) : null}
                 <button
                   type="button"
                   className="btn"
-                  title="Open the selected project's sessions (Enter)"
-                  onClick={() => void open("sessionsWindow")}
-                  disabled={!project}
+                  title="Start a new session in this project (N)"
+                  onClick={() => void startNew()}
+                  disabled={screen === "sessions" ? !openProject : !project}
                 >
-                  Open
+                  New
                 </button>
                 <button type="button" className="btn" title="Settings (S)" onClick={() => void openSettings()} aria-label="Settings">
                   {tight ? "\u2699" : "Settings"}
@@ -528,11 +627,12 @@ export function App() {
                           samples={monitoring ? sessionHistory[item.id] ?? [] : []}
                           onSelect={() => setSessionIndex(index)}
                           onOpen={() => void open("sessionsWindow")}
+                          onContextMenu={() => void sessionMenu(openProject as string, item, index)}
                         />
                       )
                     ))
                     : project
-                      ? project.sessions.slice(0, 8).map((item) => (
+                      ? project.sessions.slice(0, 8).map((item, index) => (
                         <SessionRow
                           key={item.id}
                           session={item}
@@ -540,6 +640,7 @@ export function App() {
                           samples={monitoring ? sessionHistory[item.id] ?? [] : []}
                           onSelect={() => enterSessions(project.dir)}
                           onOpen={() => enterSessions(project.dir)}
+                          onContextMenu={() => void sessionMenu(project.dir, item, index)}
                         />
                       ))
                       : null}
@@ -576,11 +677,12 @@ export function App() {
                           samples={monitoring ? sessionHistory[item.id] ?? [] : []}
                           onSelect={() => setSessionIndex(index)}
                           onOpen={() => void open("sessionsWindow")}
+                          onContextMenu={() => void sessionMenu(openProject as string, item, index)}
                         />
                       )
                     ))
                     : project
-                      ? project.sessions.slice(0, 8).map((item) => (
+                      ? project.sessions.slice(0, 8).map((item, index) => (
                         <SessionRow
                           key={item.id}
                           session={item}
@@ -588,6 +690,7 @@ export function App() {
                           samples={monitoring ? sessionHistory[item.id] ?? [] : []}
                           onSelect={() => enterSessions(project.dir)}
                           onOpen={() => enterSessions(project.dir)}
+                          onContextMenu={() => void sessionMenu(project.dir, item, index)}
                         />
                       ))
                       : null}

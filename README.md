@@ -66,6 +66,7 @@ Everything is reachable from the keyboard; `?` shows this list in the app.
 | `↑` `↓` `PgUp` `PgDn` `Home` `End` | move | move |
 | `Enter` | open the project's sessions | resume in a new terminal |
 | `O` | new session in a new window | resume in a new window |
+| `N` | new session in the project | new session in the project |
 | `F2` | set a display alias | rename the session |
 | `Del` | delete the project folder | delete the session |
 | `V` | save the clipboard image, copy its path | same |
@@ -75,7 +76,10 @@ Everything is reachable from the keyboard; `?` shows this list in the app.
 | `Tab` | — (settings: next section) | — |
 | `F5` / `Ctrl+Q` | refresh / quit | refresh / quit |
 
-Deletions ask first and refuse anything still running. Renaming a session writes the same
+A folder that has never had a session is not in the list yet: the **+** beside the search box opens
+a folder picker and adds it, ready for **New**. Every row also has a right-click menu with the same
+verbs, plus **Pin to top** — a pinned project or session stays at the head of its list, marked with a
+pin, until it is unpinned. Deletions ask first and refuse anything still running. Renaming a session writes the same
 `custom-title.json` Claude Code's own `/rename` writes, so the new name also shows up in `/resume`.
 
 ## Pasting a screenshot
