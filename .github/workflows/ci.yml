@@ -84,7 +84,7 @@ jobs:
             app/release/*.exe
             app/release/*.AppImage
             app/release/*.deb
-            app/release/*.yml
+            app/release/latest*.yml
           if-no-files-found: error
 
   publish:
