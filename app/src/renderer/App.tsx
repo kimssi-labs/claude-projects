@@ -7,9 +7,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { nextIndex, resolveAction, SHORTCUTS, type Screen } from "@core/keymap";
+import type { Language } from "@core/i18n";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
-import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload } from "./api";
+import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
+import { initialState as initialUpdateState } from "@core/updates";
 import { DockGrip } from "./components/DockGrip";
 import { AreaChart, UsageCard } from "./components/Chart";
 import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./components/Lists";
@@ -21,6 +23,7 @@ import { Truncated } from "./components/Truncated";
 import { WindowControls } from "./components/WindowControls";
 import { STACK_MIN, stackedTopHeight, useLayoutMode } from "./useLayoutMode";
 import { useTheme } from "./useTheme";
+import { TextProvider, useText } from "./useText";
 
 const PAGE_SIZE = 10;
 const REFRESH_MS = 15_000;
@@ -35,7 +38,23 @@ const HISTORY_LIMIT = 300;
 
 type Toast = { text: string; tone: "ok" | "bad" } | null;
 
+/**
+ * The window, wrapped in the language it is read in.
+ *
+ * Split so everything inside can call useText(): a provider cannot be consumed by the component
+ * that renders it.
+ */
 export function App() {
+  const [shell, setShell] = useState<{ language: Language; locale: string }>({ language: "system", locale: "en" });
+  return (
+    <TextProvider language={shell.language} locale={shell.locale}>
+      <Window onLanguage={setShell} />
+    </TextProvider>
+  );
+}
+
+function Window({ onLanguage }: { onLanguage: (next: { language: Language; locale: string }) => void }) {
+  const t = useText();
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [status, setStatus] = useState<StatusSnapshot | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -49,6 +68,7 @@ export function App() {
   const [toast, setToast] = useState<Toast>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
+  const [update, setUpdate] = useState<UpdateState>(() => initialUpdateState("", true));
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("dock");
   const [systemHistory, setSystemHistory] = useState<MetricSample[]>([]);
   // Not part of the history: a clock speed is a reading of right now, not a series.
@@ -94,6 +114,8 @@ export function App() {
       setProjects(scanned);
       setStatus(statusSnapshot);
       setInfo(appInfo);
+      setUpdate((previous) => ({ ...previous, current: appInfo.version }));
+      onLanguage({ language: saved.ui.language, locale: appInfo.locale });
       setSystemHistory(history.system);
       setSessionHistory(history.sessions);
     })();
@@ -107,7 +129,13 @@ export function App() {
   // Live samples arrive from the main process; keep the same bounded history the sampler keeps.
   // Main can change the settings on its own — undocking when the window is dragged out of its band.
   useEffect(() => api.onSettings((next) => setSettings(next)), []);
+  // Main can save the settings too, so the language follows from wherever it changed.
+  useEffect(() => {
+    if (settings && info) onLanguage({ language: settings.ui.language, locale: info.locale });
+  }, [settings?.ui.language, info?.locale, onLanguage, settings, info]);
   useEffect(() => api.onWindowState(setWindowState), []);
+  // A download runs for a while; the screen learns about it as it happens rather than on reopen.
+  useEffect(() => api.onUpdate(setUpdate), []);
 
   // Measure the room the two stacked panes share, rather than guessing it from the window: the
   // header and toolbar above them came to 149 px here, which is more than a divider can spare.
@@ -149,6 +177,22 @@ export function App() {
   }, [projects, query]);
 
   const project = filtered[Math.min(projectIndex, Math.max(0, filtered.length - 1))] ?? null;
+
+  // The expensive half of git, for the row in front of the user and no other. The count lands in
+  // the project list on the next scan; this only asks for it.
+  useEffect(() => {
+    if (!settings?.git.enabled || !settings.git.countChanges) return;
+    const dir = openProject ?? project?.dir;
+    if (!dir) return;
+    let cancelled = false;
+    void api.gitCount(dir).then((dirty) => {
+      if (cancelled || dirty === null) return;
+      setProjects((previous) => previous.map((item) => (item.dir === dir && item.git
+        ? { ...item, git: { ...item.git, dirty } }
+        : item)));
+    });
+    return () => { cancelled = true; };
+  }, [openProject, project?.dir, settings?.git.enabled, settings?.git.countChanges]);
   const sessions = useMemo(() => {
     const current = projects.find((p) => p.dir === openProject) ?? null;
     if (!current) return [];
@@ -240,15 +284,24 @@ export function App() {
     setProjectIndex(index);
     setScreen("projects");
     const choice = await api.contextMenu([
-      { id: "sessions", label: "Open sessions" },
-      { id: "new", label: "New session" },
-      { id: "newWindow", label: "New session in a new window" },
+      { id: "sessions", label: t("menu.openSessions") },
+      { id: "new", label: t("menu.newSession") },
+      { id: "newWindow", label: t("menu.newSessionWindow") },
       { id: MENU_SEPARATOR, label: "" },
-      { id: "pin", label: "Pin to top", checked: target.pinned },
-      { id: "rename", label: "Rename…" },
-      { id: "reveal", label: "Show folder", enabled: Boolean(target.cwd && target.exists) },
+      { id: "pin", label: t("menu.pin"), checked: target.pinned },
+      { id: "rename", label: t("menu.rename") },
+      { id: "reveal", label: t("menu.showFolder"), enabled: Boolean(target.cwd && target.exists) },
+      { id: "worktreeAdd", label: t("menu.worktreeAdd"), enabled: Boolean(target.git) },
+      { id: "worktreeRemove", label: t("menu.worktreeRemove"), enabled: target.worktree },
+      {
+        id: "gitSync",
+        label: settings?.git.base
+          ? t("menu.sync", { base: settings.git.base })
+          : t("menu.syncDefault"),
+        enabled: Boolean(target.git),
+      },
       { id: MENU_SEPARATOR, label: "" },
-      { id: "delete", label: "Delete…", enabled: target.liveCount === 0 },
+      { id: "delete", label: t("menu.delete"), enabled: target.liveCount === 0 },
     ]);
     switch (choice) {
       case "sessions": enterSessions(target.dir); break;
@@ -257,6 +310,38 @@ export function App() {
       case "pin": notify(await api.togglePin({ kind: "projects", key: target.dir })); await refresh(); break;
       case "rename": setEditing(target.dir); break;
       case "reveal": notify(await api.revealProject(target.dir)); break;
+      case "worktreeAdd": {
+        const branch = window.prompt(t("menu.worktreeAdd"), "");
+        if (!branch?.trim()) break;
+        const result = await api.worktreeAdd(target.dir, branch);
+        notify(result);
+        if (!result.ok || !result.dir) break;
+        // Land on the new worktree: it is a project now, and the point of making it was to work in it.
+        const scanned = await refresh();
+        setQuery("");
+        setScreen("projects");
+        setProjectIndex(Math.max(0, scanned.findIndex((p) => p.dir === result.dir)));
+        break;
+      }
+      case "worktreeRemove": {
+        const first = await api.worktreeRemove(target.dir, false);
+        if (first.ok) { notify(first); await refresh(); break; }
+        // git refuses a worktree with work in it; forcing is the user's call, not ours.
+        notify(first);
+        if (window.confirm(`${first.message ?? ""}
+
+${t("menu.worktreeForce")}`)) {
+          notify(await api.worktreeRemove(target.dir, true));
+          await refresh();
+        }
+        break;
+      }
+      case "gitSync": {
+        notify({ ok: true, message: "Updating from the base branch…" });
+        notify(await api.gitSync(target.dir));
+        await refresh();
+        break;
+      }
       case "delete": {
         const result = await api.deleteProject({ projectDir: target.dir });
         notify(result);
@@ -265,19 +350,19 @@ export function App() {
       }
       default: break;
     }
-  }, [enterSessions, notify, refresh]);
+  }, [enterSessions, notify, refresh, settings?.git.base]);
 
   /** The right-click menu of a session row, on either screen it is listed on. */
   const sessionMenu = useCallback(async (projectDir: string, target: SessionInfo, index: number) => {
     if (latest.current.screen === "sessions") setSessionIndex(index);
     const choice = await api.contextMenu([
-      { id: "resume", label: "Resume", enabled: !target.live },
-      { id: "resumeWindow", label: "Resume in a new window", enabled: !target.live },
+      { id: "resume", label: t("menu.resume"), enabled: !target.live },
+      { id: "resumeWindow", label: t("menu.resumeWindow"), enabled: !target.live },
       { id: MENU_SEPARATOR, label: "" },
-      { id: "pin", label: "Pin to top", checked: target.pinned },
-      { id: "rename", label: "Rename…" },
+      { id: "pin", label: t("menu.pin"), checked: target.pinned },
+      { id: "rename", label: t("menu.rename") },
       { id: MENU_SEPARATOR, label: "" },
-      { id: "delete", label: "Delete…", enabled: !target.live },
+      { id: "delete", label: t("menu.delete"), enabled: !target.live },
     ]);
     switch (choice) {
       case "resume": notify(await api.openSession({ projectDir, sessionId: target.id, target: "sessionsWindow" })); break;
@@ -302,9 +387,28 @@ export function App() {
 
   // The global shortcut can fire while another window has focus; its verdict still belongs here.
   useEffect(() => api.onPasteResult(notify), [notify]);
+  // A sweep runs on a timer in the main process; it speaks only when it changed something.
+  useEffect(() => api.onToast((message) => notify({ ok: true, message })), [notify]);
+
+  /** Turn usage collection on or off, then show the figures it did or did not find. */
+  const collectUsage = useCallback(async (on: boolean) => {
+    const result = await api.setUsageHook(on);
+    setSettings(result.settings);
+    notify(result);
+    setStatus(await api.status());
+  }, [notify]);
 
   const applySettings = useCallback(async (next: SettingsPayload) => {
-    const saved = await api.saveSettings({ dock: next.dock, status: next.status, launch: next.launch, ui: next.ui });
+    // Every section, not a list that has to be remembered: a section left out of this call is a
+    // setting the screen appears to change and then silently reverts on the next push.
+    const saved = await api.saveSettings({
+      dock: next.dock,
+      status: next.status,
+      launch: next.launch,
+      ui: next.ui,
+      git: next.git,
+      updates: next.updates,
+    });
     setSettings(saved);
     setTheme(saved.ui.theme);
     setStatus(await api.status());
@@ -435,13 +539,13 @@ export function App() {
   const machineCards = (
     <>
       {usageWindows.map((usage) => <UsageCard key={usage.key} window={usage} compact />)}
-      <AreaChart samples={systemHistory} field="cpu" max={100} label="CPU" value={cpuValue} />
+      <AreaChart samples={systemHistory} field="cpu" max={100} label={t("gauge.cpu")} value={cpuValue} />
       <AreaChart
         samples={systemHistory}
         field="memoryBytes"
         max={totalMemory}
-        label="Memory"
-        short="Mem"
+        label={t("gauge.memory")}
+        short={t("gauge.memoryShort")}
         value={memoryValue}
         total={memoryTotal ? formatBytes(memoryTotal) : undefined}
       />
@@ -456,15 +560,15 @@ export function App() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => { if (event.key === "Escape") { setQuery(""); searchRef.current?.blur(); } }}
-              placeholder="Search projects  ( / )"
+              placeholder={t("app.search")}
               className="flex-1 min-w-0 bg-ink-800 border border-ink-600 rounded-lg px-3 py-1.5 text-sm placeholder:text-bone-500 focus:border-accent/60"
             />
             {/* A folder that has never had a session has no other way into this list. */}
             <button
               type="button"
               className="btn px-2.5 shrink-0"
-              title="Add a project folder…"
-              aria-label="Add a project"
+              title={t("app.addProject.title")}
+              aria-label={t("app.addProject")}
               onClick={() => void addProject()}
             >
               +
@@ -483,7 +587,7 @@ export function App() {
                     if (event.key === "Escape") setEditing(null);
                   }}
                   data-testid="rename-input"
-                  aria-label="New name"
+                  aria-label={t("tip.newName")}
                   className="w-full bg-ink-700 border border-accent/60 rounded-lg px-3 py-2 text-sm"
                 />
               ) : (
@@ -497,7 +601,7 @@ export function App() {
                 />
               )
             ))}
-            {filtered.length === 0 ? <p className="px-3 py-6 text-xs text-bone-500">No project matches.</p> : null}
+            {filtered.length === 0 ? <p className="px-3 py-6 text-xs text-bone-500">{t("app.noMatch")}</p> : null}
           </div>
     </>
   );
@@ -553,6 +657,11 @@ export function App() {
               onFocus={setSettingsSection}
               onChange={(next) => void applySettings(next)}
               onApplyDock={(enabled) => void applyDock(enabled)}
+              onCollectUsage={(on) => void collectUsage(on)}
+              onOpenPage={(page) => void api.openPage(page)}
+              locale={info?.locale ?? "en"}
+              updateState={update}
+              onUpdateAction={(command) => void api.updateAction(command).then(setUpdate)}
               onClose={back}
             />
           ) : (
@@ -563,23 +672,25 @@ export function App() {
                   title={screen === "sessions" && openProjectInfo ? openProjectInfo.cwd ?? undefined : undefined}
                   className="text-sm text-bone-200"
                 >
-                  {screen === "sessions" && openProjectInfo ? openProjectInfo.name : "Projects"}
+                  {screen === "sessions" && openProjectInfo ? openProjectInfo.name : t("app.projects")}
                 </Truncated>
-                <span className="chip">{screen === "sessions" ? `${sessions.length} sessions` : `${filtered.length} projects`}</span>
+                <span className="chip">{screen === "sessions"
+                  ? t("app.sessions.count", { count: sessions.length })
+                  : t("app.projects.count", { count: filtered.length })}</span>
                 <div className="flex-1" />
                 {/* The key belongs in the tooltip: on the face of a button it is width spent on
                     something only worth learning once. */}
                 <button
                   type="button"
                   className="btn"
-                  title="Start a new session in this project (N)"
+                  title={t("app.new.title")}
                   onClick={() => void startNew()}
                   disabled={screen === "sessions" ? !openProject : !project}
                 >
-                  New
+                  {t("app.new")}
                 </button>
-                <button type="button" className="btn" title="Settings (S)" onClick={() => void openSettings()} aria-label="Settings">
-                  {tight ? "\u2699" : "Settings"}
+                <button type="button" className="btn" title={t("app.settings.title")} onClick={() => void openSettings()} aria-label={t("app.settings")}>
+                  {tight ? "\u2699" : t("app.settings")}
                 </button>
               </div>
 
@@ -616,7 +727,7 @@ export function App() {
                             if (event.key === "Escape") setEditing(null);
                           }}
                           data-testid="rename-input"
-                  aria-label="New name"
+                  aria-label={t("tip.newName")}
                   className="w-full bg-ink-700 border border-accent/60 rounded-lg px-3 py-2 text-sm"
                         />
                       ) : (
@@ -646,7 +757,7 @@ export function App() {
                       : null}
                   {screen === "projects" && project && project.sessions.length > 8 ? (
                     <button type="button" className="btn w-full mt-1" onClick={() => enterSessions(project.dir)}>
-                      Show all {project.sessions.length} sessions (Enter)
+                      {t("app.showAll", { count: project.sessions.length })}
                     </button>
                   ) : null}
                     </div>
@@ -666,7 +777,7 @@ export function App() {
                             if (event.key === "Escape") setEditing(null);
                           }}
                           data-testid="rename-input"
-                  aria-label="New name"
+                  aria-label={t("tip.newName")}
                   className="w-full bg-ink-700 border border-accent/60 rounded-lg px-3 py-2 text-sm"
                         />
                       ) : (
@@ -696,7 +807,7 @@ export function App() {
                       : null}
                   {screen === "projects" && project && project.sessions.length > 8 ? (
                     <button type="button" className="btn w-full mt-1" onClick={() => enterSessions(project.dir)}>
-                      Show all {project.sessions.length} sessions (Enter)
+                      {t("app.showAll", { count: project.sessions.length })}
                     </button>
                   ) : null}
                 </div>
@@ -729,22 +840,24 @@ export function App() {
                       samples={systemHistory}
                       field="cpu"
                       max={100}
-                      label="CPU (machine)"
+                      label={t("gauge.cpuMachine")}
                       value={cpuValue}
                     />
                     <AreaChart
                       samples={systemHistory}
                       field="memoryBytes"
                       max={totalMemory}
-                      label="Memory (machine)"
-                      short="Mem"
+                      label={t("gauge.memoryMachine")}
+                      short={t("gauge.memoryShort")}
                       value={memoryValue}
                       total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                     />
                     <div className="text-[11px] text-bone-500">
-                      {liveSessions.length
-                        ? `${liveSessions.length} session${liveSessions.length > 1 ? "s" : ""} running`
-                        : "no session running"}
+                      {liveSessions.length === 0
+                        ? t("app.noSessionRunning")
+                        : liveSessions.length === 1
+                          ? t("app.sessionRunning")
+                          : t("app.sessionsRunning", { count: liveSessions.length })}
                     </div>
                   </div>
                 </aside>
@@ -764,7 +877,7 @@ export function App() {
                       ? <div className="flex-1 min-h-0 flex items-start gap-1 [&>*]:min-w-0 [&>*]:flex-1">{machineCards}</div>
                       : machineCards}
                     <div className={`text-[11px] text-bone-500 ${band ? "shrink-0 text-center" : ""}`}>
-                      {liveSessions.length ? `${liveSessions.length} running` : "idle"}
+                      {liveSessions.length ? t("app.running", { count: liveSessions.length }) : t("app.running.none")}
                     </div>
                   </aside>
                 )}
@@ -780,7 +893,7 @@ export function App() {
                     samples={systemHistory}
                     field="cpu"
                     max={100}
-                    label="CPU"
+                    label={t("gauge.cpu")}
                     value={cpuValue}
                   />
                   <AreaChart
@@ -788,8 +901,8 @@ export function App() {
                     samples={systemHistory}
                     field="memoryBytes"
                     max={totalMemory}
-                    label="Memory"
-                    short="Mem"
+                    label={t("gauge.memory")}
+                    short={t("gauge.memoryShort")}
                     value={memoryValue}
                     total={memoryTotal ? formatBytes(memoryTotal) : undefined}
                   />
@@ -810,7 +923,7 @@ export function App() {
       {helpOpen ? (
         <div className="absolute inset-0 bg-ink-900/80 flex items-center justify-center" onClick={() => setHelpOpen(false)}>
           <div className="card p-5 w-[30rem]" onClick={(event) => event.stopPropagation()}>
-            <h2 className="text-sm font-medium text-bone-100 mb-3">Keyboard</h2>
+            <h2 className="text-sm font-medium text-bone-100 mb-3">{t("keys.title")}</h2>
             <div className="space-y-1">
               {SHORTCUTS.map((shortcut) => (
                 <div key={shortcut.keys} className="flex justify-between text-xs">

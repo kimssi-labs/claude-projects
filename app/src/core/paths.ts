@@ -26,6 +26,10 @@ export interface HomePaths {
   rateLimits: string;
   /** Where a pasted screenshot is written, so a terminal session can be given its path. */
   clips: string;
+  /** Claude Code's own settings file — where a hook has to be registered to run at all. */
+  settings: string;
+  /** Directory this app writes its hook script into. */
+  hooks: string;
 }
 
 export function homePaths(root = claudeHome()): HomePaths {
@@ -41,6 +45,8 @@ export function homePaths(root = claudeHome()): HomePaths {
     aliases: join(root, "config", "project-aliases.json"),
     rateLimits: join(root, "cache", "rate-limits.json"),
     clips: join(root, "cache", "hangar-clips"),
+    settings: join(root, "settings.json"),
+    hooks: join(root, "hooks"),
   };
 }
 

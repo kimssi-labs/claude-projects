@@ -9,6 +9,7 @@
 import { useRef } from "react";
 
 import type { DockEdge } from "@core/types";
+import { useText } from "../useText";
 
 /** Which way the band grows when this edge is dragged, and where the grip sits. */
 const GRIP: Record<DockEdge, { place: string; cursor: string; vertical: boolean; sign: 1 | -1 }> = {
@@ -26,6 +27,7 @@ export function DockGrip({ edge, onDrag }: {
   /** Each step of the drag, and once more when the hand lets go. */
   onDrag: (thickness: number, done: boolean) => void;
 }) {
+  const t = useText();
   const grip = GRIP[edge];
   const start = useRef({ at: 0, thickness: 0 });
   const latest = useRef(0);
@@ -36,7 +38,7 @@ export function DockGrip({ edge, onDrag }: {
     <div
       role="separator"
       aria-orientation={grip.vertical ? "vertical" : "horizontal"}
-      aria-label="Resize the docked band"
+      aria-label={t("tip.resizeBand")}
       className={`no-drag absolute z-20 ${grip.place} ${grip.cursor} bg-transparent hover:bg-accent/40 active:bg-accent/60 transition-colors`}
       onPointerDown={(event) => {
         start.current = { at: grip.vertical ? event.screenX : event.screenY, thickness: thicknessNow() };

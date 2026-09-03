@@ -9,6 +9,7 @@
  * the arrow points into it — or away from it, when pressing the button would let the edge go.
  */
 import type { DockEdge } from "@core/types";
+import { useText } from "../useText";
 
 /** The top-edge glyph, turned to put the wall on the configured side. */
 const EDGE_ROTATION: Record<DockEdge, number> = { top: 0, right: 90, bottom: 180, left: 270 };
@@ -53,21 +54,22 @@ export interface WindowControlsProps {
 const BUTTON = "no-drag grid h-8 w-11 place-items-center text-bone-400 transition-colors";
 
 export function WindowControls({ maximized, docked, edge, onMinimize, onMaximize, onDock, onClose }: WindowControlsProps) {
+  const t = useText();
   return (
     <div className="flex shrink-0 self-start">
       <button
         type="button"
-        aria-label={docked ? "Undock" : "Dock to the edge"}
+        aria-label={docked ? t("tip.undock") : t("tip.dock")}
         title={docked
-          ? `Undock — release the ${edge} edge`
-          : `Dock — reserve a band on the ${edge} edge`}
+          ? t("tip.undockEdge", { edge: t(`edge.${edge}` as "edge.top") })
+          : t("tip.dockEdge", { edge: t(`edge.${edge}` as "edge.top") })}
         onClick={onDock}
         className={`${BUTTON} hover:bg-ink-700 hover:text-bone-100 ${docked ? "text-accent" : ""}`}
       >
         <DockGlyph edge={edge} releasing={docked} />
       </button>
 
-      <button type="button" aria-label="Minimise" title="Minimise" onClick={onMinimize}
+      <button type="button" aria-label={t("tip.minimise")} title={t("tip.minimise")} onClick={onMinimize}
         className={`${BUTTON} hover:bg-ink-700 hover:text-bone-100`}>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
@@ -76,8 +78,8 @@ export function WindowControls({ maximized, docked, edge, onMinimize, onMaximize
 
       <button
         type="button"
-        aria-label={maximized ? "Restore" : "Maximise"}
-        title={maximized ? "Restore — back to the last window size" : "Maximise — fill the screen"}
+        aria-label={maximized ? t("tip.restore") : t("tip.maximise")}
+        title={maximized ? t("tip.restore") : t("tip.maximise")}
         onClick={onMaximize}
         className={`${BUTTON} hover:bg-ink-700 hover:text-bone-100`}
       >
@@ -94,7 +96,7 @@ export function WindowControls({ maximized, docked, edge, onMinimize, onMaximize
         )}
       </button>
 
-      <button type="button" aria-label="Close" title="Close" onClick={onClose}
+      <button type="button" aria-label={t("tip.close")} title={t("tip.close")} onClick={onClose}
         className={`${BUTTON} hover:bg-bad hover:text-white`}>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" stroke="currentColor" strokeWidth="1">
           <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" />

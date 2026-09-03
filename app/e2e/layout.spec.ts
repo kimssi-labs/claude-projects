@@ -42,7 +42,9 @@ function fixture(workspaceName = "workspace"): string {
 
 async function launch(home: string): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
-    args: ["."],
+    // --lang pins what app.getLocale() reports, and the window follows the machine unless told
+    // otherwise: without this the suite reads in the language of whoever is running it.
+    args: [".", "--lang=en-US"],
     cwd: process.cwd(),
     env: { ...process.env, CLAUDE_HOME: home },
   });
@@ -290,4 +292,38 @@ test("text that does not fit says the whole of itself on hover", async () => {
   } finally {
     await app.close();
   }
+});
+
+/**
+ * Every settings section survives a restart.
+ *
+ * Reported as "rebase cannot be selected": the save call listed the sections by hand and two of
+ * them — git and updates — were never in the list, so those choices reverted the moment the main
+ * process pushed the settings back. A list that has to be remembered is one that gets forgotten,
+ * so this asserts the whole payload rather than the section of the day.
+ */
+test("a choice in any settings section is still there after a restart", async () => {
+  const home = fixture();
+  const { app, page } = await launch(home);
+  try {
+    await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
+    await page.keyboard.press("s");
+
+    // One choice from each of the sections added late, plus one that always worked as a control.
+    await page.getByText("Merge", { exact: true }).click();
+    await page.getByText("Only when I ask", { exact: true }).click();
+    await page.getByText("Stacked", { exact: true }).click();
+    await page.waitForTimeout(400);                 // the save is a round trip
+  } finally {
+    await app.close();
+  }
+
+  const saved = JSON.parse(readFileSync(join(home, "config", "manager.json"), "utf8")) as {
+    git?: { strategy?: string };
+    updates?: { automatic?: boolean };
+    ui?: { layout?: string };
+  };
+  expect(saved.git?.strategy).toBe("merge");
+  expect(saved.updates?.automatic).toBe(false);
+  expect(saved.ui?.layout).toBe("vertical");
 });

@@ -35,7 +35,11 @@ export interface LaunchRequest {
   cwd: string;
   claudeExe: string;
   sessionId?: string | null;
-  /** Title to force on the session; only for a session the user renamed. */
+  /**
+   * The name to give the session, which Claude Code puts in its prompt box, its /resume picker AND
+   * the terminal tab. Passing the name this app shows is what keeps the tab and the row saying the
+   * same thing; leaving it null lets Claude Code name the session from the conversation.
+   */
   displayName?: string | null;
   config: LaunchConfig;
   target: OpenTarget;
@@ -47,6 +51,10 @@ export interface LaunchRequest {
 }
 
 export interface LaunchCommand {
+  /** The shell that will host the session, so a fallback can be reported rather than guessed at. */
+  shell: string;
+  /** True when the shell asked for was not installed and the next one down was used. */
+  fellBack: boolean;
   exe: string;
   args: string[];
   cwd: string;
@@ -78,13 +86,42 @@ export function cmdQuote(value: string): string {
   return /[\s"&|<>^]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-function shellExe(shell: ShellChoice, platform: NodeJS.Platform, pwshAvailable: boolean): string {
-  if (shell === "pwsh") return "pwsh.exe";
-  if (shell === "powershell") return "powershell.exe";
-  if (shell === "cmd") return "cmd.exe";
-  if (shell === "bash") return "bash";
-  if (platform === "win32") return pwshAvailable ? "pwsh.exe" : "powershell.exe";
-  return "bash";
+/**
+ * The shells to try, in order, for a given choice.
+ *
+ * A choice is a preference rather than a demand: someone who picked PowerShell 7 on one machine and
+ * opens the same settings on a machine without it wants a session, not an error. So every choice
+ * continues down the same chain, and only the end of the chain is a failure.
+ *
+ * Windows always ends at cmd.exe, which cannot be absent. Auto starts at the top of the chain.
+ */
+export function shellChain(shell: ShellChoice, platform: NodeJS.Platform): string[] {
+  if (platform !== "win32") return shell === "bash" || shell === "auto" ? ["bash", "sh"] : ["bash", "sh"];
+  const windows = ["pwsh.exe", "powershell.exe", "cmd.exe"];
+  switch (shell) {
+    case "pwsh": return windows;
+    case "powershell": return windows.slice(1);
+    case "cmd": return ["cmd.exe"];
+    case "bash": return ["bash", ...windows];      // git bash, then whatever Windows itself has
+    default: return windows;                       // auto
+  }
+}
+
+/**
+ * The first shell in the chain that is actually installed, and whether that was the first choice.
+ *
+ * `have` answers for one executable. The last entry is used regardless when nothing answered yes:
+ * on Windows that is cmd.exe, and a launch that fails there has a real problem to report.
+ */
+export function resolveShell(
+  shell: ShellChoice,
+  platform: NodeJS.Platform,
+  have: (exe: string) => boolean,
+): { exe: string; fellBack: boolean } {
+  const chain = shellChain(shell, platform);
+  const found = chain.find((exe) => have(exe));
+  const exe = found ?? chain[chain.length - 1] as string;
+  return { exe, fellBack: exe !== chain[0] };
 }
 
 /**
@@ -95,13 +132,15 @@ export function hostedCommand(
   argv: string[],
   shell: ShellChoice,
   platform: NodeJS.Platform,
-  pwshAvailable: boolean,
-): { exe: string; args: string[] } {
-  if (shell === "none") return { exe: argv[0] as string, args: argv.slice(1) };
-  const exe = shellExe(shell, platform, pwshAvailable);
-  if (exe === "cmd.exe") return { exe, args: ["/k", argv.map(cmdQuote).join(" ")] };
-  if (exe === "bash") return { exe, args: ["-lc", `${argv.map(shQuote).join(" ")}; exec bash`] };
-  return { exe, args: ["-NoExit", "-EncodedCommand", psEncode(argv)] };
+  have: (exe: string) => boolean = () => true,
+): { exe: string; args: string[]; fellBack: boolean } {
+  if (shell === "none") return { exe: argv[0] as string, args: argv.slice(1), fellBack: false };
+  const { exe, fellBack } = resolveShell(shell, platform, have);
+  if (exe === "cmd.exe") return { exe, args: ["/k", argv.map(cmdQuote).join(" ")], fellBack };
+  if (exe === "bash" || exe === "sh") {
+    return { exe, args: ["-lc", `${argv.map(shQuote).join(" ")}; exec ${exe}`], fellBack };
+  }
+  return { exe, args: ["-NoExit", "-EncodedCommand", psEncode(argv)], fellBack };
 }
 
 export function shQuote(value: string): string {
@@ -157,17 +196,17 @@ export function sessionEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return clean;
 }
 
-export function launchCommand(request: LaunchRequest, pwshAvailable = true): LaunchCommand {
+export function launchCommand(request: LaunchRequest, have: (exe: string) => boolean = () => true): LaunchCommand {
   // "Custom program" is a program like VS Code, not another shell to host claude in. It is opened
   // ON the project — started in the project folder, with that folder as its argument — and what
   // runs inside it is its own business: no terminal wraps it, and no claude command is passed.
   // An empty path is a half-finished setting and falls through to Auto, so a session still opens.
   const custom = request.config.shell === "custom" ? request.config.customShell.trim() : "";
   if (custom) {
-    return { exe: custom, args: [request.cwd], cwd: request.cwd, ownsWindow: true };
+    return { exe: custom, args: [request.cwd], cwd: request.cwd, ownsWindow: true, shell: custom, fellBack: false };
   }
   const argv = claudeArgv(request);
-  const hosted = hostedCommand(argv, request.config.shell, request.platform, pwshAvailable);
+  const hosted = hostedCommand(argv, request.config.shell, request.platform, have);
   const title = request.displayName || "Claude";
 
   if (request.platform === "win32" && request.hasWindowsTerminal) {
@@ -176,13 +215,29 @@ export function launchCommand(request: LaunchRequest, pwshAvailable = true): Lau
       args: ["-w", windowArgument(request.target), "nt", "--title", title, "-d", request.cwd, hosted.exe, ...hosted.args],
       cwd: request.cwd,
       ownsWindow: true,
+      shell: hosted.exe,
+      fellBack: hosted.fellBack,
     };
   }
   if (request.platform !== "win32" && request.linuxTerminal) {
     const term = request.linuxTerminal;
     const dirArgs = term.args.length ? [...term.args, request.cwd] : [];
     // Every one of these terminals takes the program to run after `-e`.
-    return { exe: term.exe, args: [...dirArgs, "-e", hosted.exe, ...hosted.args], cwd: request.cwd, ownsWindow: true };
+    return {
+      exe: term.exe,
+      args: [...dirArgs, "-e", hosted.exe, ...hosted.args],
+      cwd: request.cwd,
+      ownsWindow: true,
+      shell: hosted.exe,
+      fellBack: hosted.fellBack,
+    };
   }
-  return { exe: hosted.exe, args: hosted.args, cwd: request.cwd, ownsWindow: false };
+  return {
+    exe: hosted.exe,
+    args: hosted.args,
+    cwd: request.cwd,
+    ownsWindow: false,
+    shell: hosted.exe,
+    fellBack: hosted.fellBack,
+  };
 }

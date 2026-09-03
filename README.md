@@ -149,13 +149,54 @@ Everything comes from files Claude Code maintains under `~/.claude` (override wi
 | `config/manager.json` | this app's own settings: dock (per monitor), status line, launch, appearance |
 | `config/project-aliases.json` | display aliases for projects |
 
-The status strip is optional: each segment appears only if that source exists on your machine — rate
-limits from `cache/rate-limits.json` (the 5-hour and 7-day windows Claude Code reports). On a
-machine without that cache nothing is drawn at all.
+The usage gauges read `cache/rate-limits.json`. **Nothing in a stock Claude Code install writes that
+file**: the figures are handed to a session's own status line and hook, and to nothing else. So
+**Settings · Usage** offers to add a small Stop hook that writes them down as each turn ends — off
+until you ask for it, and removed again when you turn it off. Without it the gauges simply do not
+appear, which is the honest answer rather than a zero.
+
+The hook writes one file and sends nothing anywhere. It reads no credentials: the usage endpoint that
+would need them rate-limits polling, so the figures Claude Code already hands out for free are the
+better source. On a machine signed in with an API key rather than a Claude subscription there are no
+five-hour or weekly windows to report, and the screen says so.
 
 Each window shows how much is used and how long until it resets — in every shape, the docked band
 included. Wide enough and the clock time it resets at is printed beside it; upright it moves to the
 tooltip, which is also where a card's full label goes when it has been shortened.
+
+## Git
+
+A project that is a repository says so on its row: the branch, and how far it is from its upstream —
+`main ↑2 ●3`. That much is read straight out of `.git` and costs nothing, so it is on by default.
+Counting uncommitted files runs `git status` and is done for the selected project only.
+
+**Update from the base branch** is in a project's right-click menu. The base is fetched into a ref of
+its own first, so another fetch cannot move it mid-rebase, and the strategy is yours: rebase, merge,
+or fast-forward only. Nothing is pushed, and a conflict stops and leaves the repository to you. It
+can also run on a timer — never, only where it fast-forwards cleanly, or with your chosen strategy —
+and it always skips a project with a session running in it or with uncommitted changes.
+
+**Worktrees** turn one repository into several places to work. A project's menu can cut a worktree on
+a new branch beside the repository, and that folder joins the list as a project of its own, ready for
+its own sessions. The branch is created with `--no-track`, so it does not report itself behind a base
+it has never been pushed to. Removing a worktree refuses while it holds uncommitted work, and asks
+before forcing.
+
+Only the branch line works without git on `PATH`; the rest says so, with a button to install it.
+
+## Updates
+
+Hangar updates itself from its own releases. **Settings · Updates** chooses between checking on a
+timer and only when you ask, has a **Check now** button that tells you what it found, shows a
+percentage while downloading, and installs on the next restart. Builds before v2.8.0 carry no update
+metadata, so this works from that version onwards; a portable copy and a Linux package say plainly
+that they cannot replace themselves.
+
+## Language
+
+English by default, Korean available, and a new install follows the machine's own language —
+**Settings · Language** overrides it. It covers the manager's own text: menus, tooltips, settings and
+relative times. What Claude Code itself prints is untouched.
 
 ## Settings (`S`)
 
@@ -189,7 +230,9 @@ has not reported is not drawn either way.
 
 **Launch** picks the terminal and shell that host an opened session: PowerShell 7, Windows
 PowerShell, Command Prompt or none on Windows; on Linux the first terminal emulator found, or a named
-one. **Custom program** is different in kind: name an editor like VS Code and opening a session opens
+one. The choice is a preference rather than a demand — on a machine without PowerShell 7 a session
+opens in Windows PowerShell, then cmd, and says which it used, so settings carried between machines
+still work. **Custom program** is different in kind: name an editor like VS Code and opening a session opens
 that program on the project folder instead of a terminal — what runs inside it is its own business.
 A missing executable is marked rather than failing when a session is opened.
 

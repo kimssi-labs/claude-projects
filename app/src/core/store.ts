@@ -298,6 +298,9 @@ export class Store {
       totalBytes: sessions.reduce((sum, s) => sum + s.bytes, 0),
       liveCount: sessions.filter((s) => s.live).length,
       pinned: pins.projects.includes(dirName),
+      // Filled in by the main process, which is where reading a working tree belongs.
+      git: null,
+      worktree: false,
     };
   }
 

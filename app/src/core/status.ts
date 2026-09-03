@@ -20,7 +20,9 @@ interface RateBucket { used_percentage?: number; utilization?: number; resets_at
 
 function readJson<T>(file: string, fallback: T): T {
   try {
-    return JSON.parse(readFileSync(file, "utf8")) as T;
+    // Strip a BOM: JSON.parse throws on one, and the throw would read as "this machine reports no
+    // usage" rather than as the encoding accident it is. Windows tools write one by default.
+    return JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as T;
   } catch {
     return fallback;
   }
@@ -45,6 +47,13 @@ export function rateWindows(raw: Record<string, unknown>, now = Date.now()): Rat
     });
   }
   return out;
+}
+
+/** When the cache was last published, in epoch ms, or null when it has never been. */
+export function readStatusUpdatedAt(home?: string): number | null {
+  const raw = readJson<{ updated_at?: unknown }>(homePaths(home).rateLimits, {});
+  const seconds = typeof raw.updated_at === "number" ? raw.updated_at : null;
+  return seconds && Number.isFinite(seconds) ? seconds * 1000 : null;
 }
 
 export function readStatus(

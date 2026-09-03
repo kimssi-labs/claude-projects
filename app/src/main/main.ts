@@ -6,22 +6,27 @@
  * wiring: the parts worth testing are tested without Electron.
  */
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, screen, shell } from "electron";
 
 import { ConfigStore, percentFloor } from "../core/config.js";
 import { launchCommand, sessionEnvironment, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
 import { MetricsHistory, SYSTEM_SERIES } from "../core/metrics.js";
-import { claudeHome } from "../core/paths.js";
-import { readStatus } from "../core/status.js";
+import { claudeHome, homePaths } from "../core/paths.js";
+import { readStatus, readStatusUpdatedAt } from "../core/status.js";
+import { hookCommand, hookFileName, hookInstalled, hookScript, withHook, withoutHook } from "../core/usageHook.js";
+import type { UpdateState } from "../core/updates.js";
+import { UpdateService } from "./updater.js";
+import { countChanges, createWorktree, dropWorktree, headOf, isLinkedWorktree, updateFromBase } from "./gitStatus.js";
+import { autoPlan, intervalMs, sweepSummary } from "../core/gitAuto.js";
 import { clipFileName, Store } from "../core/store.js";
-import type { DockConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig } from "../core/types.js";
+import type { DockConfig, GitConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
 import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
 import { sendPaste } from "./keystroke.js";
 import { startClipboardWatch, stopClipboardWatch } from "./clipboardWatch.js";
 import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, MENU_SEPARATOR, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type UpdateCommand, type UsageState, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 import { Worker } from "node:worker_threads";
 
 import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
@@ -145,6 +150,14 @@ function pushWindowState(): void {
 
 const store = new Store();
 const config = new ConfigStore();
+
+/**
+ * Updating in place. Its state is pushed rather than polled: a download runs for a while, and a
+ * settings screen that only learned about it when reopened would look stuck.
+ */
+const updates = new UpdateService(config.updates(), (state: UpdateState) => {
+  window?.webContents.send(CHANNEL.updatePush, state);
+});
 const history = new MetricsHistory();
 let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
@@ -156,6 +169,21 @@ let pendingStep = "Starting…";
 /** Whether the system-wide paste shortcut is held; false when something else owns it. */
 let pasteHotkeyActive = false;
 let lastProjects: ProjectInfo[] = [];
+
+/**
+ * Which shells this machine actually has, remembered for the life of the run.
+ *
+ * `where` costs a process each time and the answer does not change while the app is open; without
+ * the cache this would run up to three times per session opened.
+ */
+const shellPresence = new Map<string, boolean>();
+function haveExecutable(exe: string): boolean {
+  const known = shellPresence.get(exe);
+  if (known !== undefined) return known;
+  const found = Boolean(which(exe));
+  shellPresence.set(exe, found);
+  return found;
+}
 
 function which(exe: string): string | null {
   const command = process.platform === "win32" ? "where" : "which";
@@ -227,6 +255,16 @@ function placeFloating(): void {
 function scanProjects(): ProjectInfo[] {
   const t0 = Date.now();
   lastProjects = store.scan();
+  // The head line is three small reads per project; the change count is a git process, so it is
+  // asked for separately and only for the row in front of the user.
+  if (config.git().enabled) {
+    for (const project of lastProjects) {
+      if (project.cwd && project.exists) {
+        project.git = headOf(project.cwd);
+        project.worktree = Boolean(project.git) && isLinkedWorktree(project.cwd);
+      }
+    }
+  }
   const ms = Date.now() - t0;
   if (ms > 200) console.log(`[hangar] scan took ${ms} ms for ${lastProjects.length} projects`);
   pushTargets();                                  // the running set may have changed
@@ -549,6 +587,136 @@ function pushTargets(): void {
   worker?.postMessage({ targets: sampleTargets() });
 }
 
+/**
+ * Usage collection: a Stop hook of ours in Claude Code's settings.
+ *
+ * Claude Code hands its Stop hook the current rate limits on stdin at the end of every turn. Ours
+ * writes them to the cache the gauges read. Nothing else reports those figures to a program that is
+ * not Claude Code itself — the endpoint behind them rate-limits polling, and reading the user's
+ * credentials to ask it is not something this app should ever do.
+ */
+/**
+ * Claude Code's settings, and whether they could be read at all.
+ *
+ * The difference matters more than it looks. A file that is not there is a new install and may be
+ * created; a file that is there but will not parse is someone's configuration with a typo in it,
+ * and writing our own object over it would delete every setting they have. So an unreadable file
+ * stops the operation rather than starting from an empty one.
+ */
+function readClaudeSettings(): { settings: Record<string, unknown>; readable: boolean } {
+  let text: string;
+  try {
+    // A BOM here is normal: plenty of editors and PowerShell itself write one.
+    text = readFileSync(homePaths().settings, "utf8").replace(/^\uFEFF/, "");
+  } catch {
+    return { settings: {}, readable: true };     // absent, which is a file we may create
+  }
+  if (!text.trim()) return { settings: {}, readable: true };
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { settings: parsed as Record<string, unknown>, readable: true }
+      : { settings: {}, readable: false };
+  } catch {
+    return { settings: {}, readable: false };
+  }
+}
+
+function usageHookPath(): string {
+  return join(homePaths().hooks, hookFileName(process.platform));
+}
+
+function usageState(): UsageState {
+  return {
+    collecting: hookInstalled(readClaudeSettings().settings),
+    portable: !app.isPackaged || Boolean(process.env["PORTABLE_EXECUTABLE_DIR"]),
+    updatedAt: readStatusUpdatedAt(),
+    reported: readStatus(undefined, { windows: null }).windows.length,
+  };
+}
+
+/**
+ * Turn collection on or off, writing as little of the user's file as the job needs.
+ *
+ * The script is rewritten on every enable rather than only when absent: an application that moved,
+ * or a script this app has since improved, would otherwise keep running yesterday's copy.
+ */
+function setUsageCollection(on: boolean): ActionResult {
+  const paths = homePaths();
+  const script = usageHookPath();
+  try {
+    const current = readClaudeSettings();
+    if (!current.readable) {
+      return {
+        ok: false,
+        message: `${paths.settings} is not valid JSON, so it was left alone. Fix it and try again.`,
+      };
+    }
+    if (on) {
+      mkdirSync(paths.hooks, { recursive: true });
+      // The cache path is baked in rather than derived by the script: Claude Code keys its home off
+      // CLAUDE_CONFIG_DIR and this app off CLAUDE_HOME, so only the installer knows both answers.
+      writeFileSync(script, hookScript(process.platform, paths.rateLimits), "utf8");
+      if (process.platform !== "win32") chmodSync(script, 0o755);
+    }
+    const before = current.settings;
+    const after = on ? withHook(before, hookCommand(script)) : withoutHook(before);
+    mkdirSync(dirname(paths.settings), { recursive: true });
+    writeFileSync(paths.settings, `${JSON.stringify(after, null, 2)}\n`, "utf8");
+    if (!on) rmSync(script, { force: true });
+  } catch (error) {
+    return { ok: false, message: `Could not write Claude Code's settings: ${(error as Error).message}` };
+  }
+  return {
+    ok: true,
+    message: on
+      ? "Collecting usage. The figures appear when the next session finishes a turn."
+      : "Usage collection off. The hook has been removed.",
+  };
+}
+
+/**
+ * Updating projects from their base branch without being asked.
+ *
+ * Only ever between sessions: the plan refuses anything with a session running in it, and in safe
+ * mode git is asked for a fast-forward, which it declines rather than rewriting anything. A sweep
+ * that changes nothing says nothing — a notification per hour reporting no news is worse than none.
+ */
+let sweepTimer: NodeJS.Timeout | null = null;
+let sweeping = false;
+
+async function sweepFromBase(): Promise<void> {
+  if (sweeping) return;                            // a slow remote must not overlap the next tick
+  const git = config.git();
+  if (git.auto.mode === "off") return;
+  sweeping = true;
+  const updated: string[] = [];
+  let failed = 0;
+  try {
+    const plan = autoPlan(scanProjects(), { mode: git.auto.mode, strategy: git.strategy });
+    for (const item of plan.run) {
+      const project = findProject(item.dir);
+      if (!project?.cwd) continue;
+      const outcome = await updateFromBase(project.cwd, { strategy: item.strategy, base: git.base });
+      if (outcome.ok && outcome.kind === "updated") updated.push(project.name);
+      else if (!outcome.ok && outcome.kind !== "diverged" && outcome.kind !== "dirty") failed += 1;
+    }
+  } finally {
+    sweeping = false;
+  }
+  if (updated.length) scanProjects();            // the window's own refresh picks the branches up
+  const summary = sweepSummary(updated, failed);
+  if (summary) window?.webContents.send(CHANNEL.toast, summary);
+}
+
+function startSweep(): void {
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
+  const git = config.git();
+  if (git.auto.mode === "off") return;
+  sweepTimer = setInterval(() => void sweepFromBase(), intervalMs(git.auto.everyMinutes));
+}
+
 function settingsPayload(): SettingsPayload {
   const dockConfig = config.dock(null, setupKey());
   const { display } = pickDisplay(dockConfig.device);
@@ -561,6 +729,10 @@ function settingsPayload(): SettingsPayload {
     dockDevices: config.dockDevices(),
     dockFloor: config.dockFloor(dockConfig.edge),
     pasteHotkeyActive,
+    usage: usageState(),
+    updates: config.updates(),
+    git: config.git(),
+    gitAvailable: Boolean(which("git")),
     minPercent: percentFloor(config.dockFloor(dockConfig.edge), span),
   };
 }
@@ -615,13 +787,16 @@ function registerIpc(): void {
       cwd: project.cwd,
       claudeExe: exe,
       sessionId: session?.id ?? null,
-      displayName: session?.named ? session.title : null,
+      // The name goes to --name, which Claude Code puts in its prompt box, its /resume picker and
+      // the terminal tab. Passing the title this app shows is what keeps the tab and the row saying
+      // the same thing; a new session has no title yet and is left for Claude Code to name.
+      displayName: session ? session.title : null,
       config: launch,
       target: request.target,
       platform: process.platform,
       hasWindowsTerminal: process.platform === "win32" && Boolean(which("wt.exe")),
       linuxTerminal: process.platform === "win32" ? null : detectLinuxTerminal(launch.terminal),
-    });
+    }, haveExecutable);
     try {
       const child = spawn(command.exe, command.args, {
         cwd: command.cwd,
@@ -635,7 +810,13 @@ function registerIpc(): void {
         shell: false,
       });
       child.unref();
-      return { ok: true, message: `Opened ${session ? session.title : project.name}` };
+      const what = session ? session.title : project.name;
+      return {
+        ok: true,
+        message: command.fellBack
+          ? `Opened ${what} in ${command.shell} — the shell chosen in Settings is not installed here.`
+          : `Opened ${what}`,
+      };
     } catch (error) {
       return { ok: false, message: `Could not start: ${(error as Error).message}` };
     }
@@ -732,6 +913,90 @@ function registerIpc(): void {
     return { ok: true, message: pinned ? "Pinned to the top." : "Unpinned." };
   });
 
+  updates.start();
+  startSweep();
+
+  /**
+   * Count what is uncommitted in one project — the expensive half, asked for a row at a time.
+   *
+   * Resolves with the count, or null when there is nothing to count or git did not answer. The
+   * renderer asks for the selected row only, so a long list never spawns a process per project.
+   */
+  ipcMain.handle(CHANNEL.gitCount, async (_event, dir: string): Promise<number | null> => {
+    const project = findProject(dir);
+    if (!project?.cwd || !project.exists || !config.git().enabled || !config.git().countChanges) return null;
+    const cwd = project.cwd;
+    return new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), 5_000);
+      countChanges(cwd, (dirty) => {
+        clearTimeout(timer);
+        if (project.git) project.git.dirty = dirty;
+        resolve(dirty);
+      });
+    });
+  });
+
+  /** Bring the project's branch up to date with its base, the way the settings say to. */
+  ipcMain.handle(CHANNEL.openPage, async (_event, page: PageName): Promise<ActionResult> => {
+    const url = PAGES[page];
+    if (!url) return { ok: false };
+    await shell.openExternal(url);
+    return { ok: true };
+  });
+
+  ipcMain.handle(CHANNEL.gitSync, async (_event, dir: string): Promise<ActionResult> => {
+    const project = findProject(dir);
+    if (!project?.cwd || !project.exists) return { ok: false, message: "Folder is not available." };
+    const git = config.git();
+    const outcome = await updateFromBase(project.cwd, { strategy: git.strategy, base: git.base });
+    scanProjects();                                // the branch, and what is uncommitted, may have moved
+    if (!outcome.ok) return { ok: false, message: outcome.message };
+    return {
+      ok: true,
+      message: outcome.kind === "current" ? "Already up to date." : "Updated from the base branch.",
+    };
+  });
+
+  /**
+   * A worktree of this project, on a new branch, added to the list as a project of its own.
+   *
+   * That is the whole point here: a second checkout is a second place to run a session, and this
+   * app's unit of "a place to run a session" is a project row.
+   */
+  ipcMain.handle(CHANNEL.worktreeAdd, async (_event, request: { dir: string; branch: string }): Promise<AddProjectResult> => {
+    const project = findProject(request.dir);
+    if (!project?.cwd || !project.exists) return { ok: false, message: "Folder is not available." };
+    if (!which("git")) return { ok: false, message: "git is not on PATH." };
+    const created = await createWorktree(project.cwd, request.branch, config.git().base);
+    if (!created.ok) return { ok: false, message: created.message };
+    const dir = store.addProject(created.path as string);
+    scanProjects();
+    return { ok: true, dir, message: `Worktree at ${created.path}` };
+  });
+
+  /** Remove a worktree. Its own project row goes with it, since the folder it named is gone. */
+  ipcMain.handle(CHANNEL.worktreeRemove, async (_event, request: { dir: string; force: boolean }): Promise<ActionResult> => {
+    const project = findProject(request.dir);
+    if (!project?.cwd) return { ok: false, message: "Folder is not available." };
+    const outcome = await dropWorktree(project.cwd, project.cwd, request.force);
+    if (!outcome.ok) return { ok: false, message: outcome.message };
+    store.deleteProject(project);
+    scanProjects();
+    return { ok: true, message: "Worktree removed." };
+  });
+
+  ipcMain.handle(CHANNEL.updateAction, async (_event, command: UpdateCommand): Promise<UpdateState> => {
+    if (command === "check") return updates.check(true);
+    if (command === "download") return updates.download();
+    updates.install();
+    return updates.current();
+  });
+
+  ipcMain.handle(CHANNEL.setUsageHook, (_event, on: boolean): ActionResult & { settings: SettingsPayload } => {
+    const result = setUsageCollection(on);
+    return { ...result, settings: settingsPayload() };
+  });
+
   ipcMain.handle(CHANNEL.loadSettings, () => settingsPayload());
   ipcMain.handle(CHANNEL.displays, () => displays());
 
@@ -775,12 +1040,22 @@ function registerIpc(): void {
   });
 
   ipcMain.handle(CHANNEL.saveSettings, (_event, payload: {
-    dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: UiConfig;
+    dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: UiConfig; updates?: UpdateConfig;
+    git?: GitConfig;
   }) => {
     // With the arrangement key: without it the per-arrangement entry keeps the old edge and size
     // and wins on the next read, so changing the dock in Settings looked like it did nothing.
     if (payload.dock) config.saveDock(payload.dock, setupKey());
     if (payload.status) config.saveStatus(payload.status);
+    if (payload.git) {
+      config.saveGit(payload.git);
+      scanProjects();                              // the rows gain or lose their git line at once
+      startSweep();                                // and the timer starts, stops or re-arms with it
+    }
+    if (payload.updates) {
+      config.saveUpdates(payload.updates);
+      updates.setConfig(payload.updates);          // the timer starts, stops or re-arms with it
+    }
     if (payload.launch) {
       config.saveLaunch(payload.launch);
       registerPasteHotkey();                      // the shortcut may have just changed
@@ -839,6 +1114,8 @@ function registerIpc(): void {
   ipcMain.handle(CHANNEL.saveUi, (_event, ui: Partial<UiConfig>) => config.saveUi({ ...config.ui(), ...ui }));
 
   ipcMain.handle(CHANNEL.appInfo, (): AppInfo => ({
+    // app.getLocale() is the OS's own choice, which is what an unset language should follow.
+    locale: app.getLocale(),
     version: app.getVersion(),
     platform: process.platform,
     claudeFound: Boolean(claudeExecutable()),

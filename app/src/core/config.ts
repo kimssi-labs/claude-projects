@@ -8,10 +8,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { DEFAULT_PASTE_HOTKEY, DOCK_EDGES, DOCK_PERCENT, EDGE_AXIS, LAYOUT_MODES, PERMISSION_MODES, SHELL_CHOICES, STACK_BELOW, THEME_MODES } from "./constants.js";
+import { AUTO_DEFAULTS, AUTO_MODES, type AutoConfig } from "./gitAuto.js";
+import { MERGE_STRATEGIES, SYNC_DEFAULTS } from "./gitSync.js";
+import { LANGUAGES, type Language } from "./i18n.js";
 import { homePaths } from "./paths.js";
-import type { DockConfig, DockEdge, LaunchConfig, LayoutMode, PermissionMode, ShellChoice, StatusConfig, ThemeMode, UiConfig } from "./types.js";
+import type { DockConfig, DockEdge, GitConfig, LaunchConfig, LayoutMode, PermissionMode, ShellChoice, StatusConfig, ThemeMode, UiConfig, UpdateConfig } from "./types.js";
 
-export const SECTION = { dock: "dock", status: "status", launch: "launch", ui: "ui", projects: "projects", pins: "pins" } as const;
+export const SECTION = { dock: "dock", status: "status", launch: "launch", ui: "ui", projects: "projects", pins: "pins", updates: "updates", git: "git" } as const;
 export const DOCK_MONITORS_KEY = "monitors";
 export const DOCK_SETUPS_KEY = "setups";
 export const DOCK_FLOOR_KEY = "floor";
@@ -157,6 +160,41 @@ export class ConfigStore {
     this.saveSection(SECTION.status, { ...config });
   }
 
+  // -- git --------------------------------------------------------------------------------------
+  git(): GitConfig {
+    const raw = this.section(SECTION.git);
+    const auto = asRecord(raw["auto"]);
+    return {
+      enabled: raw["enabled"] !== false,          // on unless it was turned off
+      // Off by default: it runs `git status`, and on a big repository that is not free.
+      countChanges: raw["countChanges"] === true,
+      strategy: MERGE_STRATEGIES.some((s) => s.key === raw["strategy"])
+        ? raw["strategy"] as GitConfig["strategy"]
+        : SYNC_DEFAULTS.strategy,
+      base: typeof raw["base"] === "string" ? (raw["base"] as string).trim() : SYNC_DEFAULTS.base,
+      auto: {
+        mode: AUTO_MODES.some((m) => m.key === auto["mode"]) ? auto["mode"] as AutoConfig["mode"] : AUTO_DEFAULTS.mode,
+        everyMinutes: Number.isFinite(Number(auto["everyMinutes"])) && Number(auto["everyMinutes"]) > 0
+          ? Math.round(Number(auto["everyMinutes"]))
+          : AUTO_DEFAULTS.everyMinutes,
+      },
+    };
+  }
+
+  saveGit(config: GitConfig): void {
+    this.saveSection(SECTION.git, { ...config });
+  }
+
+  // -- updating ---------------------------------------------------------------------------------
+  updates(): UpdateConfig {
+    const raw = this.section(SECTION.updates);
+    return { automatic: raw["automatic"] !== false };      // on unless it was turned off
+  }
+
+  saveUpdates(config: UpdateConfig): void {
+    this.saveSection(SECTION.updates, { ...config });
+  }
+
   // -- launching sessions --------------------------------------------------------------------------
   launch(): LaunchConfig {
     const raw = this.section(SECTION.launch);
@@ -187,6 +225,8 @@ export class ConfigStore {
       project: typeof raw["project"] === "string" ? (raw["project"] as string) : null,
       cursor: Number.isFinite(cursor) && cursor > 0 ? Math.round(cursor) : 0,
       theme: THEME_MODES.includes(theme as ThemeMode) ? (theme as ThemeMode) : "system",
+      // Unset means follow the machine, which is what a first run on a Korean PC should do.
+      language: LANGUAGES.some((l) => l.key === raw["language"]) ? raw["language"] as Language : "system",
       monitor: raw["monitor"] !== false,          // on unless it was explicitly turned off
       layout: LAYOUT_MODES.includes(raw["layout"] as LayoutMode) ? (raw["layout"] as LayoutMode) : "auto",
       stackBelow: Number.isFinite(Number(raw["stackBelow"])) && Number(raw["stackBelow"]) > 0

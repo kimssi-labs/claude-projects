@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MetricSample, RateWindow } from "@core/types";
 
 import { formatClock, formatPercent, resetLabel, resetRemaining, usageTone } from "../format";
+import { useText } from "../useText";
 import { Truncated } from "./Truncated";
 
 const ACCENT = "#d97757";
@@ -164,6 +165,7 @@ export interface AreaChartProps {
 }
 
 export function AreaChart({ samples, field, max, label, value, total, short, className = "", compact = false }: AreaChartProps) {
+  const t = useText();
   const [box, boxWidth] = useElementWidth<HTMLDivElement>();
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => setNarrow((was) => isNarrow(boxWidth, was)), [boxWidth]);
@@ -205,7 +207,7 @@ export function AreaChart({ samples, field, max, label, value, total, short, cla
   // Too narrow to read a label and a number across: stand the reading up instead of overlapping it.
   if (narrow) {
     return (
-      <div ref={box} className={`card p-1 ${className}`} title={`${label} — ${value}${total ? ` of ${total}` : ""}`}>
+      <div ref={box} className={`card p-1 ${className}`} title={total ? t("tip.gaugeOf", { label, value, total }) : t("tip.gauge", { label, value })}>
         <div className="text-[10px] text-bone-400 text-center whitespace-nowrap">{short ?? label}</div>
         <UprightBar percent={percent} tone="bg-accent" />
         <div className="mt-1 text-[10px] font-medium text-bone-100 tabular-nums text-center">
@@ -247,13 +249,20 @@ export function UsageCard({ window: usage, className = "", compact = false }: {
   className?: string;
   compact?: boolean;
 }) {
+  const t = useText();
   const [box, boxWidth] = useElementWidth<HTMLDivElement>();
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => setNarrow((was) => isNarrow(boxWidth, was)), [boxWidth]);
   const tone = usage.usedPercent >= 80 ? "bg-bad" : usage.usedPercent >= 50 ? "bg-warn" : "bg-ok";
   const reset = usage.resetsAt ? resetLabel(usage.resetsAt) : "";
-  const title = `${usage.label} — ${formatPercent(usage.usedPercent)} used${
-    usage.resetsAt ? `, ${resetLabel(usage.resetsAt)} left, resets ${formatClock(usage.resetsAt)}` : ""}`;
+  const title = usage.resetsAt
+    ? t("tip.usageResets", {
+      label: usage.label,
+      percent: formatPercent(usage.usedPercent),
+      left: resetRemaining(usage.resetsAt),
+      clock: formatClock(usage.resetsAt),
+    })
+    : t("tip.usage", { label: usage.label, percent: formatPercent(usage.usedPercent) });
 
   if (narrow) {
     return (

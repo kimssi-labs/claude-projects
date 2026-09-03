@@ -10,7 +10,9 @@ import type { MetricSample, ProjectInfo, SessionInfo } from "@core/types";
 
 import { Sparkline, useElementWidth } from "./Chart";
 import { Truncated } from "./Truncated";
-import { formatBytes, formatSince, formatTime } from "../format";
+import { formatBytes, formatTime, sinceParts } from "../format";
+import { useText } from "../useText";
+import { gitLabel, gitTitle } from "@core/git";
 
 /**
  * Below these widths a row cannot hold its name and its numbers on one line.
@@ -26,10 +28,12 @@ const SESSION_STACK_WIDTH = 300;
 const LIVE_SESSION_STACK_WIDTH = 520;
 
 function LiveDot({ live }: { live: boolean }) {
+  const t = useText();
+  const label = { running: t("list.running"), idle: t("list.idle") };
   return (
     <span
       className={`w-2 h-2 rounded-full shrink-0 ${live ? "bg-ok shadow-[0_0_6px] shadow-ok/60" : "bg-ink-500"}`}
-      title={live ? "running" : "idle"}
+      title={live ? label.running : label.idle}
     />
   );
 }
@@ -41,6 +45,12 @@ function Pin() {
       <path d="M9.6 1.2 14.8 6.4l-1.9.5-2.5 2.5.4 3.2-1.2 1.2-3-3-4 4-.9-.9 4-4-3-3 1.2-1.2 3.2.4 2.5-2.5z" />
     </svg>
   );
+}
+
+/** "3 min ago" in whichever language the window is in, or a date once that stops meaning much. */
+function since(t: ReturnType<typeof useText>, ms: number): string {
+  const { key, vars } = sinceParts(ms);
+  return key === "since.absolute" ? formatTime(ms) : t(key, vars as Record<string, number>);
 }
 
 /** Keeps the selected row in view when the keyboard moves it off screen. */
@@ -61,6 +71,7 @@ export function ProjectRow({
   onOpen: () => void;
   onContextMenu?: () => void;
 }) {
+  const t = useText();
   const ref = useScrollIntoView(selected);
   const [box, width] = useElementWidth<HTMLDivElement>();
   const stacked = width > 0 && width < PROJECT_STACK_WIDTH;
@@ -84,13 +95,21 @@ export function ProjectRow({
           >
             {project.name}
           </Truncated>
-          {project.hasMemory ? <span className="chip">memory</span> : null}
+          {project.hasMemory ? <span className="chip">{t("list.memory")}</span> : null}
+          {project.worktree ? <span className="chip text-accent">{t("list.worktree")}</span> : null}
         </div>
-        <Truncated className="text-[11px] text-bone-500">{project.cwd ?? "folder unknown"}</Truncated>
+        <Truncated className="text-[11px] text-bone-500">{project.cwd ?? t("list.folderUnknown")}</Truncated>
+        {/* One line, and only where there is a repository: the branch is the thing you check before
+            resuming a session, and opening a terminal to find it out is the friction this removes. */}
+        {project.git ? (
+          <Truncated title={gitTitle(project.git, t)} className="text-[11px] text-bone-400">
+            <span className="text-accent">⌥</span> {gitLabel(project.git)}
+          </Truncated>
+        ) : null}
       </div>
       <div className={`shrink-0 tabular-nums ${stacked ? "w-full pl-5 flex gap-2 text-[11px] text-bone-400" : "text-right"}`}>
-        <div className={stacked ? "" : "text-xs text-bone-300"}>{project.sessions.length} sessions</div>
-        <div className={stacked ? "text-bone-500" : "text-[11px] text-bone-500"}>{formatSince(project.lastUsed)}</div>
+        <div className={stacked ? "" : "text-xs text-bone-300"}>{t("list.sessions", { count: project.sessions.length })}</div>
+        <div className={stacked ? "text-bone-500" : "text-[11px] text-bone-500"}>{since(t, project.lastUsed)}</div>
       </div>
     </div>
   );
@@ -106,6 +125,7 @@ export function SessionRow({
   onOpen: () => void;
   onContextMenu?: () => void;
 }) {
+  const t = useText();
   const ref = useScrollIntoView(selected);
   const [box, width] = useElementWidth<HTMLDivElement>();
   const stacked = width > 0 && width < (session.live ? LIVE_SESSION_STACK_WIDTH : SESSION_STACK_WIDTH);
@@ -132,13 +152,13 @@ export function SessionRow({
       {session.live ? (
         // CPU and memory are different questions, so each gets its own line and its own number.
         <div className={`flex items-center gap-3 shrink-0 ${stacked ? "w-full pl-5" : ""}`}>
-          <span className="flex items-center gap-1.5" title="CPU — this session's whole process tree">
+          <span className="flex items-center gap-1.5" title={t("tip.rowCpu")}>
             <Sparkline samples={samples} field="cpu" className="w-16" />
             <span className="text-[11px] text-bone-400 tabular-nums">
               {latest ? `${latest.cpu.toFixed(0)}%` : "—"}
             </span>
           </span>
-          <span className="flex items-center gap-1.5" title="Memory — this session's whole process tree">
+          <span className="flex items-center gap-1.5" title={t("tip.rowMemory")}>
             <Sparkline samples={samples} field="memoryBytes" className="w-16" />
             <span className="text-[11px] text-bone-400 tabular-nums">
               {latest ? formatBytes(latest.memoryBytes) : "—"}
@@ -166,46 +186,51 @@ function Field({ label, children, tone = "" }: { label: string; children: React.
 }
 
 export function ProjectDetail({ project }: { project: ProjectInfo }) {
+  const t = useText();
   return (
     <div className="p-4">
       <h2 className="text-sm font-medium text-bone-100 mb-2">{project.name}</h2>
-      {project.alias ? <Field label="Folder name">{project.cwd?.split(/[\\/]/).pop()}</Field> : null}
-      <Field label="Path" tone={project.exists ? "" : "text-bad"}>
-        {project.cwd ?? "unknown — no transcript carries a cwd"}
-        {project.cwd && !project.exists ? " (folder is gone)" : ""}
+      {project.alias ? <Field label={t("detail.folderName")}>{project.cwd?.split(/[\\/]/).pop()}</Field> : null}
+      <Field label={t("detail.path")} tone={project.exists ? "" : "text-bad"}>
+        {project.cwd ?? t("detail.pathUnknown")}
+        {project.cwd && !project.exists ? t("detail.folderGone") : ""}
       </Field>
-      <Field label="Sessions">
+      <Field label={t("detail.sessions")}>
         {project.sessions.length}
-        {project.liveCount ? ` · ${project.liveCount} running` : ""}
+        {project.liveCount ? ` · ${t("app.running", { count: project.liveCount })}` : ""}
         {project.sessions.length ? ` · ${formatBytes(project.totalBytes)}` : ""}
       </Field>
-      <Field label="Last used">{formatTime(project.lastUsed)}</Field>
-      <Field label="Memory" tone={project.hasMemory ? "text-warn" : ""}>
-        {project.hasMemory ? "yes — deleting the project deletes it too" : "no"}
+      {project.git ? (
+        <Field label={t("detail.git")}>{gitTitle(project.git, t).replace(/^Git: /, "")}</Field>
+      ) : null}
+      <Field label={t("detail.lastUsed")}>{formatTime(project.lastUsed)}</Field>
+      <Field label={t("detail.memory")} tone={project.hasMemory ? "text-warn" : ""}>
+        {project.hasMemory ? t("detail.memory.yes") : t("detail.memory.no")}
       </Field>
-      <Field label="Directory">{project.dir}</Field>
+      <Field label={t("detail.directory")}>{project.dir}</Field>
     </div>
   );
 }
 
 export function SessionDetail({ session, samples }: { session: SessionInfo; samples: MetricSample[] }) {
+  const t = useText();
   const latest = samples.length ? samples[samples.length - 1] : null;
   return (
     <div className="p-4">
       <h2 className="text-sm font-medium text-bone-100 mb-2">{session.title}</h2>
-      <Field label="Title from">{session.named ? "a name you set (also shown by /resume)" : "the session's first prompt"}</Field>
-      {session.named && session.prompt ? <Field label="First prompt">{session.prompt}</Field> : null}
-      <Field label="Id">{session.id}</Field>
-      <Field label="Started">{formatTime(session.startedAt)}</Field>
-      <Field label="Last written">{formatTime(session.modifiedAt)}</Field>
-      <Field label="Transcript">{formatBytes(session.bytes)}</Field>
-      <Field label="State" tone={session.live ? "text-ok" : ""}>
-        {session.live ? `running (pid ${session.pid})` : "idle"}
+      <Field label={t("detail.titleFrom")}>{session.named ? t("detail.titleFrom.named") : t("detail.titleFrom.prompt")}</Field>
+      {session.named && session.prompt ? <Field label={t("detail.firstPrompt")}>{session.prompt}</Field> : null}
+      <Field label={t("detail.id")}>{session.id}</Field>
+      <Field label={t("detail.started")}>{formatTime(session.startedAt)}</Field>
+      <Field label={t("detail.lastWritten")}>{formatTime(session.modifiedAt)}</Field>
+      <Field label={t("detail.transcript")}>{formatBytes(session.bytes)}</Field>
+      <Field label={t("detail.state")} tone={session.live ? "text-ok" : ""}>
+        {session.live ? t("detail.state.running", { pid: String(session.pid) }) : t("detail.state.idle")}
       </Field>
       {session.live && latest ? (
-        <Field label="Using">{`${latest.cpu.toFixed(0)}% CPU · ${formatBytes(latest.memoryBytes)}`}</Field>
+        <Field label={t("detail.using")}>{`${latest.cpu.toFixed(0)}% CPU · ${formatBytes(latest.memoryBytes)}`}</Field>
       ) : null}
-      <Field label="File">{session.file}</Field>
+      <Field label={t("detail.file")}>{session.file}</Field>
     </div>
   );
 }
