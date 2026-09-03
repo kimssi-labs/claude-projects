@@ -41,6 +41,8 @@ export interface ProjectInfo {
   git: import("./git.js").GitInfo | null;
   /** This folder is a linked worktree of a repository that lives elsewhere. */
   worktree: boolean;
+  /** The project this worktree belongs under, when that repository is in the list too. */
+  parentDir: string | null;
 }
 
 /** One rate-limit window as Claude Code reports it (five_hour, seven_day). */

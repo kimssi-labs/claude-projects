@@ -6,7 +6,7 @@
  * wiring: the parts worth testing are tested without Electron.
  */
 import { execFile, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, screen, shell } from "electron";
 
@@ -18,7 +18,10 @@ import { readStatus, readStatusUpdatedAt } from "../core/status.js";
 import { hookCommand, hookFileName, hookInstalled, hookScript, withHook, withoutHook } from "../core/usageHook.js";
 import type { UpdateState } from "../core/updates.js";
 import { UpdateService } from "./updater.js";
-import { countChanges, createWorktree, dropWorktree, headOf, isLinkedWorktree, updateFromBase } from "./gitStatus.js";
+import {
+  countChanges, createWorktree, dropWorktree, headOf, isLinkedWorktree, listWorktrees, mainCheckoutOf,
+  updateFromBase,
+} from "./gitStatus.js";
 import { autoPlan, intervalMs, sweepSummary } from "../core/gitAuto.js";
 import { clipFileName, Store } from "../core/store.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
@@ -263,6 +266,30 @@ function scanProjects(): ProjectInfo[] {
         project.git = headOf(project.cwd);
         project.worktree = Boolean(project.git) && isLinkedWorktree(project.cwd);
       }
+    }
+    // Second pass: a worktree points at a folder, and the list is keyed by project. Match the two so
+    // the window can show each worktree under the repository it came from.
+    // Compared with separators and case normalised: the pointer file writes forward slashes where
+    // a transcript's cwd on Windows has backslashes, and the two would never match as written.
+    const key = (path: string): string => {
+      let real = path;
+      try {
+        // 8.3 short names are the one that actually bit: TEMP reads C:\Users\TERRYT~1 in a
+        // transcript's cwd and C:/Users/TerryTaegyunKim in git's own pointer file. Only resolving
+        // the real path makes those the same folder.
+        real = realpathSync.native(path);
+      } catch {
+        /* gone, or unreachable: fall back to what was written */
+      }
+      return real.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    };
+    const byPath = new Map(lastProjects
+      .filter((p) => p.cwd)
+      .map((p) => [key(p.cwd as string), p.dir]));
+    for (const project of lastProjects) {
+      if (!project.worktree || !project.cwd) continue;
+      const repo = mainCheckoutOf(project.cwd);
+      project.parentDir = repo ? byPath.get(key(repo)) ?? null : null;
     }
   }
   const ms = Date.now() - t0;
@@ -844,8 +871,12 @@ function registerIpc(): void {
     const session = project?.sessions.find((s) => s.id === request.sessionId);
     if (!session) return { ok: false, message: "Session not found." };
     if (session.live) return { ok: false, message: "That session is running." };
-    const confirmed = await confirm(`Delete session “${session.title}”?`, "The transcript is removed from disk.");
-    if (!confirmed) return { ok: false };
+    // The window asks in its own dialog, which matches the app; the native box is the fallback for
+    // a caller that did not.
+    if (!request.confirmed
+      && !await confirm(`Delete session “${session.title}”?`, "The transcript is removed from disk.")) {
+      return { ok: false };
+    }
     store.deleteSession(session);
     scanProjects();
     return { ok: true, message: "Session deleted." };
@@ -856,11 +887,12 @@ function registerIpc(): void {
     if (!project) return { ok: false, message: "Project not found." };
     if (project.liveCount) return { ok: false, message: "A session in this project is running." };
     const extra = project.hasMemory ? " Its memory/ folder goes with it." : "";
-    const confirmed = await confirm(
+    if (!request.confirmed && !await confirm(
       `Delete “${project.name}” and its ${project.sessions.length} session(s)?`,
       `Only Claude Code's history is deleted; your code is untouched.${extra}`,
-    );
-    if (!confirmed) return { ok: false };
+    )) {
+      return { ok: false };
+    }
     store.deleteProject(project);
     scanProjects();
     return { ok: true, message: "Project deleted." };
@@ -963,6 +995,13 @@ function registerIpc(): void {
    * That is the whole point here: a second checkout is a second place to run a session, and this
    * app's unit of "a place to run a session" is a project row.
    */
+  /** Every checkout of the repository this project belongs to. */
+  ipcMain.handle(CHANNEL.worktreeList, async (_event, dir: string) => {
+    const project = findProject(dir);
+    if (!project?.cwd || !project.exists || !project.git) return [];
+    return listWorktrees(project.cwd);
+  });
+
   ipcMain.handle(CHANNEL.worktreeAdd, async (_event, request: { dir: string; branch: string }): Promise<AddProjectResult> => {
     const project = findProject(request.dir);
     if (!project?.cwd || !project.exists) return { ok: false, message: "Folder is not available." };

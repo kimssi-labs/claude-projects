@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { nextIndex, resolveAction, SHORTCUTS, type Screen } from "@core/keymap";
 import type { Language } from "@core/i18n";
+import { placeWorktrees, type Worktree } from "@core/worktree";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
 import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
@@ -16,6 +17,7 @@ import { DockGrip } from "./components/DockGrip";
 import { AreaChart, UsageCard } from "./components/Chart";
 import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./components/Lists";
 import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./components/Settings";
+import { Modal, type Ask, type AskResult } from "./components/Modal";
 import { TitleBar } from "./components/TitleBar";
 import { formatBytes } from "./format";
 import { Splitter } from "./components/Splitter";
@@ -66,8 +68,12 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const [editing, setEditing] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
+  /** The dialog on screen, and the promise waiting on its answer. */
+  const [dialog, setDialog] = useState<{ ask: Ask; settle: (result: AskResult) => void } | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
+  /** The checkouts of the selected project's repository, for its detail panel. */
+  const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [update, setUpdate] = useState<UpdateState>(() => initialUpdateState("", true));
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("dock");
   const [systemHistory, setSystemHistory] = useState<MetricSample[]>([]);
@@ -167,16 +173,35 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     });
   }), []);
 
-  const filtered = useMemo(() => {
+  /**
+   * The list as it is drawn: matches in order, with each worktree tucked under its repository.
+   *
+   * One array for both the drawing and the keyboard, or the arrow keys would walk a different list
+   * from the one on screen.
+   */
+  const placed = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return projects;
-    return projects.filter((project) =>
-      project.name.toLowerCase().includes(needle)
-      || (project.cwd ?? "").toLowerCase().includes(needle)
-      || project.sessions.some((s) => s.title.toLowerCase().includes(needle)));
+    const matched = needle
+      ? projects.filter((project) =>
+        project.name.toLowerCase().includes(needle)
+        || (project.cwd ?? "").toLowerCase().includes(needle)
+        || project.sessions.some((s) => s.title.toLowerCase().includes(needle)))
+      : projects;
+    return placeWorktrees(matched);
   }, [projects, query]);
+  const filtered = useMemo(() => placed.map((row) => row.item), [placed]);
 
   const project = filtered[Math.min(projectIndex, Math.max(0, filtered.length - 1))] ?? null;
+
+  // The repository's other checkouts, for the selected project only: one git call per selection,
+  // not one per row.
+  useEffect(() => {
+    const dir = openProject ?? project?.dir;
+    if (!dir || !settings?.git.enabled) { setWorktrees([]); return; }
+    let cancelled = false;
+    void api.worktreeList(dir).then((list) => { if (!cancelled) setWorktrees(list); });
+    return () => { cancelled = true; };
+  }, [openProject, project?.dir, settings?.git.enabled]);
 
   // The expensive half of git, for the row in front of the user and no other. The count lands in
   // the project list on the next scan; this only asks for it.
@@ -207,6 +232,18 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   // thing. The ref is written during render, so it is never behind.
   const latest = useRef({ screen, project, session, sessions, filtered, editing, helpOpen, settingsSection, openProject });
   latest.current = { screen, project, session, sessions, filtered, editing, helpOpen, settingsSection, openProject };
+
+  /**
+   * Ask in the app's own dialog rather than the system's.
+   *
+   * Electron has no `window.prompt` at all, so asking for a name that way returned nothing and the
+   * feature silently did nothing; and a native message box wears the OS's colours, which beside a
+   * dark window reads as a different program.
+   */
+  const askUser = useCallback((ask: Ask): Promise<AskResult> =>
+    new Promise<AskResult>((resolve) => {
+      setDialog({ ask, settle: (result) => { setDialog(null); resolve(result); } });
+    }), []);
 
   const notify = useCallback((result: { ok: boolean; message?: string }) => {
     if (!result.message) return;
@@ -244,7 +281,10 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     const scanned = await refresh();
     setQuery("");                                       // a filter could hide the row just added
     setScreen("projects");
-    setProjectIndex(Math.max(0, scanned.findIndex((p) => p.dir === result.dir)));
+    // Through the same placement the list is drawn with: the raw scan order is not what is on
+    // screen once a worktree has been tucked under its repository, and selecting by the wrong
+    // index lands on a different row.
+    setProjectIndex(Math.max(0, placeWorktrees(scanned).findIndex((row) => row.item.dir === result.dir)));
   }, [notify, refresh]);
 
   const enterSessions = useCallback((dir: string) => {
@@ -266,14 +306,38 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
 
   const remove = useCallback(async () => {
     const now = latest.current;
-    const result = now.screen === "sessions" && now.session
-      ? await api.deleteSession({ projectDir: now.openProject as string, sessionId: now.session.id })
-      : now.project
-        ? await api.deleteProject({ projectDir: now.project.dir })
-        : { ok: false };
+    if (now.screen === "sessions" && now.session) {
+      const session = now.session;
+      const yes = await askUser({
+        title: t("dialog.deleteSession", { name: session.title }),
+        detail: t("dialog.deleteSession.detail"),
+        confirm: t("dialog.delete"),
+        danger: true,
+      });
+      if (!yes) return;
+      const result = await api.deleteSession({
+        projectDir: now.openProject as string, sessionId: session.id, confirmed: true,
+      });
+      notify(result);
+      if (result.ok) await refresh();
+      return;
+    }
+    if (!now.project) return;
+    const target = now.project;
+    const yes = await askUser({
+      title: t("dialog.deleteProject", { name: target.name }),
+      detail: [
+        t("dialog.deleteProject.detail", { count: target.sessions.length }),
+        target.hasMemory ? t("dialog.deleteProject.memory") : "",
+      ].filter(Boolean).join("\n"),
+      confirm: t("dialog.delete"),
+      danger: true,
+    });
+    if (!yes) return;
+    const result = await api.deleteProject({ projectDir: target.dir, confirmed: true });
     notify(result);
     if (result.ok) await refresh();
-  }, [screen, session, openProject, project, notify, refresh]);
+  }, [screen, session, openProject, project, notify, refresh, askUser, t]);
 
   /**
    * The right-click menu of a project row: what the keys do, plus pinning and the folder itself.
@@ -311,8 +375,13 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
       case "rename": setEditing(target.dir); break;
       case "reveal": notify(await api.revealProject(target.dir)); break;
       case "worktreeAdd": {
-        const branch = window.prompt(t("menu.worktreeAdd"), "");
-        if (!branch?.trim()) break;
+        const branch = await askUser({
+          title: t("dialog.worktreeAdd"),
+          detail: t("dialog.worktreeAdd.detail"),
+          input: { placeholder: t("dialog.worktreeAdd.placeholder") },
+          confirm: t("dialog.create"),
+        });
+        if (typeof branch !== "string") break;
         const result = await api.worktreeAdd(target.dir, branch);
         notify(result);
         if (!result.ok || !result.dir) break;
@@ -320,20 +389,29 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
         const scanned = await refresh();
         setQuery("");
         setScreen("projects");
-        setProjectIndex(Math.max(0, scanned.findIndex((p) => p.dir === result.dir)));
+        setProjectIndex(Math.max(0, placeWorktrees(scanned).findIndex((row) => row.item.dir === result.dir)));
         break;
       }
       case "worktreeRemove": {
+        const yes = await askUser({
+          title: t("dialog.worktreeRemove"),
+          detail: target.cwd ?? "",
+          confirm: t("dialog.remove"),
+          danger: true,
+        });
+        if (!yes) break;
         const first = await api.worktreeRemove(target.dir, false);
         if (first.ok) { notify(first); await refresh(); break; }
-        // git refuses a worktree with work in it; forcing is the user's call, not ours.
-        notify(first);
-        if (window.confirm(`${first.message ?? ""}
-
-${t("menu.worktreeForce")}`)) {
-          notify(await api.worktreeRemove(target.dir, true));
-          await refresh();
-        }
+        // git refuses a worktree that holds work; forcing is the user's call, not ours.
+        const force = await askUser({
+          title: t("dialog.worktreeForce"),
+          detail: first.message ?? "",
+          confirm: t("dialog.remove"),
+          danger: true,
+        });
+        if (!force) { notify(first); break; }
+        notify(await api.worktreeRemove(target.dir, true));
+        await refresh();
         break;
       }
       case "gitSync": {
@@ -343,14 +421,24 @@ ${t("menu.worktreeForce")}`)) {
         break;
       }
       case "delete": {
-        const result = await api.deleteProject({ projectDir: target.dir });
+        const yes = await askUser({
+          title: t("dialog.deleteProject", { name: target.name }),
+          detail: [
+            t("dialog.deleteProject.detail", { count: target.sessions.length }),
+            target.hasMemory ? t("dialog.deleteProject.memory") : "",
+          ].filter(Boolean).join("\n"),
+          confirm: t("dialog.delete"),
+          danger: true,
+        });
+        if (!yes) break;
+        const result = await api.deleteProject({ projectDir: target.dir, confirmed: true });
         notify(result);
         if (result.ok) await refresh();
         break;
       }
       default: break;
     }
-  }, [enterSessions, notify, refresh, settings?.git.base]);
+  }, [enterSessions, notify, refresh, settings?.git.base, askUser, t]);
 
   /** The right-click menu of a session row, on either screen it is listed on. */
   const sessionMenu = useCallback(async (projectDir: string, target: SessionInfo, index: number) => {
@@ -376,14 +464,21 @@ ${t("menu.worktreeForce")}`)) {
         break;
       }
       case "delete": {
-        const result = await api.deleteSession({ projectDir, sessionId: target.id });
+        const yes = await askUser({
+          title: t("dialog.deleteSession", { name: target.title }),
+          detail: t("dialog.deleteSession.detail"),
+          confirm: t("dialog.delete"),
+          danger: true,
+        });
+        if (!yes) break;
+        const result = await api.deleteSession({ projectDir, sessionId: target.id, confirmed: true });
         notify(result);
         if (result.ok) await refresh();
         break;
       }
       default: break;
     }
-  }, [enterSessions, notify, refresh]);
+  }, [enterSessions, notify, refresh, askUser, t]);
 
   // The global shortcut can fire while another window has focus; its verdict still belongs here.
   useEffect(() => api.onPasteResult(notify), [notify]);
@@ -594,6 +689,7 @@ ${t("menu.worktreeForce")}`)) {
                 <ProjectRow
                   key={item.dir}
                   project={item}
+                  depth={placed[index]?.depth ?? 0}
                   selected={screen !== "settings" && (screen === "projects" ? index === projectIndex : item.dir === openProject)}
                   onSelect={() => { setProjectIndex(index); setScreen("projects"); }}
                   onOpen={() => enterSessions(item.dir)}
@@ -831,7 +927,7 @@ ${t("menu.worktreeForce")}`)) {
                   {screen === "sessions" && session ? (
                     <SessionDetail session={session} samples={monitoring ? sessionHistory[session.id] ?? [] : []} />
                   ) : project ? (
-                    <ProjectDetail project={project} />
+                    <ProjectDetail project={project} worktrees={worktrees} />
                   ) : null}
 
                   <div className="p-3 space-y-2 border-t border-ink-600">
@@ -912,6 +1008,8 @@ ${t("menu.worktreeForce")}`)) {
           )}
         </main>
       </div>
+
+      {dialog ? <Modal ask={dialog.ask} onDone={dialog.settle} /> : null}
 
       {toast ? (
         <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm shadow-lg ${

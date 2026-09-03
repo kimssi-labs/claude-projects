@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -6,6 +6,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ConfigStore } from "../config.js";
 import { encodeProjectPath } from "../paths.js";
 import { Store } from "../store.js";
+
+/** Fixed times, so "which is newer" is never decided by how fast the test happened to run. */
+const NOW = new Date();
+const MINUTE_AGO = new Date(NOW.getTime() - 60_000);
+const HOUR_AGO = new Date(NOW.getTime() - 3_600_000);
 
 /** A throwaway ~/.claude with one project, one transcript and a history entry. */
 function makeHome(): { home: string; cwd: string; dir: string; sessionId: string } {
@@ -191,11 +196,19 @@ describe("pins", () => {
   it("puts a pinned project and a pinned session first, and takes the pin off again", () => {
     const fixture = makeHome();
     const store = new Store(fixture.home, { isAlive: () => false, folderExists: () => true });
+    // BOTH sides are stamped, not just the newer one: the fixture's file is written when the test
+    // runs, which is after this module was loaded, so a constant captured at load time is older
+    // than it and the "newer" project would sort second.
+    utimesSync(join(fixture.home, "projects", fixture.dir, `${fixture.sessionId}.jsonl`), HOUR_AGO, HOUR_AGO);
     // A second project, used more recently than the fixture's, and a second, newer session in it.
     const other = join(fixture.home, "..", "Work", "Other");
     const otherDir = store.addProject(other);
     const newer = "99999999-2222-3333-4444-555555555555";
-    writeFileSync(join(fixture.home, "projects", otherDir, `${newer}.jsonl`), `${JSON.stringify({ type: "user", cwd: other, sessionId: newer })}\n`);
+    const newest = join(fixture.home, "projects", otherDir, `${newer}.jsonl`);
+    writeFileSync(newest, `${JSON.stringify({ type: "user", cwd: other, sessionId: newer })}\n`);
+    // Stamped rather than left to the clock: two files written inside the same millisecond leave
+    // "newest first" to chance, which under a full run is a coin toss.
+    utimesSync(newest, MINUTE_AGO, NOW);
     expect(store.scan()[0]?.dir).toBe(otherDir);                 // newest use first, as before
 
     const config = new ConfigStore(fixture.home);
@@ -209,7 +222,10 @@ describe("pins", () => {
 
     // Sessions pin the same way, inside their project.
     const older = fixture.sessionId;
-    writeFileSync(join(fixture.home, "projects", fixture.dir, `${newer}.jsonl`), `${JSON.stringify({ type: "user", cwd: fixture.cwd, sessionId: newer })}\n`);
+    const second = join(fixture.home, "projects", fixture.dir, `${newer}.jsonl`);
+    writeFileSync(second, `${JSON.stringify({ type: "user", cwd: fixture.cwd, sessionId: newer })}\n`);
+    utimesSync(second, MINUTE_AGO, NOW);
+    utimesSync(join(fixture.home, "projects", fixture.dir, `${older}.jsonl`), MINUTE_AGO, HOUR_AGO);
     expect(store.scan().find((p) => p.dir === fixture.dir)?.sessions[0]?.id).toBe(newer);
     config.togglePin("sessions", older);
     const sessions = store.scan().find((p) => p.dir === fixture.dir)?.sessions ?? [];

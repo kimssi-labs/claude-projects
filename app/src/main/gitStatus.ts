@@ -18,7 +18,7 @@ import {
   type GitSyncConfig, type SyncOutcome,
 } from "../core/gitSync.js";
 import {
-  addArgs, classifyWorktree, cleanBranchName, parseWorktrees, removeArgs, suggestPath,
+  addArgs, classifyWorktree, cleanBranchName, mainRepoFrom, parseWorktrees, removeArgs, suggestPath,
   type Worktree, type WorktreeOutcome,
 } from "../core/worktree.js";
 
@@ -176,6 +176,22 @@ export async function listWorktrees(cwd: string): Promise<Worktree[]> {
       (error, stdout) => resolve({ code: error ? 1 : 0, out: stdout }));
   });
   return result.code === 0 ? parseWorktrees(result.out) : [];
+}
+
+/**
+ * The repository a linked worktree belongs to, or null.
+ *
+ * One small read of the `.git` pointer file — no git process — so it can run for every project on
+ * every scan.
+ */
+export function mainCheckoutOf(cwd: string): string | null {
+  try {
+    const marker = join(cwd, ".git");
+    if (!statSync(marker).isFile()) return null;
+    return mainRepoFrom(readFileSync(marker, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /** True when this folder is a linked worktree rather than the repository's own checkout. */
