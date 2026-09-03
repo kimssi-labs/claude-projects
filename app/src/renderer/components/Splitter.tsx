@@ -5,6 +5,7 @@
  * 4-pixel handle, which it does immediately, and it ends even if the button is released off-window.
  */
 import { useRef } from "react";
+import { useText } from "../useText";
 
 export interface SplitterProps {
   /** Current width — or height, for a horizontal divider — of the pane being sized, in pixels. */
@@ -19,6 +20,7 @@ export interface SplitterProps {
 }
 
 export function Splitter({ width, side, min, max, onDrag, onCommit }: SplitterProps) {
+  const t = useText();
   const start = useRef({ position: 0, width: 0 });
   const vertical = side === "left" || side === "right";
   const grows = side === "left" || side === "top";
@@ -27,7 +29,7 @@ export function Splitter({ width, side, min, max, onDrag, onCommit }: SplitterPr
     <div
       role="separator"
       aria-orientation={vertical ? "vertical" : "horizontal"}
-      aria-label="Resize panel"
+      aria-label={t("tip.resizePane")}
       className={`shrink-0 bg-transparent hover:bg-accent/40 active:bg-accent/60 transition-colors ${
         vertical ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"}`}
       onPointerDown={(event) => {

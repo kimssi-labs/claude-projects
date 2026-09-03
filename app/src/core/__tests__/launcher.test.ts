@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  claudeArgv, cmdQuote, hostedCommand, launchCommand, psEncode, psQuote, sessionEnvironment, shQuote,
+  claudeArgv, cmdQuote, hostedCommand, launchCommand, psEncode, psQuote, resolveShell,
+  sessionEnvironment, shellChain, shQuote,
   CURRENT_WINDOW, NEW_WINDOW, SESSIONS_WINDOW, WT_EXE,
 } from "../launcher.js";
 import type { LaunchRequest } from "../launcher.js";
@@ -67,27 +68,73 @@ describe("quoting", () => {
   });
 });
 
+/** A machine that has some shells and not others. */
+const only = (...installed: string[]) => (exe: string): boolean => installed.includes(exe);
+const ALL = () => true;
+
 describe("hosted command", () => {
   it("keeps the window open with PowerShell", () => {
-    const hosted = hostedCommand([CLAUDE], "pwsh", "win32", true);
+    const hosted = hostedCommand([CLAUDE], "pwsh", "win32", ALL);
     expect(hosted.exe).toBe("pwsh.exe");
     expect(hosted.args.slice(0, 2)).toEqual(["-NoExit", "-EncodedCommand"]);
   });
 
-  it("falls back to Windows PowerShell when 7 is missing", () => {
-    expect(hostedCommand([CLAUDE], "auto", "win32", false).exe).toBe("powershell.exe");
-  });
-
   it("uses cmd and bash in their own syntax", () => {
-    expect(hostedCommand([CLAUDE], "cmd", "win32", true).args[0]).toBe("/k");
-    const bash = hostedCommand(["claude"], "bash", "linux", false);
+    expect(hostedCommand([CLAUDE], "cmd", "win32", ALL).args[0]).toBe("/k");
+    const bash = hostedCommand(["claude"], "bash", "linux", ALL);
     expect(bash.exe).toBe("bash");
     expect(bash.args[1]).toContain("exec bash");
   });
 
   it("runs claude directly when no shell is wanted", () => {
-    expect(hostedCommand([CLAUDE, "--resume", SESSION], "none", "win32", true))
-      .toEqual({ exe: CLAUDE, args: ["--resume", SESSION] });
+    expect(hostedCommand([CLAUDE, "--resume", SESSION], "none", "win32", ALL))
+      .toEqual({ exe: CLAUDE, args: ["--resume", SESSION], fellBack: false });
+  });
+});
+
+/**
+ * The chain that keeps a session opening on a machine that is not the one the settings were made on.
+ *
+ * The bug this replaces: availability was never passed in, so Auto always chose PowerShell 7 and a
+ * machine without it got a launch that simply failed.
+ */
+describe("choosing a shell that is actually installed", () => {
+  it("prefers PowerShell 7, then Windows PowerShell, then cmd", () => {
+    expect(resolveShell("auto", "win32", only("pwsh.exe", "powershell.exe", "cmd.exe")).exe).toBe("pwsh.exe");
+    expect(resolveShell("auto", "win32", only("powershell.exe", "cmd.exe")).exe).toBe("powershell.exe");
+    expect(resolveShell("auto", "win32", only("cmd.exe")).exe).toBe("cmd.exe");
+  });
+
+  it("treats an explicit choice as a preference, not a demand", () => {
+    // Settings made on a machine with PowerShell 7, opened on one without it.
+    const resolved = resolveShell("pwsh", "win32", only("powershell.exe", "cmd.exe"));
+    expect(resolved).toEqual({ exe: "powershell.exe", fellBack: true });
+  });
+
+  it("says when it used the first choice, so nothing is reported that did not happen", () => {
+    expect(resolveShell("pwsh", "win32", ALL).fellBack).toBe(false);
+    expect(resolveShell("cmd", "win32", ALL).fellBack).toBe(false);
+  });
+
+  it("never falls below what the user asked for when they asked for the bottom", () => {
+    expect(shellChain("cmd", "win32")).toEqual(["cmd.exe"]);
+    expect(shellChain("powershell", "win32")).toEqual(["powershell.exe", "cmd.exe"]);
+  });
+
+  it("ends at cmd even when nothing answers, since a launch has to try something", () => {
+    expect(resolveShell("auto", "win32", () => false)).toEqual({ exe: "cmd.exe", fellBack: true });
+  });
+
+  it("falls from bash to sh elsewhere", () => {
+    expect(resolveShell("auto", "linux", only("sh"))).toEqual({ exe: "sh", fellBack: true });
+    const shell = hostedCommand(["claude"], "auto", "linux", only("sh"));
+    expect(shell.args[1]).toContain("exec sh");
+  });
+
+  it("carries the shell it settled on out to the caller", () => {
+    const command = launchCommand(request({}), only("powershell.exe", "cmd.exe"));
+    expect(command.shell).toBe("powershell.exe");
+    expect(command.fellBack).toBe(true);
   });
 });
 

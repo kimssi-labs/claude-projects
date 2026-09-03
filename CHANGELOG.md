@@ -3,6 +3,75 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.8.0
+
+Everything here came from running the app on a second machine, where most of it did not work.
+
+### Usage, which was never going to work anywhere else
+
+- **Hangar collects the usage figures itself, if you let it.** The gauges read
+  `cache/rate-limits.json`, and nothing in a stock install writes that file — it existed on the
+  author's machine because a personal status-line script happened to publish it. Claude Code hands
+  its Stop hook the current rate limits at the end of every turn, so **Settings · Usage** can install
+  a small hook that writes them down. It is off until asked for, says exactly which files it touches,
+  leaves any hook already there alone, and removes what it added. No credentials are read and nothing
+  is sent anywhere.
+- The hook needs no bash and no curl: a `cmd` script reading stdin through `more.com` on Windows, a
+  `sh` script of builtins elsewhere. The path it writes is fixed at install time, because Claude Code
+  keys its home off `CLAUDE_CONFIG_DIR` and this app off `CLAUDE_HOME` — a script that worked it out
+  at run time published where nothing was reading.
+- Turning it on no longer risks the user's `settings.json`: a file that will not parse stops the
+  operation instead of being replaced by ours.
+
+### A shell that is actually installed
+
+- **PowerShell 7 → Windows PowerShell → cmd, in that order, using whichever is there.** Availability
+  was never passed to the launcher, so Auto always chose `pwsh.exe` and a machine without PowerShell 7
+  simply failed to open a session. An explicit choice is now a preference too: settings made on one
+  machine still open a session on another, and the fallback is reported rather than silent.
+
+### Git
+
+- **A project row shows its branch** — `main ●3`, read straight from `.git`, which costs nothing.
+  Counting changed files runs `git status` for the selected project only.
+- **Update from the base branch**, from a project's right-click menu: rebase, merge, or fast-forward
+  only. The base is fetched into a private ref first, so a concurrent fetch cannot move it mid-rebase,
+  and a conflict stops and leaves the repository alone.
+- **On its own, if you want it.** Never, only when it fast-forwards, or using the strategy above. Any
+  project with a session running in it, or with uncommitted changes, is skipped whatever the setting.
+- **Worktrees.** A project with a repository can grow a worktree on a new branch, which joins the list
+  as its own project — a second place to run a session on the same repository. New branches are cut
+  with `--no-track`, or `git status` reports them behind the base before they have been pushed, and
+  the base is resolved to a full ref so a tag of the same name cannot stand in for it. Removing one
+  refuses while it holds uncommitted work, and asks before forcing.
+- Where git is not installed, the branch still shows and the rest says so, with a link to install it.
+
+### Updates
+
+- **Hangar updates itself**, through electron-updater and the releases it already publishes.
+  **Settings · Updates** chooses automatic or manual and has a Check now button that reports what it
+  found, downloads with a progress figure, and installs on restart. Releases now carry the metadata
+  that makes this possible, so updating in place works from this version onwards.
+
+### Language
+
+- **한국어.** English by default, Korean available, and a fresh install follows the machine's own
+  language. Menus, tooltips, settings and relative times all go through the dictionary; the Korean is
+  written as Korean rather than translated word for word. A test scans the source for English left in
+  the markup, because three rounds of "there is still English in the settings" is enough.
+
+### Fixed
+
+- **Every settings section is saved.** The save call listed sections by hand and two of them — git and
+  updates — were missing, so those choices reverted the moment the main process pushed the settings
+  back. Reported as "rebase cannot be selected".
+- **A session opened from Hangar is a top-level session**, whatever started Hangar. Launched from
+  inside a Claude Code session, the app inherited that session's environment markers and passed them
+  on; the new `claude` read them as its own and stopped saving its transcript. Those markers are
+  stripped now.
+- **The terminal tab and the row say the same thing.** The session's name is passed to `--name`, which
+  Claude Code puts in its prompt box, its `/resume` picker and the tab title.
+
 ## v2.7.0
 
 - **A project can be added before it has a session.** The list only ever knew folders Claude Code

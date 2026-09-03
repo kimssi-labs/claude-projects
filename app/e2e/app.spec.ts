@@ -53,7 +53,9 @@ function fixture(): { home: string; projectDir: string } {
 
 async function launch(home: string): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
-    args: ["."],
+    // --lang pins what app.getLocale() reports, and the window follows the machine unless told
+    // otherwise: without this the suite reads in the language of whoever is running it.
+    args: [".", "--lang=en-US"],
     cwd: process.cwd(),
     env: { ...process.env, CLAUDE_HOME: home },
   });

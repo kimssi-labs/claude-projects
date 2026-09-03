@@ -37,6 +37,10 @@ export interface ProjectInfo {
   liveCount: number;
   /** Kept at the top of the list, by the user's choice. */
   pinned: boolean;
+  /** Where the project's repository stands, or null when the folder is not one. */
+  git: import("./git.js").GitInfo | null;
+  /** This folder is a linked worktree of a repository that lives elsewhere. */
+  worktree: boolean;
 }
 
 /** One rate-limit window as Claude Code reports it (five_hour, seven_day). */
@@ -116,6 +120,8 @@ export type ThemeMode = "system" | "light" | "dark";
 export type LayoutMode = "auto" | "horizontal" | "vertical";
 
 export interface UiConfig {
+  /** What the window is written in; "system" follows the machine. */
+  language: import("./i18n.js").Language;
   /** Side by side, stacked, or stacked below `stackBelow` pixels wide. */
   layout: LayoutMode;
   /** The width, in pixels, at which "auto" switches to stacked. */
@@ -138,6 +144,24 @@ export interface UiConfig {
   cursor: number;
   /** "system" follows the OS setting and changes with it while the app is open. */
   theme: ThemeMode;
+}
+
+export interface GitConfig {
+  /** Show a repository line on project rows. */
+  enabled: boolean;
+  /** Also count uncommitted files, which costs a `git status` for the selected project. */
+  countChanges: boolean;
+  /** How an update from the base branch reconciles local commits. */
+  strategy: import("./gitSync.js").MergeStrategy;
+  /** The branch to update from, as remote/branch; empty means ask the remote for its default. */
+  base: string;
+  /** Whether, and how, to update from the base without being asked. */
+  auto: import("./gitAuto.js").AutoConfig;
+}
+
+export interface UpdateConfig {
+  /** Look for a newer version on a timer, and fetch what it finds. */
+  automatic: boolean;
 }
 
 export interface StatusConfig {

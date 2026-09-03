@@ -53,15 +53,38 @@ export function resetLabel(resetsAt: number, now = Date.now()): string {
 
 /** "3 minutes ago" — for a list where the exact second never matters. */
 export function formatSince(ms: number, now = Date.now()): string {
-  const seconds = Math.max(0, Math.round((now - ms) / 1000));
-  if (seconds < 60) return "just now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.round(hours / 24);
-  return days < 30 ? `${days} d ago` : formatTime(ms);
+  const { key, vars } = sinceParts(ms, now);
+  return key === "since.absolute" ? formatTime(ms) : EN_SINCE[key](vars.count ?? 0);
 }
+
+/**
+ * The same reckoning, as a message and its number.
+ *
+ * Split out so a translated screen can say it in its own language: "3분 전" is not "3" pasted into
+ * an English sentence, and a component that has the translator can put the pieces together itself.
+ */
+export function sinceParts(ms: number, now = Date.now()): {
+  key: "since.now" | "since.minutes" | "since.hours" | "since.days" | "since.absolute";
+  vars: { count?: number };
+} {
+  const seconds = Math.max(0, Math.round((now - ms) / 1000));
+  if (seconds < 60) return { key: "since.now", vars: {} };
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return { key: "since.minutes", vars: { count: minutes } };
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return { key: "since.hours", vars: { count: hours } };
+  const days = Math.round(hours / 24);
+  return days < 30 ? { key: "since.days", vars: { count: days } } : { key: "since.absolute", vars: {} };
+}
+
+/** English, for the callers that have no translator to hand — tests, and anything outside the tree. */
+const EN_SINCE = {
+  "since.now": () => "just now",
+  "since.minutes": (n: number) => `${n} min ago`,
+  "since.hours": (n: number) => `${n} h ago`,
+  "since.days": (n: number) => `${n} d ago`,
+  "since.absolute": () => "",
+} as const;
 
 export function formatPercent(value: number): string {
   return `${Math.round(value)}%`;

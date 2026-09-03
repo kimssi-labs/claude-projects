@@ -19,6 +19,15 @@ export const CHANNEL = {
   addProject: "project:add",
   contextMenu: "menu:context",
   togglePin: "pin:toggle",
+  setUsageHook: "usage:hook",
+  updateAction: "update:action",
+  gitCount: "git:count",
+  gitSync: "git:sync",
+  worktreeAdd: "worktree:add",
+  worktreeRemove: "worktree:remove",
+  openPage: "app:open-page",
+  toast: "app:toast",                // main -> renderer, when something finished on its own
+  updatePush: "update:push",          // main -> renderer, as a check or download moves on
   loadSettings: "settings:load",
   saveSettings: "settings:save",
   displays: "settings:displays",
@@ -65,6 +74,39 @@ export interface SettingsPayload {
   minPercent: number;
   /** Whether the system-wide paste shortcut is actually held right now. */
   pasteHotkeyActive: boolean;
+  /** How usage collection stands right now — the answer to "why are the gauges blank". */
+  usage: UsageState;
+  updates: import("../core/types.js").UpdateConfig;
+  git: import("../core/types.js").GitConfig;
+  /** Whether the git command line is on PATH — the branch line does not need it, the rest does. */
+  gitAvailable: boolean;
+}
+
+/**
+ * Pages this app will open in a browser, by name.
+ *
+ * A name rather than a URL: the renderer asking the main process to open an arbitrary address is
+ * the shape of a hole, and there are only ever a handful of pages worth linking to.
+ */
+export const PAGES = {
+  git: "https://git-scm.com/downloads",
+  claudeCode: "https://claude.com/claude-code",
+  releases: "https://github.com/kimssi-labs/hangar/releases",
+} as const;
+export type PageName = keyof typeof PAGES;
+
+/** What the settings screen can ask of the updater. */
+export type UpdateCommand = "check" | "download" | "install";
+
+export interface UsageState {
+  /** Our Stop hook is registered in Claude Code's settings. */
+  collecting: boolean;
+  /** Figures have been published at least once; when, in epoch ms. */
+  updatedAt: number | null;
+  /** Windows Claude Code has actually reported, whether or not they are ticked for display. */
+  reported: number;
+  /** A copy with no installer behind it: deleting it cannot take the hook with it. */
+  portable: boolean;
 }
 
 /** What the caption buttons need to know. Docked counts as maximised: the band IS the full state. */
@@ -90,6 +132,8 @@ export interface DisplayInfo {
 }
 
 export interface AppInfo {
+  /** The machine's own locale, so "system" can resolve to something. */
+  locale: string;
   version: string;
   platform: NodeJS.Platform;
   claudeFound: boolean;

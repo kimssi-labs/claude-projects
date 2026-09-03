@@ -1,8 +1,13 @@
 appId: dev.kimssilabs.hangar
 productName: Hangar
 copyright: Copyright (c) 2026 kimssi-labs. MIT License.
-# Nothing is published from the build itself; the release job uploads the artifacts.
-publish: null
+# The release job uploads the artifacts, not electron-builder — but the provider has to be named
+# anyway: it is what makes the build write latest.yml / latest-linux.yml beside the installers, and
+# without those files an installed copy has no way to discover that a newer one exists.
+publish:
+  provider: github
+  owner: kimssi-labs
+  repo: hangar
 directories:
   output: release
   buildResources: build

@@ -53,7 +53,12 @@ async function mainWindow(app: ElectronApplication): Promise<Page> {
 }
 
 async function launch(home: string): Promise<{ app: ElectronApplication; page: Page }> {
-  const app = await electron.launch({ args: ["."], cwd: process.cwd(), env: { ...process.env, CLAUDE_HOME: home } });
+  const app = await electron.launch({
+    // --lang pins what app.getLocale() reports; the window follows the machine otherwise.
+    args: [".", "--lang=en-US"],
+    cwd: process.cwd(),
+    env: { ...process.env, CLAUDE_HOME: home },
+  });
   const page = await mainWindow(app);
   await page.waitForLoadState("domcontentloaded");
   await page.waitForTimeout(1200);                // the first scan and the first paint
