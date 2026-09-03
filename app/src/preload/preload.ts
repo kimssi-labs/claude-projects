@@ -51,6 +51,9 @@ const api = {
   },
   /** Open one of the app's known pages in the default browser. */
   openPage: (page: PageName): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.openPage, page),
+  /** Every checkout of the repository this project belongs to. */
+  worktreeList: (dir: string): Promise<import("../core/worktree.js").Worktree[]> =>
+    ipcRenderer.invoke(CHANNEL.worktreeList, dir),
   /** Add a worktree of this project on a new branch; it joins the list as its own project. */
   worktreeAdd: (dir: string, branch: string): Promise<AddProjectResult> =>
     ipcRenderer.invoke(CHANNEL.worktreeAdd, { dir, branch }),

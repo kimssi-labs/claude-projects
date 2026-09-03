@@ -150,3 +150,47 @@ export function classifyWorktree(code: number, output: string): WorktreeOutcome 
   const last = output.split("\n").map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? "";
   return { ok: false, kind: "failed", message: last || "git refused to create the worktree." };
 }
+
+/**
+ * The repository a linked worktree belongs to, from the pointer its `.git` file holds.
+ *
+ * That file says `gitdir: <repo>/.git/worktrees/<name>`, so the repository is everything before
+ * `/.git/worktrees/`. A string, not a git call: this runs for every project on every scan.
+ */
+export function mainRepoFrom(pointer: string): string | null {
+  const match = /^gitdir:\s*(.+)$/m.exec(pointer.trim());
+  const gitdir = match?.[1]?.trim();
+  if (!gitdir) return null;
+  const cut = gitdir.replace(/\\/g, "/").toLowerCase().indexOf("/.git/worktrees/");
+  return cut > 0 ? gitdir.slice(0, cut) : null;
+}
+
+/** A row of the project list, and how deep it sits. */
+export interface Placed<T> { item: T; depth: number }
+
+/**
+ * The list order, with each worktree tucked under the project it belongs to.
+ *
+ * A worktree is a project in its own right — its own folder, its own sessions — but it is also part
+ * of a repository the list already shows, and two sibling rows hide that. So it follows its parent
+ * and is indented; a worktree whose repository is not in the list stays where the sort put it.
+ */
+export function placeWorktrees<T extends { dir: string; parentDir?: string | null }>(
+  projects: T[],
+): Placed<T>[] {
+  const children = new Map<string, T[]>();
+  const known = new Set(projects.map((project) => project.dir));
+  for (const project of projects) {
+    const parent = project.parentDir;
+    if (!parent || parent === project.dir || !known.has(parent)) continue;
+    children.set(parent, [...(children.get(parent) ?? []), project]);
+  }
+  const placed: Placed<T>[] = [];
+  for (const project of projects) {
+    const parent = project.parentDir;
+    if (parent && parent !== project.dir && known.has(parent)) continue;   // placed under its parent
+    placed.push({ item: project, depth: 0 });
+    for (const child of children.get(project.dir) ?? []) placed.push({ item: child, depth: 1 });
+  }
+  return placed;
+}

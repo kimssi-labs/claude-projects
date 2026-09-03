@@ -25,6 +25,7 @@ export const CHANNEL = {
   gitSync: "git:sync",
   worktreeAdd: "worktree:add",
   worktreeRemove: "worktree:remove",
+  worktreeList: "worktree:list",
   openPage: "app:open-page",
   toast: "app:toast",                // main -> renderer, when something finished on its own
   updatePush: "update:push",          // main -> renderer, as a check or download moves on
@@ -60,6 +61,8 @@ export interface RenameRequest {
 }
 
 export interface DeleteRequest {
+  /** The window already asked; skip the native box rather than asking twice. */
+  confirmed?: boolean;
   projectDir: string;
   sessionId?: string;
 }

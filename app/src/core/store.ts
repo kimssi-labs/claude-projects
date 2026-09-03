@@ -301,6 +301,7 @@ export class Store {
       // Filled in by the main process, which is where reading a working tree belongs.
       git: null,
       worktree: false,
+      parentDir: null,
     };
   }
 

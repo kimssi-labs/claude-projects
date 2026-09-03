@@ -27,6 +27,7 @@ function project(overrides: Partial<ProjectInfo> = {}): ProjectInfo {
     pinned: false,
     git: GIT,
     worktree: false,
+    parentDir: null,
     ...overrides,
   };
 }

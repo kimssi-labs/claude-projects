@@ -13,6 +13,7 @@ import { Truncated } from "./Truncated";
 import { formatBytes, formatTime, sinceParts } from "../format";
 import { useText } from "../useText";
 import { gitLabel, gitTitle } from "@core/git";
+import type { Worktree } from "@core/worktree";
 
 /**
  * Below these widths a row cannot hold its name and its numbers on one line.
@@ -63,10 +64,12 @@ function useScrollIntoView(selected: boolean): React.RefObject<HTMLDivElement> {
 }
 
 export function ProjectRow({
-  project, selected, onSelect, onOpen, onContextMenu,
+  project, selected, depth = 0, onSelect, onOpen, onContextMenu,
 }: {
   project: ProjectInfo;
   selected: boolean;
+  /** 1 for a worktree shown under the repository it belongs to. */
+  depth?: number;
   onSelect: () => void;
   onOpen: () => void;
   onContextMenu?: () => void;
@@ -79,11 +82,14 @@ export function ProjectRow({
     <div
       ref={ref}
       className={`row ${selected ? "row-selected" : "hover:bg-ink-700/60"} ${stacked ? "flex-wrap" : ""}`}
+      style={depth ? { marginLeft: depth * 14 } : undefined}
       onClick={onSelect}
       onDoubleClick={onOpen}
       onContextMenu={(event) => { event.preventDefault(); onContextMenu?.(); }}
     >
       <div ref={box} className="absolute inset-x-0 h-0" aria-hidden="true" />
+      {/* A rule down the left, so an indented row reads as belonging to the one above it. */}
+      {depth ? <span className="self-stretch w-px bg-ink-600 shrink-0" aria-hidden="true" /> : null}
       <LiveDot live={project.liveCount > 0} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -185,7 +191,11 @@ function Field({ label, children, tone = "" }: { label: string; children: React.
   );
 }
 
-export function ProjectDetail({ project }: { project: ProjectInfo }) {
+export function ProjectDetail({ project, worktrees = [] }: {
+  project: ProjectInfo;
+  /** Every checkout of this project's repository, the main one included. */
+  worktrees?: Worktree[];
+}) {
   const t = useText();
   return (
     <div className="p-4">
@@ -208,6 +218,24 @@ export function ProjectDetail({ project }: { project: ProjectInfo }) {
         {project.hasMemory ? t("detail.memory.yes") : t("detail.memory.no")}
       </Field>
       <Field label={t("detail.directory")}>{project.dir}</Field>
+      {/* Only worth a section when there is more than the repository's own checkout. */}
+      {worktrees.length > 1 ? (
+        <Field label={t("detail.worktrees")}>
+          <div className="space-y-1">
+            {worktrees.map((tree) => (
+              <div key={tree.path} className="leading-tight">
+                <span className={tree.path === project.cwd ? "text-accent" : "text-bone-200"}>
+                  {tree.branch ?? tree.head.slice(0, 7)}
+                </span>
+                {tree.path === project.cwd ? (
+                  <span className="text-bone-500"> · {t("detail.worktreeHere")}</span>
+                ) : null}
+                <div className="text-[11px] text-bone-500 break-all">{tree.path}</div>
+              </div>
+            ))}
+          </div>
+        </Field>
+      ) : null}
     </div>
   );
 }

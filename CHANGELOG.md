@@ -3,6 +3,26 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.9.0
+
+- **Every question the app asks is drawn in the app.** Deleting a project or a session, naming a
+  branch, confirming a forced removal: all of it now appears inside the window, in its theme and its
+  language, instead of a system box wearing the OS's own colours. This also fixed a feature that had
+  never worked — Electron does not implement `window.prompt`, so the branch-name question returned
+  nothing and creating a worktree quietly did nothing at all. The folder picker stays native, because
+  a file dialog is the system's to draw.
+- **A worktree sits under the repository it came from**, indented, directly beneath it, rather than
+  as a sibling row that hides the relationship. The parent is read from the pointer in the worktree's
+  own `.git` file, which costs nothing. Matching the two needed a resolved real path: git writes
+  `C:/Users/ExampleUser/…` where a transcript can hold the 8.3 form `C:\Users\EXAMPL~1\…`, and
+  as strings those never meet.
+- **A project's detail panel lists the repository's other checkouts**, marking the one you are on.
+- The `worktree` chip and the memory gauge read as English in every language: they name a git concept
+  and a machine reading, and "CPU" beside "메모리" looked like two unrelated things.
+- A pin test that only failed in a full run is deterministic now: it stamped one file's time and
+  trusted the clock for the other, so which project counted as newer depended on how fast the suite
+  had been running.
+
 ## v2.8.0
 
 Everything here came from running the app on a second machine, where most of it did not work.
