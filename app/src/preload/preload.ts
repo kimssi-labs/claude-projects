@@ -9,7 +9,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { buildApi } from "../bridge/build.js";
 import { CONTRACTS } from "../bridge/registry.js";
 import { CHANNEL } from "../main/ipc.js";
-import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, DeleteRequest, DisplayInfo, OpenSessionRequest, PastedImage, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
+import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, DeleteRequest, DisplayInfo, OpenSessionRequest, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricSample, MetricsSnapshot, ProjectInfo, StatusConfig, StatusSnapshot, UiConfig, UpdateConfig } from "../core/types.js";
 
 const api = {
@@ -49,12 +49,6 @@ const api = {
   releaseDock: (): Promise<SettingsPayload> => ipcRenderer.invoke(CHANNEL.releaseDock),
   saveUi: (ui: Partial<UiConfig>): Promise<void> => ipcRenderer.invoke(CHANNEL.saveUi, ui),
   appInfo: (): Promise<AppInfo> => ipcRenderer.invoke(CHANNEL.appInfo),
-  pasteImage: (): Promise<PastedImage> => ipcRenderer.invoke(CHANNEL.pasteImage),
-  onPasteResult: (listener: (result: PastedImage) => void): (() => void) => {
-    const handler = (_event: unknown, result: PastedImage): void => listener(result);
-    ipcRenderer.on(CHANNEL.pasteResult, handler);
-    return () => ipcRenderer.removeListener(CHANNEL.pasteResult, handler);
-  },
   /** Drag the docked band's inner edge. `done` marks the end, when the size is written down. */
   dragDock: (thickness: number, done: boolean): void =>
     ipcRenderer.send(CHANNEL.dragDock, { thickness, done }),

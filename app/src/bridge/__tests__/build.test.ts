@@ -96,6 +96,8 @@ describe("the surface the page can reach", () => {
       setUsageHook: "invoke usage:hook",
       metrics: "invoke metrics:history",
       onMetrics: "event metrics:push",
+      pasteImage: "invoke clipboard:paste-image",
+      onPasteResult: "event clipboard:paste-result",
     });
   });
 
