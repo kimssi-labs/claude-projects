@@ -9,11 +9,12 @@
  */
 import { useCallback, useMemo, useState, type RefObject } from "react";
 
-import type { MetricSample, ProjectInfo, SessionInfo } from "@core/types";
+import type { LaunchConfig, MetricSample, PermissionMode, ProjectInfo, SessionInfo, ShellChoice } from "@core/types";
 import { placeWorktrees, type Placed } from "@core/worktree";
 
 import { api, MENU_SEPARATOR, type MenuItemSpec } from "../../renderer/api";
 import { ProjectRow, SessionRow } from "../../renderer/components/Lists";
+import { Choice } from "../../renderer/components/SettingsCard";
 import type { Ask, AskResult } from "../../renderer/components/Modal";
 import { useText } from "../../renderer/useText";
 import type { OpenSessionRequest } from "./contract";
@@ -370,6 +371,85 @@ export function SessionPreview({ project, samples, onEnter, onContextMenu }: {
           {t("app.showAll", { count: project.sessions.length })}
         </button>
       ) : null}
+    </>
+  );
+}
+
+// ---- how a session starts: the settings cards ----------------------------------------------------
+
+const SHELLS: { key: ShellChoice; label: string; note: string }[] = [
+  { key: "auto", label: "Auto", note: "PowerShell 7 when installed, else the system shell" },
+  { key: "pwsh", label: "PowerShell 7", note: "pwsh" },
+  { key: "powershell", label: "Windows PowerShell", note: "powershell.exe" },
+  { key: "cmd", label: "Command Prompt", note: "cmd.exe /k" },
+  { key: "bash", label: "bash", note: "bash -lc" },
+  { key: "custom", label: "Custom program", note: "an editor like VS Code, opened on the project folder" },
+  { key: "none", label: "No shell", note: "claude directly — the window closes when it exits" },
+];
+
+const PERMISSIONS: { key: PermissionMode; label: string; note: string }[] = [
+  { key: "default", label: "Ask (default)", note: "the normal prompts" },
+  { key: "bypass", label: "Bypass permissions", note: "--dangerously-skip-permissions" },
+  { key: "accept", label: "Accept edits", note: "file edits go through, other tools still ask" },
+  { key: "plan", label: "Plan", note: "plan first, change nothing until you approve" },
+  { key: "auto", label: "Auto", note: "claude decides per tool call" },
+];
+
+/** The settings card body: which shell hosts a session, and the program when it is a custom one. */
+export function LaunchSettings({ launch, onChange }: { launch: LaunchConfig; onChange(launch: LaunchConfig): void }) {
+  const t = useText();
+  const set = (patch: Partial<LaunchConfig>): void => onChange({ ...launch, ...patch });
+  return (
+    <>
+      {SHELLS.map((shell) => (
+        <Choice
+          key={shell.key}
+          label={t(`settings.shell.${shell.key}` as "settings.shell.auto")}
+          // Two of these explain themselves; the rest name an executable, which is not translated.
+          note={shell.key === "auto" || shell.key === "custom" || shell.key === "none"
+            ? t(`settings.shell.${shell.key}.note` as "settings.shell.auto.note")
+            : shell.note}
+          selected={launch.shell === shell.key}
+          onSelect={() => set({ shell: shell.key })}
+        />
+      ))}
+
+      <div className={`flex items-center gap-2 pt-1 ${launch.shell === "custom" ? "" : "opacity-40"}`}>
+        <span className="text-[11px] text-bone-500 shrink-0">{t("settings.launch.program")}</span>
+        <input
+          type="text"
+          spellCheck={false}
+          value={launch.customShell}
+          disabled={launch.shell !== "custom"}
+          placeholder={t("settings.launch.programPlaceholder")}
+          onChange={(event) => set({ customShell: event.target.value })}
+          className="flex-1 min-w-0 bg-ink-800 border border-ink-600 rounded-lg px-2 py-1 text-xs placeholder:text-bone-500 focus:border-accent/60"
+        />
+      </div>
+      {launch.shell === "custom" && !launch.customShell.trim() ? (
+        <div className="text-[11px] text-warn">{t("settings.launch.noPath")}</div>
+      ) : null}
+    </>
+  );
+}
+
+/** The settings card body: the permission mode a session starts in. */
+export function PermissionSettings({ launch, onChange }: { launch: LaunchConfig; onChange(launch: LaunchConfig): void }) {
+  const t = useText();
+  return (
+    <>
+      {PERMISSIONS.map((mode) => (
+        <Choice
+          key={mode.key}
+          label={t(`settings.permission.${mode.key}` as "settings.permission.default")}
+          // The bypass note is the flag itself, which stays as it is written on the command line.
+          note={mode.key === "bypass"
+            ? mode.note
+            : t(`settings.permission.${mode.key}.note` as "settings.permission.default.note")}
+          selected={launch.permission === mode.key}
+          onSelect={() => onChange({ ...launch, permission: mode.key })}
+        />
+      ))}
     </>
   );
 }

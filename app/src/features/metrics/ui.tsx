@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { MetricSample, MetricsSnapshot } from "@core/types";
 
 import { api } from "../../renderer/api";
+import { Choice } from "../../renderer/components/SettingsCard";
 
 /** Samples a series keeps; older ones fall off the left of the graph. */
 const HISTORY_LIMIT = 300;
@@ -61,4 +62,24 @@ export function useMetrics(): Metrics {
   const latestSystem = systemHistory.length ? systemHistory[systemHistory.length - 1] ?? null : null;
 
   return { systemHistory, sessionHistory, cpuGhz, memoryTotal, totalMemory, latestSystem, load };
+}
+
+/** The settings card body: whether anything is measured at all. */
+export function MonitorSettings({ on, onChange }: { on: boolean; onChange(on: boolean): void }) {
+  return (
+    <>
+      <Choice
+        label="On"
+        note="CPU and memory sampled once a second, in-process"
+        selected={on}
+        onSelect={() => onChange(true)}
+      />
+      <Choice
+        label="Off"
+        note="no sampling at all — the graphs disappear and nothing is measured"
+        selected={!on}
+        onSelect={() => onChange(false)}
+      />
+    </>
+  );
 }

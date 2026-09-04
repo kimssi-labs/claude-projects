@@ -6,11 +6,13 @@
  * button and the band's resize grip live here too: they are dock's, and the chrome that shows
  * them only offers a slot.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { DOCK_EDGES, DOCK_PERCENT } from "@core/constants";
 import type { DockConfig, DockEdge } from "@core/types";
 
 import { api, type SettingsPayload } from "../../renderer/api";
+import { Choice } from "../../renderer/components/SettingsCard";
 import { useText } from "../../renderer/useText";
 import type { DisplayInfo, DockState } from "./contract";
 
@@ -143,5 +145,92 @@ export function DockGrip({ edge, onDrag }: {
         onDrag(latest.current, true);
       }}
     />
+  );
+}
+
+/** The settings card body: which monitor, which edge, how thick, and the two buttons. */
+export function DockSettings({ dock, floor, minPercent, displays, onChange, onApply }: {
+  dock: DockConfig;
+  /** The thickness the platform would not go below on this axis, in pixels; 0 when it fitted. */
+  floor: number;
+  /** The slider's lower bound, as the main side worked it out. */
+  minPercent: number;
+  displays: DisplayInfo[];
+  onChange(dock: DockConfig): void;
+  /** Dock now, or give the edge back. */
+  onApply(enabled: boolean): void;
+}) {
+  const t = useText();
+  const span = useMemo(() => {
+    const display = displays.find((d) => d.id === dock.device) ?? displays.find((d) => d.primary);
+    if (!display) return 0;
+    return dock.edge === "left" || dock.edge === "right" ? display.bounds.width : display.bounds.height;
+  }, [displays, dock.device, dock.edge]);
+  const setDock = (patch: Partial<DockConfig>): void => onChange({ ...dock, ...patch });
+  const min = Math.max(DOCK_PERCENT.min, minPercent);
+  const bandPx = Math.round((span * dock.percent) / 100);
+  return (
+    <>
+      <div>
+        <div className="text-[11px] text-bone-500 mb-1">{t("settings.dock.monitor")}</div>
+        <div className="space-y-1">
+          {displays.map((display) => (
+            <Choice
+              key={display.id}
+              label={`${display.label}  ${display.bounds.width}×${display.bounds.height}`}
+              note={[display.primary ? t("settings.dock.primary") : "", display.saved ? t("settings.dock.saved") : ""]
+                .filter(Boolean).join(" · ")}
+              selected={dock.device === display.id || (!dock.device && display.primary)}
+              onSelect={() => setDock({ device: display.id })}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[11px] text-bone-500 shrink-0">{t("settings.dock.edge")}</span>
+        {DOCK_EDGES.map((edge: DockEdge) => (
+          <button
+            key={edge}
+            type="button"
+            onClick={() => setDock({ edge })}
+            className={`btn ${dock.edge === edge ? "btn-accent" : ""}`}
+          >
+            {t(`edge.${edge}` as "edge.top")}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] text-bone-500 shrink-0">{t("settings.dock.size")}</span>
+        {/* min-w-0 on the slider and shrink-0 on the number: without both, a narrow card lets
+            the two overlap instead of letting the slider give way. */}
+        <input
+          type="range"
+          min={min}
+          max={DOCK_PERCENT.max}
+          value={Math.max(min, dock.percent)}
+          onChange={(event) => setDock({ percent: Number(event.target.value) })}
+          className="flex-1 min-w-0 accent-accent"
+        />
+        <span className="text-xs tabular-nums text-bone-200 shrink-0 whitespace-nowrap">
+          {dock.percent}% · {bandPx} px
+        </span>
+      </div>
+      {floor > 0 ? (
+        <div className="text-[11px] text-warn">
+          {t("settings.dock.floor", { px: floor, percent: min })}
+        </div>
+      ) : null}
+
+      <div className="flex gap-2">
+        <button type="button" className={`btn ${dock.enabled ? "" : "btn-accent"}`} onClick={() => onApply(true)}>
+          {t("settings.dock.now")}
+        </button>
+        <button type="button" className="btn" onClick={() => onApply(false)}>
+          {t("settings.dock.release")}
+        </button>
+      </div>
+    </>
   );
 }

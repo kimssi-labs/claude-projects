@@ -1,4 +1,8 @@
-/** The one place the renderer can reach the machine: every channel, with its argument checked. */
+/**
+ * The shell's own channels — the window, its menus and pages, what the app is — and the types the
+ * features share. Every feature's channels are in its own `contract.ts`; the bridge derives the page
+ * side from those, and the surface test pins the whole.
+ */
 export const CHANNEL = {
   windowCommand: "window:command",
   windowState: "window:state",
