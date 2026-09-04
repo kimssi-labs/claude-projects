@@ -9,30 +9,20 @@ import { contextBridge, ipcRenderer } from "electron";
 import { buildApi } from "../bridge/build.js";
 import { CONTRACTS } from "../bridge/registry.js";
 import { CHANNEL } from "../main/ipc.js";
-import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, DeleteRequest, OpenSessionRequest, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
-import type { DockConfig, GitConfig, LaunchConfig, MetricSample, MetricsSnapshot, ProjectInfo, StatusConfig, StatusSnapshot, UiConfig, UpdateConfig } from "../core/types.js";
+import type { ActionResult, AppInfo, MenuItemSpec, PageName, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
+import type { DockConfig, GitConfig, LaunchConfig, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
 
 const api = {
   // Derived from the feature contracts. The entries written out below are the features that have
   // not moved onto a contract yet; they leave this file one feature at a time.
   ...buildApi(CONTRACTS, ipcRenderer),
-  scan: (): Promise<ProjectInfo[]> => ipcRenderer.invoke(CHANNEL.scan),
   onSettings: (listener: (settings: SettingsPayload) => void): (() => void) => {
     const handler = (_event: unknown, settings: SettingsPayload): void => listener(settings);
     ipcRenderer.on(CHANNEL.settingsPush, handler);
     return () => ipcRenderer.removeListener(CHANNEL.settingsPush, handler);
   },
-  openSession: (request: OpenSessionRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.openSession, request),
-  renameSession: (request: RenameRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.renameSession, request),
-  renameProject: (request: RenameRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.renameProject, request),
-  deleteSession: (request: DeleteRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.deleteSession, request),
-  deleteProject: (request: DeleteRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.deleteProject, request),
-  revealProject: (dir: string): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.revealProject, dir),
-  /** Opens the folder picker; resolves with the new project's dir, or ok:false when nothing was chosen. */
-  addProject: (): Promise<AddProjectResult> => ipcRenderer.invoke(CHANNEL.addProject),
   /** Shows a native menu at the pointer; resolves with the chosen id, or null when it was dismissed. */
   contextMenu: (items: MenuItemSpec[]): Promise<string | null> => ipcRenderer.invoke(CHANNEL.contextMenu, items),
-  togglePin: (request: PinRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.togglePin, request),
   /** Something the app did on its own finished and is worth a line on screen. */
   onToast: (listener: (message: string) => void): (() => void) => {
     const handler = (_event: unknown, message: string): void => listener(message);

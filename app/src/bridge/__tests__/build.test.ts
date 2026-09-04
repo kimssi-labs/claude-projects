@@ -85,6 +85,15 @@ describe("wire", () => {
 describe("the surface the page can reach", () => {
   it("is exactly this", () => {
     expect(surfaceOf(CONTRACTS)).toEqual({
+      scan: "invoke projects:scan",
+      openSession: "invoke session:open",
+      renameSession: "invoke session:rename",
+      renameProject: "invoke project:rename",
+      deleteSession: "invoke session:delete",
+      deleteProject: "invoke project:delete",
+      revealProject: "invoke project:reveal",
+      addProject: "invoke project:add",
+      togglePin: "invoke pin:toggle",
       updateAction: "invoke update:action",
       onUpdate: "event update:push",
       gitCount: "invoke git:count",
