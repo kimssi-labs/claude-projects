@@ -53,6 +53,9 @@ jobs:
       - name: Changelog has a section for this tag
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: .
+        # bash on both runners, like the step above: this job's Windows default is pwsh, where
+        # `$TAG` is a PowerShell variable that does not exist and quietly expands to nothing.
+        shell: bash
         # Through the environment, not pasted into the script: a tag name is text someone chose, and
         # `${{ }}` splices it into the shell before the shell ever sees a quote.
         env:
