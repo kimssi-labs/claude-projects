@@ -3,6 +3,30 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.11.0
+
+- **Runs on Electron 43.** The line the app was on last had a security release in April 2025, so it
+  had been carrying an unpatched Chromium and an end-of-life Node for over a year. Nothing about the
+  app is meant to look different.
+- **Docking had to be taught where the window is.** From Electron 43 `getBounds()` answers with the
+  frame you can see, which is inset by the invisible resize border Windows puts around a resizable
+  window — seven or eight pixels a side. A docked band is placed on the rectangle it reserved, in
+  physical pixels, so comparing the two never matched: the band would decide it had been moved, put
+  itself back, and be woken again by the event its own placement raised. It now asks Windows for the
+  window's rectangle and compares like with like.
+- **A band could be asked for one size and answer with another.** Reserving an edge takes the best
+  part of half a second and moves every window on the desktop; during that the window is still the
+  old band while the reservation is already the new one. Since both span the same edge, that read as
+  the user having dragged the thickness, and a request for 20 % was answered by saving back 12 %.
+  The window in which the shell is allowed to argue now opens before the reservation, not after it.
+- The "Add a project" folder picker starts beside the project used most recently. Electron 43 changed
+  the default from the last folder you were in to Downloads, which is nowhere near where code lives.
+- CI runs the whole suite on Node 22.
+- Two testing repairs while in here: the docking assertions ask the operating system for the window
+  rectangle rather than Electron, since Electron no longer reports it; and the band-size test waits
+  for the band to actually change before measuring it, instead of for a work area that had already
+  shrunk on the previous step — which is what made it fail about one run in three.
+
 ## v2.10.0
 
 - **A session is called what Claude Code calls it.** The terminal tab has always shown a tidied

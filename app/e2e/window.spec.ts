@@ -70,6 +70,71 @@ async function bounds(app: ElectronApplication): Promise<Electron.Rectangle> {
   if (!rect) throw new Error("the app has no window");
   return rect;
 }
+
+/**
+ * The window's own rectangle, asked of Windows and given back in DIP.
+ *
+ * `getBounds()` cannot answer this from Electron 43 on: it reports the DWM visible frame, which is
+ * inset by the invisible resize border — seven or eight pixels a side — so a band placed exactly on
+ * its reservation reads as eight pixels short of the screen edge. That is the rectangle every
+ * docking assertion is about, so those assertions ask the operating system instead. Elsewhere
+ * `bounds()` is still right: the other tests compare the window with itself.
+ */
+async function outerBounds(app: ElectronApplication): Promise<Electron.Rectangle> {
+  // By absolute path: inside `evaluate` there is no module to resolve a bare name against.
+  const koffiPath = join(process.cwd(), "node_modules", "koffi");
+  const rect = await app.evaluate(({ BrowserWindow, screen }, koffiFrom) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return null;
+    if (process.platform !== "win32") return win.getBounds();
+    // The evaluated function is compiled in the main process but not as a module, so `require` is
+    // not in scope the way it is inside the app's own files.
+    const req = (typeof require === "function"
+      ? require
+      : (process as unknown as { mainModule?: { require: NodeRequire } }).mainModule?.require
+    ) as NodeRequire | undefined;
+    if (!req) return win.getBounds();
+    // Bound once and kept: koffi registers a named type for the whole process, so declaring the
+    // struct again on the second call is an error rather than a no-op. The app registers its own
+    // "RECT" when it docks, hence the different name here.
+    const cache = globalThis as unknown as { __getWindowRect?: (h: number, r: object) => boolean };
+    if (!cache.__getWindowRect) {
+      const koffi = req(koffiFrom) as typeof import("koffi");
+      const RECT = koffi.struct("RECT_e2e", { left: "long", top: "long", right: "long", bottom: "long" });
+      cache.__getWindowRect = koffi.load("user32.dll").func("__stdcall", "GetWindowRect", "bool", [
+        "intptr", koffi.out(koffi.pointer(RECT)),
+      ]) as unknown as (h: number, r: object) => boolean;
+    }
+    const hwnd = Number(win.getNativeWindowHandle().readBigUInt64LE(0));
+    const rc = { left: 0, top: 0, right: 0, bottom: 0 };
+    if (!cache.__getWindowRect(hwnd, rc)) return win.getBounds();
+    // Physical, like everything the shell deals in; the work areas it is compared with are DIP.
+    return screen.screenToDipRect(null, {
+      x: rc.left, y: rc.top, width: rc.right - rc.left, height: rc.bottom - rc.top,
+    });
+  }, koffiPath);
+  if (!rect) throw new Error("the app has no window");
+  return rect;
+}
+/**
+ * The band's height once it has changed from `was` and stopped moving again.
+ *
+ * Waiting for "the work area is smaller than it began" says nothing after the first dock: it is
+ * already true, so the reading can be taken before the shell has applied the new band. Waiting for
+ * the reading to merely stop changing is no better — it has not started yet. That is what made the
+ * percentage test flake: a 12 % band measured as the 20 % one that came before it.
+ */
+async function bandHeightAfter(app: ElectronApplication, was: number, timeoutMs = 8000): Promise<number> {
+  const until = Date.now() + timeoutMs;
+  let last = was;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const now = (await bounds(app)).height;
+    if ((now !== was && now === last) || Date.now() > until) return now;
+    last = now;
+  }
+}
+
 const settingsOf = (page: Page) => page.evaluate(() => window.hangar.loadSettings());
 
 /**
@@ -217,7 +282,7 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
       if (!shrank) {
         // No window manager to honour the reservation; the band must still be a band.
-        const placed = await bounds(app);
+        const placed = await outerBounds(app);
         samePixels(placed.width, before.width, `${label}: spans the monitor even unreserved`);
         await undock(app, page, display.id, before);
         continue;
@@ -225,7 +290,7 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
       // The window is the band on THIS monitor: same rectangle, not a window beside it.
       const docked = await workAreaOf(app, display.id);
-      const rect = await bounds(app);
+      const rect = await outerBounds(app);
       samePixels(rect.x, before.x, `${label}: starts at the monitor edge`);
       samePixels(rect.y, before.y, `${label}: starts at the top of the work area`);
       samePixels(rect.width, before.width, `${label}: spans the monitor`);
@@ -251,10 +316,11 @@ test("every monitor: a percentage means the same thing however often it is appli
 
       // The bug this guards: the band was measured against a work area it had already shrunk, so
       // re-applying the same percentage kept making it smaller.
+      let height = (await bounds(app)).height;
       for (const percent of [12, 20, 12]) {
         await dockTo(page, display.id, "top", percent);
-        await settled(async () => (await workAreaOf(app, display.id)).height < before.height);
-        heights.push((await bounds(app)).height);
+        height = await bandHeightAfter(app, height);   // each of these three is a different size
+        heights.push(height);
       }
       samePixels(heights[0]!, heights[2]!, `${label}: same request, same band`);
       expect(heights[1]!, `${label}: a bigger percentage is a bigger band`).toBeGreaterThan(heights[0]!);
@@ -391,7 +457,7 @@ test("resizing a docked band keeps it on its edge", async () => {
     expect(await settled(async () => (await workAreaOf(app, display.id)).width < before.width)).toBe(true);
     await page.waitForTimeout(1700);                          // past the settle window
 
-    const docked = await bounds(app);
+    const docked = await outerBounds(app);
     const rightEdge = before.x + before.width;
     samePixels(docked.x + docked.width, rightEdge, "docked flush with the right edge");
 
@@ -402,7 +468,7 @@ test("resizing a docked band keeps it on its edge", async () => {
     { x: docked.x, y: docked.y, width: Math.round(docked.width * 0.6), height: docked.height });
 
     await expect.poll(async () => {
-      const now = await bounds(app);
+      const now = await outerBounds(app);
       return Math.abs(now.x + now.width - rightEdge) <= 1;
     }, { timeout: 8000 }).toBe(true);
 
