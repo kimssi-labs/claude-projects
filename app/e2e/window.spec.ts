@@ -483,6 +483,40 @@ test("resizing a docked band keeps it on its edge", async () => {
   }
 });
 
+/**
+ * The band lays the gauges across and puts the running count under them. The gauge row shrinks to
+ * whatever is left, but a card has a height of its own — so in a thin band the cards used to run out
+ * of the bottom of their row and be drawn straight through the count. What is asked here is not the
+ * rectangles (a clipped card still reports its full one) but what is actually drawn where the count
+ * is: `elementsFromPoint` does not see through the parts an `overflow: hidden` row has cut off.
+ */
+test("in a thin band the running count is below the gauges, not under them", async () => {
+  const { app, page } = await launch(fixture());
+  try {
+    const displays = await monitors(page);
+    const display = displays.find((d) => d.primary) ?? displays[0]!;
+    // A band on a screen of ordinary height leaves the gauges about half the room they would like.
+    await dockTo(page, display.id, "top", 12);
+    await expect.poll(() => page.locator("aside .card").count(), { timeout: 8000 }).toBeGreaterThan(0);
+    const count = page.getByTestId("running-count");
+    await expect(count).toBeVisible();
+
+    const drawnOverIt = await page.evaluate(() => {
+      const text = document.querySelector('[data-testid="running-count"]') as HTMLElement;
+      const box = text.getBoundingClientRect();
+      // Along the line, not only its middle: a card that overflows may cover part of it.
+      return [0.1, 0.5, 0.9]
+        .flatMap((at) => document.elementsFromPoint(box.left + box.width * at, box.top + box.height / 2))
+        .filter((el) => !text.contains(el) && el.closest(".card") !== null)
+        .map((el) => el.tagName.toLowerCase());
+    });
+    expect(drawnOverIt, "no part of a gauge is painted where the count is").toEqual([]);
+  } finally {
+    await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
+    await app.close();
+  }
+});
+
 test("a dock change made in settings sticks", async () => {
   const home = fixture();
   const { app, page } = await launch(home);
