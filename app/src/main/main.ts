@@ -912,9 +912,14 @@ function registerIpc(): void {
    */
   ipcMain.handle(CHANNEL.addProject, async (): Promise<AddProjectResult> => {
     if (!window) return { ok: false };
+    // Electron 43 changed the default starting folder from "wherever you were last" to Downloads,
+    // which is nowhere near where anyone keeps code. Start beside the project used most recently
+    // instead — the list is newest first, so that is the first row with a folder still on disk.
+    const recent = lastProjects.find((p) => p.cwd && p.exists)?.cwd;
     const picked = await dialog.showOpenDialog(window, {
       title: "Add a project folder",
       properties: ["openDirectory", "createDirectory"],
+      ...(recent ? { defaultPath: dirname(recent) } : {}),
     });
     const folder = picked.filePaths[0];
     if (picked.canceled || !folder) return { ok: false };

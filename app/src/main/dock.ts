@@ -165,6 +165,14 @@ interface Win32Api {
   /** Physical-pixel placement. Electron's setBounds speaks DIP and keeps the window out of the
    *  work area it just shrank; an appbar has to sit in exactly the rectangle it reserved. */
   setWindowPos: (hwnd: number, rect: Rectangle) => void;
+  /**
+   * Where the window is, in the same physical pixels `setWindowPos` was given.
+   *
+   * The counterpart to the setter, and the only rectangle that can be compared with the
+   * reservation: from Electron 43 `getBounds()` answers with the DWM visible frame instead of the
+   * window rectangle, so it is short by the invisible resize border and never matches.
+   */
+  getWindowRect: (hwnd: number) => Rectangle | null;
   /** Square corners and no border while docked; the window's usual look when not. */
   setEdges: (hwnd: number, flush: boolean) => void;
   make: (hwnd: number, edge: number, rect?: Rectangle) => AppBarData;
@@ -199,6 +207,9 @@ function loadWin32(): Win32Api | null {
     const SetWindowPos = user32.func("__stdcall", "SetWindowPos", "bool", [
       "intptr", "intptr", "int", "int", "int", "int", "uint32",
     ]);
+    const GetWindowRect = user32.func("__stdcall", "GetWindowRect", "bool", [
+      "intptr", koffi.out(koffi.pointer(RECT)),
+    ]);
     const DwmSetWindowAttribute = dwmapi.func("__stdcall", "DwmSetWindowAttribute", "int32", [
       "intptr", "uint32", koffi.pointer("uint32"), "uint32",
     ]);
@@ -219,6 +230,12 @@ function loadWin32(): Win32Api | null {
       },
       setWindowPos: (hwnd, rect) =>
         void SetWindowPos(hwnd, 0, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING),
+      getWindowRect: (hwnd) => {
+        // koffi fills the struct that is passed in, the same way SHAppBarMessage's is filled.
+        const rc = { left: 0, top: 0, right: 0, bottom: 0 };
+        if (!GetWindowRect(hwnd, rc)) return null;
+        return { x: rc.left, y: rc.top, width: rc.right - rc.left, height: rc.bottom - rc.top };
+      },
       make: (hwnd, edge, rect) => ({
         cbSize: koffi.sizeof(APPBARDATA),
         hWnd: hwnd,
@@ -304,8 +321,14 @@ export class Dock {
     // returns, so the only reliable answer is to put the band back whenever something moves it.
     const reassert = (): void => {
       if (this.placing || this.dragging || !this.reserved || !this.registered) return;
-      const current = this.window.getBounds();
-      const want = screen.screenToDipRect(null, this.reserved);
+      // Asked of Windows, and compared against the reservation in the physical pixels both are
+      // expressed in. Electron 43 answers getBounds() with the DWM visible frame instead of the
+      // window rectangle, so it is short by the invisible resize border — seven or eight pixels a
+      // side — and can never equal what setWindowPos was told. The comparison below would then
+      // always fail, re-place the band, and be re-entered by the event that placement raises.
+      const native = this.nativeRect();
+      const current = native ?? this.window.getBounds();
+      const want = native ? this.reserved : screen.screenToDipRect(null, this.reserved);
       if (current.x === want.x && current.y === want.y
         && current.width === want.width && current.height === want.height) return;
       if (Date.now() > this.assertUntil) {
@@ -315,7 +338,9 @@ export class Dock {
           ? current.y === want.y && current.height === want.height
           : current.x === want.x && current.width === want.width);
         if (edge && alongEdge && this.onUserResize) {
-          this.onUserResize(bandThickness(current, edge));
+          // The saved percentage is of a DIP work area, so the thickness handed back must be DIP.
+          const dip = native ? screen.screenToDipRect(null, native) : current;
+          this.onUserResize(bandThickness(dip, edge));
           return;
         }
         // Moved, not resized — dragged by its title bar, or maximised. A docked window is a band,
@@ -339,6 +364,17 @@ export class Dock {
       if (!this.isDocked || this.placing) return;
       if (!resizeAllowed(this.current?.edge, details?.edge)) event.preventDefault();
     });
+  }
+
+  /**
+   * Where the window is in physical pixels, or null off Windows (and if the binding did not load).
+   *
+   * The only reading that can be compared with a reservation. Everything Electron reports is DIP,
+   * and from 43 `getBounds()` is not even the window rectangle any more.
+   */
+  private nativeRect(): Rectangle | null {
+    if (process.platform !== "win32") return null;
+    return loadWin32()?.getWindowRect(nativeHandle(this.window)) ?? null;
   }
 
   /** Put the window exactly on `rect` (physical pixels), without anyone second-guessing it. */
@@ -420,6 +456,12 @@ export class Dock {
       await new Promise((resolve) => setTimeout(resolve, DPI_SETTLE_MS));
     }
 
+    // The settle window opens BEFORE the reservation, not after it — `resizeTo` has always done it
+    // this way. Reserving takes the best part of half a second and moves every window on the
+    // desktop, ours included, so `reassert` runs while the window is still the old band and
+    // `this.reserved` is already the new one. Both bands span the same edge, so it reads that as
+    // the user having dragged the thickness, and answers a request for 20 % by saving back 12 %.
+    this.assertUntil = Date.now() + SETTLE_MS;
     let note = missing ? `Saved monitor ${missing} is not connected — using ${display.label}.` : null;
     if (process.platform === "win32") note = (await this.reserveWindows(band, config.edge)) ?? note;
     else note = (await this.reserveX11(band, config.edge, display.bounds)) ?? note;
@@ -433,7 +475,11 @@ export class Dock {
     const target = this.reserved && process.platform === "win32"
       ? screen.screenToDipRect(null, this.reserved)
       : band;
-    const applied = this.window.getBounds();
+    // The band as it really is, in DIP because the caller measures it against a DIP work area to
+    // learn the floor. Taken from Windows and converted, not from getBounds(), which since
+    // Electron 43 reports the visible frame and would under-measure the band by the border.
+    const here = this.nativeRect();
+    const applied = here ? screen.screenToDipRect(null, here) : this.window.getBounds();
     return { bounds: target, applied, note };
   }
 
@@ -472,10 +518,13 @@ export class Dock {
     this.assertUntil = Date.now() + SETTLE_MS;
     if (process.platform === "win32") await this.reserveWindows(band, config.edge, false);
     else await this.reserveX11(band, config.edge, display.bounds);
-    const want = this.reserved && process.platform === "win32"
-      ? screen.screenToDipRect(null, this.reserved)
-      : band;
-    const now = this.window.getBounds();
+    // Physical against physical where Windows can be asked, for the same reason `reassert` does it:
+    // Electron's idea of the window's rectangle no longer is the window's rectangle.
+    const native = this.reserved ? this.nativeRect() : null;
+    const want = native ? this.reserved as Rectangle
+      : this.reserved && process.platform === "win32" ? screen.screenToDipRect(null, this.reserved)
+        : band;
+    const now = native ?? this.window.getBounds();
     // Only if the shell put the reservation somewhere else — otherwise nothing moves at all.
     if (want.x !== now.x || want.y !== now.y || want.width !== now.width || want.height !== now.height) {
       this.place(this.reserved ?? screen.dipToScreenRect(null, band));
