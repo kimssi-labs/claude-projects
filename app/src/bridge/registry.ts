@@ -6,8 +6,10 @@
  */
 import { gitContract } from "../features/git/contract.js";
 import { updatesContract } from "../features/updates/contract.js";
+import { usageContract } from "../features/usage/contract.js";
 
 export const CONTRACTS = {
   ...updatesContract,
   ...gitContract,
+  ...usageContract,
 } as const;

@@ -92,6 +92,8 @@ describe("the surface the page can reach", () => {
       worktreeList: "invoke worktree:list",
       worktreeAdd: "invoke worktree:add",
       worktreeRemove: "invoke worktree:remove",
+      status: "invoke status:read",
+      setUsageHook: "invoke usage:hook",
     });
   });
 

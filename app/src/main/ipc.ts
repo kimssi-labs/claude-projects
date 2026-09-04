@@ -1,7 +1,6 @@
 /** The one place the renderer can reach the machine: every channel, with its argument checked. */
 export const CHANNEL = {
   scan: "projects:scan",
-  status: "status:read",
   metrics: "metrics:history",
   metricsPush: "metrics:push",                   // main -> renderer, on every sample
   settingsPush: "settings:push",                 // main -> renderer, when main changed them
@@ -19,7 +18,6 @@ export const CHANNEL = {
   addProject: "project:add",
   contextMenu: "menu:context",
   togglePin: "pin:toggle",
-  setUsageHook: "usage:hook",
   openPage: "app:open-page",
   toast: "app:toast",                // main -> renderer, when something finished on its own
   loadSettings: "settings:load",
@@ -91,18 +89,9 @@ export const PAGES = {
 } as const;
 export type PageName = keyof typeof PAGES;
 
-/** What the settings screen can ask of the updater. */
-
-export interface UsageState {
-  /** Our Stop hook is registered in Claude Code's settings. */
-  collecting: boolean;
-  /** Figures have been published at least once; when, in epoch ms. */
-  updatedAt: number | null;
-  /** Windows Claude Code has actually reported, whether or not they are ticked for display. */
-  reported: number;
-  /** A copy with no installer behind it: deleting it cannot take the hook with it. */
-  portable: boolean;
-}
+// The usage feature owns its state type; SettingsPayload above carries it. A type-only import in
+// both directions between this file and the contract is erased, so there is no cycle at runtime.
+import type { UsageState } from "../features/usage/contract.js";
 
 /** What the caption buttons need to know. Docked counts as maximised: the band IS the full state. */
 export interface WindowState {
