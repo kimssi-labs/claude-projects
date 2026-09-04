@@ -28,10 +28,18 @@ const VISIBLE_TEXT = />\s*([A-Z][A-Za-z][^<>{}]{2,})\s*</g;
  */
 const PROPER_NOUNS = /^(Hangar|Claude|Claude Code|Git|CPU|PowerShell|Windows PowerShell|PowerShell 7|bash|cmd\.exe|pwsh|English|System|Auto|Tab|Ctrl|Esc|Enter)\b/;
 
+/** Each feature's page side, where its own strings now live — they must not escape this check. */
+const FEATURES = join(RENDERER, "..", "features");
+
 function sources(): { file: string; text: string }[] {
+  const featureUis = readdirSync(FEATURES, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(FEATURES, entry.name, "ui.tsx"))
+    .filter((file) => { try { readFileSync(file); return true; } catch { return false; } });
   const files = [
     ...readdirSync(COMPONENTS).filter((name) => name.endsWith(".tsx")).map((name) => join(COMPONENTS, name)),
     join(RENDERER, "App.tsx"),
+    ...featureUis,
   ];
   return files.map((file) => ({ file, text: readFileSync(file, "utf8") }));
 }

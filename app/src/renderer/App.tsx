@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nextIndex, resolveAction, SHORTCUTS, type Screen } from "@core/keymap";
 import type { Language } from "@core/i18n";
 import { placeWorktrees, type Worktree } from "@core/worktree";
+import { gitMenuItems, isGitAction, runGitAction, useDirtyPatch, useGit } from "../features/git/ui";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
 import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
@@ -72,8 +73,6 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const [dialog, setDialog] = useState<{ ask: Ask; settle: (result: AskResult) => void } | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
-  /** The checkouts of the selected project's repository, for its detail panel. */
-  const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [update, setUpdate] = useState<UpdateState>(() => initialUpdateState("", true));
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("dock");
   const [systemHistory, setSystemHistory] = useState<MetricSample[]>([]);
@@ -193,31 +192,15 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
 
   const project = filtered[Math.min(projectIndex, Math.max(0, filtered.length - 1))] ?? null;
 
-  // The repository's other checkouts, for the selected project only: one git call per selection,
-  // not one per row.
-  useEffect(() => {
-    const dir = openProject ?? project?.dir;
-    if (!dir || !settings?.git.enabled) { setWorktrees([]); return; }
-    let cancelled = false;
-    void api.worktreeList(dir).then((list) => { if (!cancelled) setWorktrees(list); });
-    return () => { cancelled = true; };
-  }, [openProject, project?.dir, settings?.git.enabled]);
-
-  // The expensive half of git, for the row in front of the user and no other. The count lands in
-  // the project list on the next scan; this only asks for it.
-  useEffect(() => {
-    if (!settings?.git.enabled || !settings.git.countChanges) return;
-    const dir = openProject ?? project?.dir;
-    if (!dir) return;
-    let cancelled = false;
-    void api.gitCount(dir).then((dirty) => {
-      if (cancelled || dirty === null) return;
-      setProjects((previous) => previous.map((item) => (item.dir === dir && item.git
-        ? { ...item, git: { ...item.git, dirty } }
-        : item)));
-    });
-    return () => { cancelled = true; };
-  }, [openProject, project?.dir, settings?.git.enabled, settings?.git.countChanges]);
+  // Git's own state for the project in front of the user; the count it finds is merged into that
+  // project's row, which is the one thing about git this file still does.
+  const patchDirty = useDirtyPatch(setProjects);
+  const { worktrees } = useGit(
+    openProject ?? project?.dir ?? null,
+    settings?.git.enabled ?? false,
+    settings?.git.countChanges ?? false,
+    patchDirty,
+  );
   const sessions = useMemo(() => {
     const current = projects.find((p) => p.dir === openProject) ?? null;
     if (!current) return [];
@@ -339,6 +322,13 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     if (result.ok) await refresh();
   }, [screen, session, openProject, project, notify, refresh, askUser, t]);
 
+  /** Select the row for `dir` in a freshly scanned list — through the same placement it is drawn with. */
+  const landOn = useCallback((dir: string, scanned: ProjectInfo[]) => {
+    setQuery("");
+    setScreen("projects");
+    setProjectIndex(Math.max(0, placeWorktrees(scanned).findIndex((row) => row.item.dir === dir)));
+  }, []);
+
   /**
    * The right-click menu of a project row: what the keys do, plus pinning and the folder itself.
    * Every action names its target outright rather than going through the selection, so the menu
@@ -355,15 +345,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
       { id: "pin", label: t("menu.pin"), checked: target.pinned },
       { id: "rename", label: t("menu.rename") },
       { id: "reveal", label: t("menu.showFolder"), enabled: Boolean(target.cwd && target.exists) },
-      { id: "worktreeAdd", label: t("menu.worktreeAdd"), enabled: Boolean(target.git) },
-      { id: "worktreeRemove", label: t("menu.worktreeRemove"), enabled: target.worktree },
-      {
-        id: "gitSync",
-        label: settings?.git.base
-          ? t("menu.sync", { base: settings.git.base })
-          : t("menu.syncDefault"),
-        enabled: Boolean(target.git),
-      },
+      ...gitMenuItems(target, settings?.git.base, t),
       { id: MENU_SEPARATOR, label: "" },
       { id: "delete", label: t("menu.delete"), enabled: target.liveCount === 0 },
     ]);
@@ -374,52 +356,6 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
       case "pin": notify(await api.togglePin({ kind: "projects", key: target.dir })); await refresh(); break;
       case "rename": setEditing(target.dir); break;
       case "reveal": notify(await api.revealProject(target.dir)); break;
-      case "worktreeAdd": {
-        const branch = await askUser({
-          title: t("dialog.worktreeAdd"),
-          detail: t("dialog.worktreeAdd.detail"),
-          input: { placeholder: t("dialog.worktreeAdd.placeholder") },
-          confirm: t("dialog.create"),
-        });
-        if (typeof branch !== "string") break;
-        const result = await api.worktreeAdd({ dir: target.dir, branch });
-        notify(result);
-        if (!result.ok || !result.dir) break;
-        // Land on the new worktree: it is a project now, and the point of making it was to work in it.
-        const scanned = await refresh();
-        setQuery("");
-        setScreen("projects");
-        setProjectIndex(Math.max(0, placeWorktrees(scanned).findIndex((row) => row.item.dir === result.dir)));
-        break;
-      }
-      case "worktreeRemove": {
-        const yes = await askUser({
-          title: t("dialog.worktreeRemove"),
-          detail: target.cwd ?? "",
-          confirm: t("dialog.remove"),
-          danger: true,
-        });
-        if (!yes) break;
-        const first = await api.worktreeRemove({ dir: target.dir, force: false });
-        if (first.ok) { notify(first); await refresh(); break; }
-        // git refuses a worktree that holds work; forcing is the user's call, not ours.
-        const force = await askUser({
-          title: t("dialog.worktreeForce"),
-          detail: first.message ?? "",
-          confirm: t("dialog.remove"),
-          danger: true,
-        });
-        if (!force) { notify(first); break; }
-        notify(await api.worktreeRemove({ dir: target.dir, force: true }));
-        await refresh();
-        break;
-      }
-      case "gitSync": {
-        notify({ ok: true, message: "Updating from the base branch…" });
-        notify(await api.gitSync(target.dir));
-        await refresh();
-        break;
-      }
       case "delete": {
         const yes = await askUser({
           title: t("dialog.deleteProject", { name: target.name }),
@@ -436,9 +372,12 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
         if (result.ok) await refresh();
         break;
       }
-      default: break;
+      default:
+        // Git's entries carry their own dialogs; this file only hands over what they need.
+        if (isGitAction(choice)) await runGitAction(choice, target, { askUser, notify, refresh, landOn, t });
+        break;
     }
-  }, [enterSessions, notify, refresh, settings?.git.base, askUser, t]);
+  }, [enterSessions, notify, refresh, settings?.git.base, askUser, landOn, t]);
 
   /** The right-click menu of a session row, on either screen it is listed on. */
   const sessionMenu = useCallback(async (projectDir: string, target: SessionInfo, index: number) => {
