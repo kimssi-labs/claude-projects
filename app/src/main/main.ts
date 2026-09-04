@@ -37,8 +37,11 @@ const SPLASH_PAINT_CAP_MS = 450;
 /** Electron's indeterminate value for the taskbar progress; -1 clears it. */
 const TASKBAR_BUSY = 2;
 const TASKBAR_IDLE = -1;
-/** The page's own background, so the window is painted the instant it appears. */
-const WINDOW_BACKGROUND = { light: "#ffffff", dark: "#1c1b1a" } as const;
+/**
+ * The page's own background (`--surface` in index.css), so the window is painted the instant it
+ * appears — and so any sliver the page does not cover, at a fractional scale, is the same colour.
+ */
+const WINDOW_BACKGROUND = { light: "#faf9f7", dark: "#141413" } as const;
 
 /** Which palette the window is in, resolving "system" the way the page does. */
 function resolvedTheme(): "light" | "dark" {

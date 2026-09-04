@@ -6,7 +6,10 @@ const token = (name) => `rgb(var(--${name}) / <alpha-value>)`;
 
 module.exports = {
   darkMode: ["class", '[data-theme="dark"]'],
-  content: ["./src/renderer/**/*.{html,ts,tsx}"],
+  // Every file with markup in it. A feature's page side lives beside its main side, outside the
+  // renderer folder; leaving it out here built a stylesheet without the classes it uses — the
+  // band's resize grip became a 0 × 0 element that could not be grabbed.
+  content: ["./src/renderer/**/*.{html,ts,tsx}", "./src/features/**/ui.tsx"],
   theme: {
     extend: {
       colors: {

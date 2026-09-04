@@ -71,51 +71,93 @@ async function bounds(app: ElectronApplication): Promise<Electron.Rectangle> {
   return rect;
 }
 
+/** A Win32 RECT as koffi fills it. */
+type Rc = { left: number; top: number; right: number; bottom: number };
+
+/** The rectangles a docking assertion is about, in the physical pixels the shell itself works in. */
+interface NativeFrames {
+  /** The client area — where the page is. This is what has to fill the reservation. */
+  client: Electron.Rectangle;
+  /** What DWM paints: the client plus a 1 px system border on the left, right and bottom. */
+  painted: Electron.Rectangle;
+  monitor: Electron.Rectangle;
+  /** The work area as the shell keeps it — the band's open face must sit exactly on it. */
+  work: Electron.Rectangle;
+}
+
 /**
- * The rectangle Windows actually paints the window on, in DIP.
- *
- * Three rectangles are in play and only this one is what a docking assertion means. The window's own
- * rectangle includes an invisible resize border, seven pixels on three sides, that shows the desktop
- * through; the band is grown by that so its painted edge lands on the reservation. `getBounds()` is
- * no help either — from Electron 43 it reports something else again. So the docking assertions ask
- * DWM. Elsewhere `bounds()` is still right: those tests compare the window with itself.
+ * Four rectangles are in play and only one is what a docking assertion means: the client area, where
+ * the page is drawn. The window's own rectangle includes an invisible resize border, seven pixels on
+ * three sides; what DWM paints is inside that; and since Electron 43 the client area is inside THAT
+ * by the 1 px system border on the left, right and bottom — undrawn while docked, so a band whose
+ * painted frame was flush still showed the desktop as a thin line. `getBounds()` is no help — from
+ * Electron 43 it reports something else again. So the docking assertions ask Windows, for the client
+ * area and for the monitor's own work area, and compare like with like. Elsewhere `bounds()` is
+ * still right: those tests compare the window with itself.
  */
-async function paintedBounds(app: ElectronApplication): Promise<Electron.Rectangle> {
+async function nativeFrames(app: ElectronApplication): Promise<NativeFrames> {
   // By absolute path: inside `evaluate` there is no module to resolve a bare name against.
   const koffiPath = join(process.cwd(), "node_modules", "koffi");
-  const rect = await app.evaluate(({ BrowserWindow, screen }, koffiFrom) => {
+  const frames = await app.evaluate(({ BrowserWindow, screen }, koffiFrom) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) return null;
-    if (process.platform !== "win32") return win.getBounds();
+    const fallback = (): NativeFrames => {
+      const b = win.getBounds();
+      const d = screen.getDisplayMatching(b);
+      return { client: b, painted: b, monitor: d.bounds, work: d.workArea };
+    };
+    if (process.platform !== "win32") return fallback();
     // The evaluated function is compiled in the main process but not as a module, so `require` is
     // not in scope the way it is inside the app's own files.
     const req = (typeof require === "function"
       ? require
       : (process as unknown as { mainModule?: { require: NodeRequire } }).mainModule?.require
     ) as NodeRequire | undefined;
-    if (!req) return win.getBounds();
+    if (!req) return fallback();
     // Bound once and kept: koffi registers a named type for the whole process, so declaring the
     // struct again on the second call is an error rather than a no-op. The app registers its own
-    // "RECT" when it docks, hence the different name here.
-    const cache = globalThis as unknown as { __painted?: (h: number, a: number, r: object, s: number) => number };
-    if (!cache.__painted) {
+    // "RECT" when it docks, hence the different names here.
+    const cache = globalThis as unknown as { __frames?: (hwnd: number) => NativeFrames };
+    if (!cache.__frames) {
       const koffi = req(koffiFrom) as typeof import("koffi");
       const RECT = koffi.struct("RECT_e2e", { left: "long", top: "long", right: "long", bottom: "long" });
-      cache.__painted = koffi.load("dwmapi.dll").func("__stdcall", "DwmGetWindowAttribute", "int32", [
+      const POINT = koffi.struct("POINT_e2e", { x: "long", y: "long" });
+      const MONITORINFO = koffi.struct("MONITORINFO_e2e", { cbSize: "uint32", rcMonitor: RECT, rcWork: RECT, dwFlags: "uint32" });
+      const user32 = koffi.load("user32.dll");
+      const GetClientRect = user32.func("__stdcall", "GetClientRect", "bool", ["intptr", koffi.out(koffi.pointer(RECT))]);
+      const ClientToScreen = user32.func("__stdcall", "ClientToScreen", "bool", ["intptr", koffi.inout(koffi.pointer(POINT))]);
+      const MonitorFromWindow = user32.func("__stdcall", "MonitorFromWindow", "intptr", ["intptr", "uint32"]);
+      const GetMonitorInfoW = user32.func("__stdcall", "GetMonitorInfoW", "bool", ["intptr", koffi.inout(koffi.pointer(MONITORINFO))]);
+      const DwmGetWindowAttribute = koffi.load("dwmapi.dll").func("__stdcall", "DwmGetWindowAttribute", "int32", [
         "intptr", "uint32", koffi.out(koffi.pointer(RECT)), "uint32",
-      ]) as unknown as (h: number, a: number, r: object, s: number) => number;
+      ]);
+      const box = (rc: Rc): Electron.Rectangle => ({ x: rc.left, y: rc.top, width: rc.right - rc.left, height: rc.bottom - rc.top });
+      cache.__frames = (hwnd) => {
+        const size: Rc = { left: 0, top: 0, right: 0, bottom: 0 };
+        GetClientRect(hwnd, size);
+        const origin = { x: 0, y: 0 };
+        ClientToScreen(hwnd, origin);
+        const painted: Rc = { left: 0, top: 0, right: 0, bottom: 0 };
+        DwmGetWindowAttribute(hwnd, 9, painted, 16);                   // 9 = DWMWA_EXTENDED_FRAME_BOUNDS
+        const info = { cbSize: 40, rcMonitor: { left: 0, top: 0, right: 0, bottom: 0 }, rcWork: { left: 0, top: 0, right: 0, bottom: 0 }, dwFlags: 0 };
+        GetMonitorInfoW(MonitorFromWindow(hwnd, 2), info);             // 2 = MONITOR_DEFAULTTONEAREST
+        return {
+          client: { x: origin.x, y: origin.y, width: size.right, height: size.bottom },
+          painted: box(painted), monitor: box(info.rcMonitor), work: box(info.rcWork),
+        };
+      };
     }
-    const hwnd = Number(win.getNativeWindowHandle().readBigUInt64LE(0));
-    const rc = { left: 0, top: 0, right: 0, bottom: 0 };
-    // 9 is DWMWA_EXTENDED_FRAME_BOUNDS.
-    if (cache.__painted(hwnd, 9, rc, 16) !== 0) return win.getBounds();
-    // Physical, like everything the shell deals in; the work areas it is compared with are DIP.
-    return screen.screenToDipRect(null, {
-      x: rc.left, y: rc.top, width: rc.right - rc.left, height: rc.bottom - rc.top,
-    });
+    return cache.__frames(Number(win.getNativeWindowHandle().readBigUInt64LE(0)));
   }, koffiPath);
-  if (!rect) throw new Error("the app has no window");
-  return rect;
+  if (!frames) throw new Error("the app has no window");
+  return frames;
+}
+
+/** Where the page is, in DIP — for the assertions that compare it with a DIP work area. */
+async function pageBounds(app: ElectronApplication): Promise<Electron.Rectangle> {
+  const { client } = await nativeFrames(app);
+  if (process.platform !== "win32") return client;
+  return app.evaluate(({ screen }, rect) => screen.screenToDipRect(null, rect), client);
 }
 /**
  * The band's height once it has changed from `was` and stopped moving again.
@@ -283,7 +325,7 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
       if (!shrank) {
         // No window manager to honour the reservation; the band must still be a band.
-        const placed = await paintedBounds(app);
+        const placed = await pageBounds(app);
         samePixels(placed.width, before.width, `${label}: spans the monitor even unreserved`);
         await undock(app, page, display.id, before);
         continue;
@@ -291,11 +333,19 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
       // The window is the band on THIS monitor: same rectangle, not a window beside it.
       const docked = await workAreaOf(app, display.id);
-      const rect = await paintedBounds(app);
+      const rect = await pageBounds(app);
       samePixels(rect.x, before.x, `${label}: starts at the monitor edge`);
       samePixels(rect.y, before.y, `${label}: starts at the top of the work area`);
       samePixels(rect.width, before.width, `${label}: spans the monitor`);
       samePixels(rect.height, docked.y - before.y, `${label}: fills what was reserved`);
+
+      // And to the pixel, in the shell's own: the PAGE fills the reservation. The client area used
+      // to sit one system-border pixel inside the painted frame on three sides, and that pixel —
+      // undrawn while docked — was the desktop showing as a thin line along the band.
+      const f = await nativeFrames(app);
+      expect([f.client.x, f.client.y, f.client.x + f.client.width], `${label}: page flush with three monitor edges`)
+        .toEqual([f.monitor.x, f.monitor.y, f.monitor.x + f.monitor.width]);
+      expect(f.client.y + f.client.height, `${label}: page ends exactly where the work area begins`).toBe(f.work.y);
 
       expect(await undock(app, page, display.id, before).then(() => workAreaOf(app, display.id)), `${label}: released`)
         .toMatchObject({ y: before.y, height: before.height });
@@ -458,7 +508,7 @@ test("resizing a docked band keeps it on its edge", async () => {
     expect(await settled(async () => (await workAreaOf(app, display.id)).width < before.width)).toBe(true);
     await page.waitForTimeout(1700);                          // past the settle window
 
-    const docked = await paintedBounds(app);
+    const docked = await pageBounds(app);
     const rightEdge = before.x + before.width;
     samePixels(docked.x + docked.width, rightEdge, "docked flush with the right edge");
 
@@ -469,7 +519,7 @@ test("resizing a docked band keeps it on its edge", async () => {
     { x: docked.x, y: docked.y, width: Math.round(docked.width * 0.6), height: docked.height });
 
     await expect.poll(async () => {
-      const now = await paintedBounds(app);
+      const now = await pageBounds(app);
       return Math.abs(now.x + now.width - rightEdge) <= 1;
     }, { timeout: 8000 }).toBe(true);
 
@@ -477,6 +527,54 @@ test("resizing a docked band keeps it on its edge", async () => {
     const settings = await settingsOf(page);
     expect(settings.dock.edge).toBe("right");
     expect(settings.dock.percent).toBeGreaterThan(0);
+  } finally {
+    await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
+    await app.close();
+  }
+});
+
+/**
+ * The one side of a band you may resize is a strip in the page, not the window frame. It has to be
+ * there — a real strip with a size, since a 0 × 0 element cannot be grabbed — and dragging it has to
+ * change the band. The strip lost its size once when its component moved to a folder the stylesheet
+ * was not built from: the classes were in the markup and nowhere in the CSS.
+ */
+test("dragging the band's grip resizes it", async () => {
+  const { app, page } = await launch(fixture());
+  try {
+    const displays = await monitors(page);
+    const display = displays.find((d) => d.primary) ?? displays[0]!;
+    const before = await workAreaOf(app, display.id);
+    test.skip(!(await reservesSpace(app, page, display.id)), "no window manager to reserve space");
+
+    await dockTo(page, display.id, "top", 12);
+    expect(await settled(async () => (await workAreaOf(app, display.id)).height < before.height)).toBe(true);
+    await page.waitForTimeout(1700);                          // past the settle window
+    const was = (await nativeFrames(app)).client;
+
+    const grip = page.getByRole("separator", { name: "Resize the docked band" });
+    const box = await grip.boundingBox();
+    expect(box, "the grip is a strip with a size").not.toBeNull();
+    expect(box!.width * box!.height, "the grip is a strip with a size").toBeGreaterThan(0);
+
+    // A real drag through the page: down on the strip, 80 px towards the desktop, up.
+    const x = box!.x + box!.width / 2;
+    const y = box!.y + box!.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 8; step += 1) await page.mouse.move(x, y + 10 * step);
+    await page.mouse.up();
+
+    // The band grew by about what was dragged (physical pixels, so at least 40 at any sane scale)…
+    await expect.poll(async () => (await nativeFrames(app)).client.height - was.height, { timeout: 8000 })
+      .toBeGreaterThan(40);
+    // …the reservation followed it — polled, because the shell takes a moment and reports odd
+    // intermediate work areas while it rearranges the desktop — and the size was written down.
+    await expect.poll(async () => {
+      const now = await nativeFrames(app);
+      return now.work.y - (now.client.y + now.client.height);
+    }, { message: "the work area moved with the band", timeout: 8000 }).toBe(0);
+    expect((await settingsOf(page)).dock.percent, "the new size is the setting").toBeGreaterThan(12);
   } finally {
     await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
     await app.close();

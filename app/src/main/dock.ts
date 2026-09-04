@@ -168,14 +168,17 @@ interface Win32Api {
    *  work area it just shrank; an appbar has to sit in exactly the rectangle it reserved. */
   setWindowPos: (hwnd: number, rect: Rectangle) => void;
   /**
-   * The window's rectangle and the part of it Windows actually paints, both physical.
+   * The window's rectangle, the part of it Windows paints, and the part the page fills — physical.
    *
-   * They are not the same rectangle. A window carries an invisible resize border — measured here at
-   * seven pixels left, right and bottom — that belongs to the window but shows the desktop through.
-   * Electron 33 painted to the outer edge anyway; 43 paints only the inner one, which is what put a
-   * strip of wallpaper between a docked band and the screen edge.
+   * Three rectangles, one inside the next. A window carries an invisible resize border — measured
+   * here at seven pixels left, right and bottom — that belongs to the window but shows the desktop
+   * through; Electron 33 painted to the outer edge anyway, 43 paints only inside it. And since 43
+   * the client area sits inside the painted frame by one more pixel on those three sides: the room
+   * for the system's 1 px border, which a docked band switches off — so that pixel too was the
+   * desktop, showing as a thin line along the band. The page is the band: it is the client area
+   * that has to land on the reservation.
    */
-  frames: (hwnd: number) => { outer: Rectangle; painted: Rectangle } | null;
+  frames: (hwnd: number) => { outer: Rectangle; painted: Rectangle; client: Rectangle } | null;
   /** Square corners and no border while docked; the window's usual look when not. */
   setEdges: (hwnd: number, flush: boolean) => void;
   make: (hwnd: number, edge: number, rect?: Rectangle) => AppBarData;
@@ -213,6 +216,13 @@ function loadWin32(): Win32Api | null {
     const GetWindowRect = user32.func("__stdcall", "GetWindowRect", "bool", [
       "intptr", koffi.out(koffi.pointer(RECT)),
     ]);
+    const POINT = koffi.struct("POINT", { x: "long", y: "long" });
+    const GetClientRect = user32.func("__stdcall", "GetClientRect", "bool", [
+      "intptr", koffi.out(koffi.pointer(RECT)),
+    ]);
+    const ClientToScreen = user32.func("__stdcall", "ClientToScreen", "bool", [
+      "intptr", koffi.inout(koffi.pointer(POINT)),
+    ]);
     const DwmSetWindowAttribute = dwmapi.func("__stdcall", "DwmSetWindowAttribute", "int32", [
       "intptr", "uint32", koffi.pointer("uint32"), "uint32",
     ]);
@@ -244,11 +254,17 @@ function loadWin32(): Win32Api | null {
         if (!GetWindowRect(hwnd, outer)) return null;
         const painted = { left: 0, top: 0, right: 0, bottom: 0 };
         // Non-zero means DWM has no answer — before the window is composited, for one. The outer
-        // rectangle is then the best guess, and the correction below becomes a no-op.
+        // rectangle is then the best guess, and the corrections below become no-ops.
         if (DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, painted, 16) !== 0) {
-          return { outer: box(outer), painted: box(outer) };
+          return { outer: box(outer), painted: box(outer), client: box(outer) };
         }
-        return { outer: box(outer), painted: box(painted) };
+        // GetClientRect answers with a size only; its origin has to be asked for separately.
+        const size = { left: 0, top: 0, right: 0, bottom: 0 };
+        const origin = { x: 0, y: 0 };
+        const client = GetClientRect(hwnd, size) && ClientToScreen(hwnd, origin)
+          ? { x: origin.x, y: origin.y, width: size.right, height: size.bottom }
+          : box(painted);
+        return { outer: box(outer), painted: box(painted), client };
       },
       make: (hwnd, edge, rect) => ({
         cbSize: koffi.sizeof(APPBARDATA),
@@ -289,6 +305,15 @@ export class Dock {
   private hwnd = 0;
   /** The physical rectangle the shell was told to keep free, for the placement report. */
   private reserved: Rectangle | null = null;
+  /**
+   * Set while our own SHAppBarMessage is running on its worker thread.
+   *
+   * The shell answers by moving every window on the desktop, ours included, and each of those moves
+   * raises an event here. Acting on them — asking Windows about the window, placing it — while the
+   * shell is still inside a call that talks to the same window took the process down. The placement
+   * that follows the call puts the band where it belongs anyway.
+   */
+  private reserving = false;
   /** The window's normal minimum, restored when the band is given up. */
   private readonly minimum: number[];
   /** Set while we are the ones moving the window, so re-asserting the band cannot recurse. */
@@ -334,7 +359,7 @@ export class Dock {
     // Windows moves an appbar out of the work area it just shrank — and does it after the call
     // returns, so the only reliable answer is to put the band back whenever something moves it.
     const reassert = (): void => {
-      if (this.placing || this.dragging || !this.reserved || !this.registered) return;
+      if (this.placing || this.dragging || this.reserving || !this.reserved || !this.registered) return;
       // Asked of Windows, and compared against the reservation in the physical pixels both are
       // expressed in. Electron 43 answers getBounds() with the DWM visible frame instead of the
       // window rectangle, so it is short by the invisible resize border — seven or eight pixels a
@@ -381,14 +406,15 @@ export class Dock {
   }
 
   /**
-   * Where the window is in physical pixels, or null off Windows (and if the binding did not load).
+   * Where the page is in physical pixels, or null off Windows (and if the binding did not load).
    *
    * The only reading that can be compared with a reservation. Everything Electron reports is DIP,
-   * and from 43 `getBounds()` is not even the window rectangle any more.
+   * and from 43 `getBounds()` is not even the window rectangle any more. The client area, not the
+   * painted frame: the frame is a pixel bigger on three sides, and that pixel is not ours to draw.
    */
   private nativeRect(): Rectangle | null {
     if (process.platform !== "win32") return null;
-    return loadWin32()?.frames(nativeHandle(this.window))?.painted ?? null;
+    return loadWin32()?.frames(nativeHandle(this.window))?.client ?? null;
   }
 
   /** Put the window exactly on `rect` (physical pixels), without anyone second-guessing it. */
@@ -401,20 +427,35 @@ export class Dock {
         return;
       }
       const hwnd = nativeHandle(this.window);
-      // `rect` is where the band has to APPEAR. SetWindowPos takes the window's own rectangle, which
-      // is bigger by the invisible border, so asking for the band exactly leaves the painted edge
-      // seven pixels inside it and the desktop showing through. Grow the request by that difference.
-      // Where the runtime paints to the outer edge the difference is zero and this is the old call.
+      // `rect` is where the PAGE has to be. SetWindowPos takes the window's own rectangle, which is
+      // bigger: by the invisible resize border, and since Electron 43 by the 1 px system border the
+      // client area sits inside of on three sides — undrawn while docked, so a band placed by its
+      // painted frame still showed the desktop as a thin line. Grow the request by the whole
+      // difference. Where a runtime paints the page to the outer edge it is zero and this is the old call.
       const f = api.frames(hwnd);
       api.setWindowPos(hwnd, f ? {
-        x: rect.x - (f.painted.x - f.outer.x),
-        y: rect.y - (f.painted.y - f.outer.y),
-        width: rect.width + (f.outer.width - f.painted.width),
-        height: rect.height + (f.outer.height - f.painted.height),
+        x: rect.x - (f.client.x - f.outer.x),
+        y: rect.y - (f.client.y - f.outer.y),
+        width: rect.width + (f.outer.width - f.client.width),
+        height: rect.height + (f.outer.height - f.client.height),
       } : rect);
     } finally {
       this.placing = false;
     }
+  }
+
+  /**
+   * Pin the window's size to the band's, in DIP, so nothing the shell does to the window changes it.
+   *
+   * A docked window is not resizable, and Electron implements that on a frameless window by setting
+   * the minimum and maximum size to the current one. Left alone that is the size the window had
+   * BEFORE it was docked; this keeps it at the size the band is about to have.
+   */
+  private fixSize(band: Rectangle): void {
+    const width = Math.max(BAND_MINIMUM, Math.round(band.width));
+    const height = Math.max(BAND_MINIMUM, Math.round(band.height));
+    this.window.setMinimumSize(width, height);
+    this.window.setMaximumSize(width, height);
   }
 
   get isDocked(): boolean {
@@ -457,9 +498,6 @@ export class Dock {
     const band = bandRect(this.workArea(display), config.edge, config.percent);
     this.current = config;
 
-    // Before anything is placed: a 15 % band is thinner than the window's usual minimum height, and
-    // Windows enforces that minimum, which would leave the window overlapping its own reservation.
-    this.window.setMinimumSize(BAND_MINIMUM, BAND_MINIMUM);
     // A band IS the window at its full extent: there is nothing left to maximise into, and it may
     // not be dragged off its edge. Snapping it back on every move event fought the window manager's
     // own drag loop; refusing the move outright is what actually keeps the band on its edge.
@@ -470,6 +508,12 @@ export class Dock {
     // there is no per-edge control — so the only way to stop three sides offering a resize that
     // cannot happen is to stop the frame resizing, and put a grip in the page for the fourth.
     this.window.setResizable(false);
+    // …which on a frameless window pins the minimum AND maximum size to whatever the window measured
+    // at that moment — the undocked window. Our own placements slip past that (SWP_NOSENDCHANGING),
+    // but the shell's do not: every time it moved the appbar, Windows clamped it back to that stale
+    // size — a 1180 × 760 window flashing over the desktop and the band snapping to its old
+    // thickness. The pin has to say what the band is about to be.
+    this.fixSize(band);
     loadWin32()?.setEdges(nativeHandle(this.window), true);
 
     // Move to the target monitor BEFORE reserving anything.
@@ -532,6 +576,7 @@ export class Dock {
     const { display } = pickDisplay(config.device);
     const band = bandOfThickness(this.workArea(display), config.edge, thickness);
     this.dragging = true;
+    this.fixSize(band);
     this.place(process.platform === "win32" ? screen.dipToScreenRect(null, band) : band);
   }
 
@@ -544,6 +589,7 @@ export class Dock {
     // percentage of it, and not wherever the shell would rather put it.
     const band = bandOfThickness(this.workArea(display), config.edge, thickness);
     this.assertUntil = Date.now() + SETTLE_MS;
+    this.fixSize(band);
     if (process.platform === "win32") await this.reserveWindows(band, config.edge, false);
     else await this.reserveX11(band, config.edge, display.bounds);
     // Physical against physical where Windows can be asked, for the same reason `reassert` does it:
@@ -580,6 +626,7 @@ export class Dock {
   private restoreMinimum(): void {
     if (this.window.isDestroyed()) return;
     this.window.setMinimumSize(this.minimum[0] ?? 1, this.minimum[1] ?? 1);
+    this.window.setMaximumSize(0, 0);                 // no maximum: the pin above was the band's
     this.window.setMaximizable(true);
     this.window.setMovable(true);
     this.window.setResizable(true);
@@ -629,17 +676,24 @@ export class Dock {
     // The shell does not exclude the caller's own reservation, so on a resize the anchored rectangle
     // we already computed is the better answer, and SETPOS still adjusts it if it has to.
     let kept = physical;
-    if (ask) {
-      const query = api.make(hwnd, ABE[edge], physical);
-      await api.SHAppBarMessageAsync(ABM.queryPos, query);
-      const offered = {
-        x: query.rc.left, y: query.rc.top,
-        width: query.rc.right - query.rc.left, height: query.rc.bottom - query.rc.top,
-      };
-      kept = keepThickness(offered, physical, edge);
+    this.reserving = true;
+    try {
+      if (ask) {
+        const query = api.make(hwnd, ABE[edge], physical);
+        await api.SHAppBarMessageAsync(ABM.queryPos, query);
+        const offered = {
+          x: query.rc.left, y: query.rc.top,
+          width: query.rc.right - query.rc.left, height: query.rc.bottom - query.rc.top,
+        };
+        kept = keepThickness(offered, physical, edge);
+      }
+      // Written down BEFORE the call, not after it: anything that puts the band back while the shell
+      // is at work must put it where the band is going, not where it was.
+      this.reserved = kept;
+      await api.SHAppBarMessageAsync(ABM.setPos, api.make(hwnd, ABE[edge], kept));
+    } finally {
+      this.reserving = false;
     }
-    await api.SHAppBarMessageAsync(ABM.setPos, api.make(hwnd, ABE[edge], kept));
-    this.reserved = kept;
     return null;
   }
 
