@@ -72,15 +72,15 @@ async function bounds(app: ElectronApplication): Promise<Electron.Rectangle> {
 }
 
 /**
- * The window's own rectangle, asked of Windows and given back in DIP.
+ * The rectangle Windows actually paints the window on, in DIP.
  *
- * `getBounds()` cannot answer this from Electron 43 on: it reports the DWM visible frame, which is
- * inset by the invisible resize border — seven or eight pixels a side — so a band placed exactly on
- * its reservation reads as eight pixels short of the screen edge. That is the rectangle every
- * docking assertion is about, so those assertions ask the operating system instead. Elsewhere
- * `bounds()` is still right: the other tests compare the window with itself.
+ * Three rectangles are in play and only this one is what a docking assertion means. The window's own
+ * rectangle includes an invisible resize border, seven pixels on three sides, that shows the desktop
+ * through; the band is grown by that so its painted edge lands on the reservation. `getBounds()` is
+ * no help either — from Electron 43 it reports something else again. So the docking assertions ask
+ * DWM. Elsewhere `bounds()` is still right: those tests compare the window with itself.
  */
-async function outerBounds(app: ElectronApplication): Promise<Electron.Rectangle> {
+async function paintedBounds(app: ElectronApplication): Promise<Electron.Rectangle> {
   // By absolute path: inside `evaluate` there is no module to resolve a bare name against.
   const koffiPath = join(process.cwd(), "node_modules", "koffi");
   const rect = await app.evaluate(({ BrowserWindow, screen }, koffiFrom) => {
@@ -97,17 +97,18 @@ async function outerBounds(app: ElectronApplication): Promise<Electron.Rectangle
     // Bound once and kept: koffi registers a named type for the whole process, so declaring the
     // struct again on the second call is an error rather than a no-op. The app registers its own
     // "RECT" when it docks, hence the different name here.
-    const cache = globalThis as unknown as { __getWindowRect?: (h: number, r: object) => boolean };
-    if (!cache.__getWindowRect) {
+    const cache = globalThis as unknown as { __painted?: (h: number, a: number, r: object, s: number) => number };
+    if (!cache.__painted) {
       const koffi = req(koffiFrom) as typeof import("koffi");
       const RECT = koffi.struct("RECT_e2e", { left: "long", top: "long", right: "long", bottom: "long" });
-      cache.__getWindowRect = koffi.load("user32.dll").func("__stdcall", "GetWindowRect", "bool", [
-        "intptr", koffi.out(koffi.pointer(RECT)),
-      ]) as unknown as (h: number, r: object) => boolean;
+      cache.__painted = koffi.load("dwmapi.dll").func("__stdcall", "DwmGetWindowAttribute", "int32", [
+        "intptr", "uint32", koffi.out(koffi.pointer(RECT)), "uint32",
+      ]) as unknown as (h: number, a: number, r: object, s: number) => number;
     }
     const hwnd = Number(win.getNativeWindowHandle().readBigUInt64LE(0));
     const rc = { left: 0, top: 0, right: 0, bottom: 0 };
-    if (!cache.__getWindowRect(hwnd, rc)) return win.getBounds();
+    // 9 is DWMWA_EXTENDED_FRAME_BOUNDS.
+    if (cache.__painted(hwnd, 9, rc, 16) !== 0) return win.getBounds();
     // Physical, like everything the shell deals in; the work areas it is compared with are DIP.
     return screen.screenToDipRect(null, {
       x: rc.left, y: rc.top, width: rc.right - rc.left, height: rc.bottom - rc.top,
@@ -282,7 +283,7 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
       if (!shrank) {
         // No window manager to honour the reservation; the band must still be a band.
-        const placed = await outerBounds(app);
+        const placed = await paintedBounds(app);
         samePixels(placed.width, before.width, `${label}: spans the monitor even unreserved`);
         await undock(app, page, display.id, before);
         continue;
@@ -290,7 +291,7 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
 
       // The window is the band on THIS monitor: same rectangle, not a window beside it.
       const docked = await workAreaOf(app, display.id);
-      const rect = await outerBounds(app);
+      const rect = await paintedBounds(app);
       samePixels(rect.x, before.x, `${label}: starts at the monitor edge`);
       samePixels(rect.y, before.y, `${label}: starts at the top of the work area`);
       samePixels(rect.width, before.width, `${label}: spans the monitor`);
@@ -457,7 +458,7 @@ test("resizing a docked band keeps it on its edge", async () => {
     expect(await settled(async () => (await workAreaOf(app, display.id)).width < before.width)).toBe(true);
     await page.waitForTimeout(1700);                          // past the settle window
 
-    const docked = await outerBounds(app);
+    const docked = await paintedBounds(app);
     const rightEdge = before.x + before.width;
     samePixels(docked.x + docked.width, rightEdge, "docked flush with the right edge");
 
@@ -468,7 +469,7 @@ test("resizing a docked band keeps it on its edge", async () => {
     { x: docked.x, y: docked.y, width: Math.round(docked.width * 0.6), height: docked.height });
 
     await expect.poll(async () => {
-      const now = await outerBounds(app);
+      const now = await paintedBounds(app);
       return Math.abs(now.x + now.width - rightEdge) <= 1;
     }, { timeout: 8000 }).toBe(true);
 

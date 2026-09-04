@@ -3,6 +3,18 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.11.1
+
+- **The strip of desktop along a docked band is gone.** It appeared in v2.11.0 and the runtime is
+  why: Windows gives every window an invisible resize border, seven pixels on three sides, and
+  Electron 33 painted right out to the window's edge while 43 paints only to the inner one. A band
+  is placed on the rectangle it reserved, so those seven pixels showed the wallpaper through.
+  Measured on the same code with only the runtime swapped: on 33 the painted rectangle and the
+  window's own are identical; on 43 they differ by exactly that border.
+  The band is now placed grown by the difference, which puts the invisible part off the edge of the
+  screen and the painted edge exactly on the reservation. The difference is asked of the window
+  itself each time, so on a runtime that paints to the outer edge this is the same call as before.
+
 ## v2.11.0
 
 - **Runs on Electron 43.** The line the app was on last had a security release in April 2025, so it
