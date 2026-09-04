@@ -38,8 +38,8 @@ function makeHome(): { home: string; cwd: string; dir: string; sessionId: string
 describe("path encoding", () => {
   it("matches Claude Code's own scheme", () => {
     expect(encodeProjectPath("C:\\Users\\Terry")).toBe("C--Users-Terry");
-    expect(encodeProjectPath("C:/Local/OneDrive - Movensys/문서/99. Archive"))
-      .toBe("C--Local-OneDrive---Movensys----99--Archive");
+    expect(encodeProjectPath("C:/Local/OneDrive - Contoso/문서/99. Archive"))
+      .toBe("C--Local-OneDrive---Contoso----99--Archive");
   });
 });
 

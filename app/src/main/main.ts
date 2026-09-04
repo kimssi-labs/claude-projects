@@ -274,8 +274,8 @@ function scanProjects(): ProjectInfo[] {
     const key = (path: string): string => {
       let real = path;
       try {
-        // 8.3 short names are the one that actually bit: TEMP reads C:\Users\TERRYT~1 in a
-        // transcript's cwd and C:/Users/TerryTaegyunKim in git's own pointer file. Only resolving
+        // 8.3 short names are the one that actually bit: TEMP reads C:\Users\EXAMPL~1 in a
+        // transcript's cwd and C:/Users/ExampleUser in git's own pointer file. Only resolving
         // the real path makes those the same folder.
         real = realpathSync.native(path);
       } catch {

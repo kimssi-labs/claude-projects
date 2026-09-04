@@ -1,4 +1,7 @@
 node_modules/
+# Working notes, not the product. Plans in here quote the very strings the repo is being scrubbed
+# of, so this must never be published with it.
+.claude/
 app/dist/
 app/release/
 app/test-results/

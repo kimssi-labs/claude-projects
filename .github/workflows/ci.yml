@@ -7,8 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read by default, so a run that only builds and tests cannot write anything. The publish job asks
+# for write on its own; nothing else in this file needs it.
 permissions:
-  contents: write        # needed only by the publish job
+  contents: read
 
 defaults:
   run:
@@ -24,10 +26,10 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: app/package-lock.json
       - run: npm ci
@@ -51,7 +53,11 @@ jobs:
       - name: Changelog has a section for this tag
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: .
-        run: python tools/release_notes.py "${{ github.ref_name }}"
+        # Through the environment, not pasted into the script: a tag name is text someone chose, and
+        # `${{ }}` splices it into the shell before the shell ever sees a quote.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python tools/release_notes.py "$TAG"
 
   package:
     # Installers are built where they run: electron-builder cannot cross-build these targets.
@@ -63,10 +69,10 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: app/package-lock.json
       - run: npm ci
@@ -77,7 +83,7 @@ jobs:
       # not to publish from here.
       - name: Build installers
         run: npx electron-builder --publish never
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installers-${{ matrix.os }}
           path: |
@@ -91,22 +97,25 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: package
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # gh release create / upload / edit
+    env:
+      TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           merge-multiple: true
       - name: Release notes from CHANGELOG.md
         working-directory: .
-        run: python tools/release_notes.py "${{ github.ref_name }}" > notes.md
+        run: python tools/release_notes.py "$TAG" > notes.md
       # Re-tagging is normal here — a tag gets moved when a release needs one more fix — and
       # `gh release create` refuses a tag that already has a release. Update that release instead.
       - name: Publish
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" artifacts/* --clobber
@@ -114,3 +123,21 @@ jobs:
           else
             gh release create "$TAG" artifacts/* --title "$TAG" --notes-file notes.md
           fi
+      # Every url in latest*.yml has to be a name GitHub actually hosts. For three releases it was
+      # not: electron-builder wrote a dashed name, GitHub stored a dotted one, and every update
+      # check 404'd without a word. Checked here, against the assets as uploaded, because the
+      # renaming happens on upload — there is nothing to compare before that.
+      - name: Update metadata names real assets
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          missing=0
+          for meta in artifacts/latest*.yml; do
+            for url in $(sed -n 's/^ *url: *//p' "$meta"); do
+              grep -qxF "$url" <<< "$assets" \
+                || { echo "::error::$meta names '$url', which was not uploaded"; missing=1; }
+            done
+          done
+          [ "$missing" = 0 ]
