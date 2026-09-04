@@ -662,10 +662,13 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
                       band ? "flex flex-col gap-1 min-h-0" : "space-y-1 overflow-y-auto no-bar"}`}
                     style={asideWidth ? { width: asideWidth } : undefined}
                   >
+                    {/* The row takes what is left and clips: a card is taller than a thin band
+                        allows, and without the clip it ran out of the row and was drawn straight
+                        through the running count below. */}
                     {band
-                      ? <div className="flex-1 min-h-0 flex items-start gap-1 [&>*]:min-w-0 [&>*]:flex-1">{machineCards}</div>
+                      ? <div className="flex-1 min-h-0 overflow-hidden flex items-start gap-1 [&>*]:min-w-0 [&>*]:flex-1">{machineCards}</div>
                       : machineCards}
-                    <div className={`text-[11px] text-bone-500 ${band ? "shrink-0 text-center" : ""}`}>
+                    <div data-testid="running-count" className={`text-[11px] text-bone-500 ${band ? "shrink-0 text-center" : ""}`}>
                       {liveSessions.length ? t("app.running", { count: liveSessions.length }) : t("app.running.none")}
                     </div>
                   </aside>
