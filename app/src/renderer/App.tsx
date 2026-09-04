@@ -8,18 +8,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { nextIndex, resolveAction, SHORTCUTS, type Screen } from "@core/keymap";
 import type { Language } from "@core/i18n";
-import { placeWorktrees, type Worktree } from "@core/worktree";
 import { gitMenuItems, isGitAction, runGitAction, useDirtyPatch, useGit } from "../features/git/ui";
+import {
+  deleteProject, deleteSession, filterProjects, filterSessions, indexOf, isProjectAction, isSessionAction, openSession,
+  ProjectPane, projectMenuItems, rename, runProjectAction, runSessionAction, SessionList, sessionMenuItems, SessionPreview,
+  useProjects,
+} from "../features/projects/ui";
 import { useUsage } from "../features/usage/ui";
 import { useMetrics } from "../features/metrics/ui";
 import { usePasteResults } from "../features/clipboard/ui";
-import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
+import type { ProjectInfo, SessionInfo, ThemeMode } from "@core/types";
 
-import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
+import { api, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
 import { initialState as initialUpdateState } from "@core/updates";
 import { DockButton, DockGrip, useDock } from "../features/dock/ui";
 import { AreaChart, UsageCard } from "./components/Chart";
-import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./components/Lists";
+import { ProjectDetail, SessionDetail } from "./components/Lists";
 import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./components/Settings";
 import { Modal, type Ask, type AskResult } from "./components/Modal";
 import { TitleBar } from "./components/TitleBar";
@@ -59,7 +63,8 @@ export function App() {
 
 function Window({ onLanguage }: { onLanguage: (next: { language: Language; locale: string }) => void }) {
   const t = useText();
-  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  // The rows are the projects feature's; what is selected among them is this file's.
+  const { projects, setProjects, scan, liveSessions } = useProjects();
   const usage = useUsage();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("projects");
@@ -100,23 +105,21 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const editRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const [scanned] = await Promise.all([api.scan(), usage.refresh()]);
-    setProjects(scanned);
+    const [scanned] = await Promise.all([scan(), usage.refresh()]);
     return scanned;
-  }, [usage.refresh]);
+  }, [scan, usage.refresh]);
 
   // First paint: everything the window needs, plus the position the last run ended on.
   useEffect(() => {
     void (async () => {
-      const [scanned, appInfo, saved] = await Promise.all([
-        api.scan(), api.appInfo(), api.loadSettings(), usage.refresh(), metrics.load(),
+      const [, appInfo, saved] = await Promise.all([
+        scan(), api.appInfo(), api.loadSettings(), usage.refresh(), metrics.load(),
       ]);
       setTheme(saved.ui.theme);
       setNavFraction(saved.ui.navWidth);
       setAsideFraction(saved.ui.asideWidth);
       setStackFraction(saved.ui.stackTop);
       setSettings(saved);
-      setProjects(scanned);
       setInfo(appInfo);
       setUpdate((previous) => ({ ...previous, current: appInfo.version }));
       onLanguage({ language: saved.ui.language, locale: appInfo.locale });
@@ -154,22 +157,9 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   }, [mode]);
   useEffect(() => { void api.windowState().then(setWindowState); }, []);
 
-  /**
-   * The list as it is drawn: matches in order, with each worktree tucked under its repository.
-   *
-   * One array for both the drawing and the keyboard, or the arrow keys would walk a different list
-   * from the one on screen.
-   */
-  const placed = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const matched = needle
-      ? projects.filter((project) =>
-        project.name.toLowerCase().includes(needle)
-        || (project.cwd ?? "").toLowerCase().includes(needle)
-        || project.sessions.some((s) => s.title.toLowerCase().includes(needle)))
-      : projects;
-    return placeWorktrees(matched);
-  }, [projects, query]);
+  // The list as it is drawn — one array for both the drawing and the keyboard, or the arrow keys
+  // would walk a different list from the one on screen.
+  const placed = useMemo(() => filterProjects(projects, query), [projects, query]);
   const filtered = useMemo(() => placed.map((row) => row.item), [placed]);
 
   const project = filtered[Math.min(projectIndex, Math.max(0, filtered.length - 1))] ?? null;
@@ -183,14 +173,9 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     settings?.git.countChanges ?? false,
     patchDirty,
   );
-  const sessions = useMemo(() => {
-    const current = projects.find((p) => p.dir === openProject) ?? null;
-    if (!current) return [];
-    const needle = query.trim().toLowerCase();
-    return needle ? current.sessions.filter((s) => s.title.toLowerCase().includes(needle)) : current.sessions;
-  }, [projects, openProject, query]);
-  const session = sessions[Math.min(sessionIndex, Math.max(0, sessions.length - 1))] ?? null;
   const openProjectInfo = projects.find((p) => p.dir === openProject) ?? null;
+  const sessions = useMemo(() => filterSessions(openProjectInfo, query), [openProjectInfo, query]);
+  const session = sessions[Math.min(sessionIndex, Math.max(0, sessions.length - 1))] ?? null;
 
   // What the keyboard handler reads. Kept in a ref because a key can arrive before React has
   // re-rendered with the new state, and acting on the previous screen is how F2 renamed the wrong
@@ -216,27 +201,27 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     setTimeout(() => setToast(null), 4000);
   }, []);
 
+  /** What an action on a row needs from this window; the features do the rest themselves. */
+  const rowUi = useMemo(() => ({ askUser, notify, refresh, t }), [askUser, notify, refresh, t]);
+
   const open = useCallback(async (target: "sessionsWindow" | "currentWindow" | "newWindow") => {
     const now = latest.current;
     const dir = now.screen === "sessions" ? now.openProject : now.project?.dir;
     if (!dir) return;
-    const result = await api.openSession({
+    await openSession({
       projectDir: dir,
       sessionId: now.screen === "sessions" ? now.session?.id ?? null : null,
       target,
-    });
-    notify(result);
-    void refresh();
-  }, [screen, openProject, project, session, notify, refresh]);
+    }, rowUi);
+  }, [rowUi]);
 
   /** A fresh session in the project on screen — the one open, or the one under the cursor. */
   const startNew = useCallback(async () => {
     const now = latest.current;
     const dir = now.screen === "sessions" ? now.openProject : now.project?.dir;
     if (!dir) return;
-    notify(await api.openSession({ projectDir: dir, sessionId: null, target: "sessionsWindow" }));
-    void refresh();
-  }, [notify, refresh]);
+    await openSession({ projectDir: dir, sessionId: null, target: "sessionsWindow" }, rowUi);
+  }, [rowUi]);
 
   /** Pick a folder, make it a project, and land on its row. */
   const addProject = useCallback(async () => {
@@ -246,10 +231,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     const scanned = await refresh();
     setQuery("");                                       // a filter could hide the row just added
     setScreen("projects");
-    // Through the same placement the list is drawn with: the raw scan order is not what is on
-    // screen once a worktree has been tucked under its repository, and selecting by the wrong
-    // index lands on a different row.
-    setProjectIndex(Math.max(0, placeWorktrees(scanned).findIndex((row) => row.item.dir === result.dir)));
+    setProjectIndex(indexOf(result.dir, scanned));
   }, [notify, refresh]);
 
   const enterSessions = useCallback((dir: string) => {
@@ -269,137 +251,46 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     }
   }, [editing, screen, openProject, projectIndex]);
 
+  /** Delete what is under the cursor — a session on the sessions screen, else the project. */
   const remove = useCallback(async () => {
     const now = latest.current;
-    if (now.screen === "sessions" && now.session) {
-      const session = now.session;
-      const yes = await askUser({
-        title: t("dialog.deleteSession", { name: session.title }),
-        detail: t("dialog.deleteSession.detail"),
-        confirm: t("dialog.delete"),
-        danger: true,
-      });
-      if (!yes) return;
-      const result = await api.deleteSession({
-        projectDir: now.openProject as string, sessionId: session.id, confirmed: true,
-      });
-      notify(result);
-      if (result.ok) await refresh();
-      return;
-    }
-    if (!now.project) return;
-    const target = now.project;
-    const yes = await askUser({
-      title: t("dialog.deleteProject", { name: target.name }),
-      detail: [
-        t("dialog.deleteProject.detail", { count: target.sessions.length }),
-        target.hasMemory ? t("dialog.deleteProject.memory") : "",
-      ].filter(Boolean).join("\n"),
-      confirm: t("dialog.delete"),
-      danger: true,
-    });
-    if (!yes) return;
-    const result = await api.deleteProject({ projectDir: target.dir, confirmed: true });
-    notify(result);
-    if (result.ok) await refresh();
-  }, [screen, session, openProject, project, notify, refresh, askUser, t]);
+    if (now.screen === "sessions" && now.session) await deleteSession(now.openProject as string, now.session, rowUi);
+    else if (now.project) await deleteProject(now.project, rowUi);
+  }, [rowUi]);
 
   /** Select the row for `dir` in a freshly scanned list — through the same placement it is drawn with. */
   const landOn = useCallback((dir: string, scanned: ProjectInfo[]) => {
     setQuery("");
     setScreen("projects");
-    setProjectIndex(Math.max(0, placeWorktrees(scanned).findIndex((row) => row.item.dir === dir)));
+    setProjectIndex(indexOf(dir, scanned));
   }, []);
 
-  /**
-   * The right-click menu of a project row: what the keys do, plus pinning and the folder itself.
-   * Every action names its target outright rather than going through the selection, so the menu
-   * works the same on a row that was not selected when it was clicked.
-   */
+  /** The right-click menu of a project row: the projects feature's entries with git's slotted in. */
   const projectMenu = useCallback(async (target: ProjectInfo, index: number) => {
     setProjectIndex(index);
     setScreen("projects");
-    const choice = await api.contextMenu([
-      { id: "sessions", label: t("menu.openSessions") },
-      { id: "new", label: t("menu.newSession") },
-      { id: "newWindow", label: t("menu.newSessionWindow") },
-      { id: MENU_SEPARATOR, label: "" },
-      { id: "pin", label: t("menu.pin"), checked: target.pinned },
-      { id: "rename", label: t("menu.rename") },
-      { id: "reveal", label: t("menu.showFolder"), enabled: Boolean(target.cwd && target.exists) },
-      ...gitMenuItems(target, settings?.git.base, t),
-      { id: MENU_SEPARATOR, label: "" },
-      { id: "delete", label: t("menu.delete"), enabled: target.liveCount === 0 },
-    ]);
-    switch (choice) {
-      case "sessions": enterSessions(target.dir); break;
-      case "new": notify(await api.openSession({ projectDir: target.dir, sessionId: null, target: "sessionsWindow" })); break;
-      case "newWindow": notify(await api.openSession({ projectDir: target.dir, sessionId: null, target: "newWindow" })); break;
-      case "pin": notify(await api.togglePin({ kind: "projects", key: target.dir })); await refresh(); break;
-      case "rename": setEditing(target.dir); break;
-      case "reveal": notify(await api.revealProject(target.dir)); break;
-      case "delete": {
-        const yes = await askUser({
-          title: t("dialog.deleteProject", { name: target.name }),
-          detail: [
-            t("dialog.deleteProject.detail", { count: target.sessions.length }),
-            target.hasMemory ? t("dialog.deleteProject.memory") : "",
-          ].filter(Boolean).join("\n"),
-          confirm: t("dialog.delete"),
-          danger: true,
-        });
-        if (!yes) break;
-        const result = await api.deleteProject({ projectDir: target.dir, confirmed: true });
-        notify(result);
-        if (result.ok) await refresh();
-        break;
-      }
-      default:
-        // Git's entries carry their own dialogs; this file only hands over what they need.
-        if (isGitAction(choice)) await runGitAction(choice, target, { askUser, notify, refresh, landOn, t });
-        break;
-    }
-  }, [enterSessions, notify, refresh, settings?.git.base, askUser, landOn, t]);
+    const choice = await api.contextMenu(projectMenuItems(target, gitMenuItems(target, settings?.git.base, t), t));
+    if (isProjectAction(choice)) await runProjectAction(choice, target, { ...rowUi, enterSessions, startRename: setEditing });
+    // Git's entries carry their own dialogs; this file only hands over what they need.
+    else if (isGitAction(choice)) await runGitAction(choice, target, { ...rowUi, landOn });
+  }, [rowUi, enterSessions, settings?.git.base, landOn, t]);
 
   /** The right-click menu of a session row, on either screen it is listed on. */
   const sessionMenu = useCallback(async (projectDir: string, target: SessionInfo, index: number) => {
     if (latest.current.screen === "sessions") setSessionIndex(index);
-    const choice = await api.contextMenu([
-      { id: "resume", label: t("menu.resume"), enabled: !target.live },
-      { id: "resumeWindow", label: t("menu.resumeWindow"), enabled: !target.live },
-      { id: MENU_SEPARATOR, label: "" },
-      { id: "pin", label: t("menu.pin"), checked: target.pinned },
-      { id: "rename", label: t("menu.rename") },
-      { id: MENU_SEPARATOR, label: "" },
-      { id: "delete", label: t("menu.delete"), enabled: !target.live },
-    ]);
-    switch (choice) {
-      case "resume": notify(await api.openSession({ projectDir, sessionId: target.id, target: "sessionsWindow" })); break;
-      case "resumeWindow": notify(await api.openSession({ projectDir, sessionId: target.id, target: "newWindow" })); break;
-      case "pin": notify(await api.togglePin({ kind: "sessions", key: target.id })); await refresh(); break;
-      case "rename": {
-        // The editor replaces the row on the sessions screen only, so the preview list gets there first.
+    const choice = await api.contextMenu(sessionMenuItems(target, t));
+    if (!isSessionAction(choice)) return;
+    await runSessionAction(choice, projectDir, target, {
+      ...rowUi,
+      enterSessions,
+      // The editor replaces the row on the sessions screen only, so the preview list gets there first.
+      startRename: (id) => {
         if (latest.current.screen !== "sessions") enterSessions(projectDir);
         setSessionIndex(index);
-        setEditing(target.id);
-        break;
-      }
-      case "delete": {
-        const yes = await askUser({
-          title: t("dialog.deleteSession", { name: target.title }),
-          detail: t("dialog.deleteSession.detail"),
-          confirm: t("dialog.delete"),
-          danger: true,
-        });
-        if (!yes) break;
-        const result = await api.deleteSession({ projectDir, sessionId: target.id, confirmed: true });
-        notify(result);
-        if (result.ok) await refresh();
-        break;
-      }
-      default: break;
-    }
-  }, [enterSessions, notify, refresh, askUser, t]);
+        setEditing(id);
+      },
+    });
+  }, [rowUi, enterSessions, t]);
 
   // The global shortcut can fire while another window has focus; its verdict still belongs here.
   usePasteResults(notify);
@@ -513,14 +404,11 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     if (!title && !explicit) return;
     // Which thing is being renamed is decided by what is on screen at commit time, not by what was
     // on screen when this callback was created.
-    const result = now.screen === "sessions" && now.session
-      ? await api.renameSession({ projectDir: now.openProject as string, sessionId: now.session.id, title })
-      : now.project
-        ? await api.renameProject({ projectDir: now.project.dir, title })
-        : { ok: false };
-    notify(result);
-    await refresh();
-  }, [screen, session, openProject, project, notify, refresh]);
+    const target = now.screen === "sessions" && now.session
+      ? { projectDir: now.openProject as string, sessionId: now.session.id }
+      : now.project ? { projectDir: now.project.dir } : null;
+    if (target) await rename(target, title, rowUi);
+  }, [rowUi]);
 
   const usageWindows = usage.status?.windows ?? [];
   // Both machine gauges read the same way: the share first, then the quantity behind it — a load
@@ -534,7 +422,6 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const memoryValue = latestSystem
     ? `${memoryPercent === null ? "" : `${memoryPercent}% · `}${formatBytes(latestSystem.memoryBytes)}`
     : "—";
-  const liveSessions = projects.flatMap((p) => p.sessions.filter((s) => s.live));
 
   // Monitoring off means there is nothing to draw — and nothing being measured, which is the point.
   const monitoring = settings?.ui.monitor ?? true;
@@ -567,60 +454,48 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     </>
   );
 
+  // The two panes the projects feature draws. Which row is selected, and what a click on it does,
+  // stay this file's: the keyboard drives both, and the same handlers serve it.
   const projectPane = (
-    <>
-          <div className={`flex gap-1 ${tight ? "p-1" : "p-2"}`}>
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Escape") { setQuery(""); searchRef.current?.blur(); } }}
-              placeholder={t("app.search")}
-              className="flex-1 min-w-0 bg-ink-800 border border-ink-600 rounded-lg px-3 py-1.5 text-sm placeholder:text-bone-500 focus:border-accent/60"
-            />
-            {/* A folder that has never had a session has no other way into this list. */}
-            <button
-              type="button"
-              className="btn px-2.5 shrink-0"
-              title={t("app.addProject.title")}
-              aria-label={t("app.addProject")}
-              onClick={() => void addProject()}
-            >
-              +
-            </button>
-          </div>
-          <div className={`flex-1 overflow-auto space-y-0.5 ${tight ? "px-1 pb-1" : "px-2 pb-2"}`}>
-            {filtered.map((item, index) => (
-              editing === item.dir ? (
-                <input
-                  key={item.dir}
-                  ref={editRef}
-                  defaultValue={item.alias ?? item.name}
-                  onBlur={(event) => void commitRename(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value, true);
-                    if (event.key === "Escape") setEditing(null);
-                  }}
-                  data-testid="rename-input"
-                  aria-label={t("tip.newName")}
-                  className="w-full bg-ink-700 border border-accent/60 rounded-lg px-3 py-2 text-sm"
-                />
-              ) : (
-                <ProjectRow
-                  key={item.dir}
-                  project={item}
-                  depth={placed[index]?.depth ?? 0}
-                  selected={screen !== "settings" && (screen === "projects" ? index === projectIndex : item.dir === openProject)}
-                  onSelect={() => { setProjectIndex(index); setScreen("projects"); }}
-                  onOpen={() => enterSessions(item.dir)}
-                  onContextMenu={() => void projectMenu(item, index)}
-                />
-              )
-            ))}
-            {filtered.length === 0 ? <p className="px-3 py-6 text-xs text-bone-500">{t("app.noMatch")}</p> : null}
-          </div>
-    </>
+    <ProjectPane
+      placed={placed}
+      query={query}
+      onQuery={setQuery}
+      searchRef={searchRef}
+      onAdd={() => void addProject()}
+      editing={editing}
+      editRef={editRef}
+      onRename={(value, explicit) => void commitRename(value, explicit)}
+      onCancelEdit={() => setEditing(null)}
+      isSelected={(item, index) => screen !== "settings" && (screen === "projects" ? index === projectIndex : item.dir === openProject)}
+      onSelect={(index) => { setProjectIndex(index); setScreen("projects"); }}
+      onOpen={enterSessions}
+      onContextMenu={(item, index) => void projectMenu(item, index)}
+      tight={tight}
+    />
   );
+  const samplesOf = (sessionId: string) => (monitoring ? sessionHistory[sessionId] ?? [] : []);
+  const sessionRows = screen === "sessions" ? (
+    <SessionList
+      sessions={sessions}
+      selected={sessionIndex}
+      editing={editing}
+      editRef={editRef}
+      samples={samplesOf}
+      onRename={(value, explicit) => void commitRename(value, explicit)}
+      onCancelEdit={() => setEditing(null)}
+      onSelect={setSessionIndex}
+      onOpen={() => void open("sessionsWindow")}
+      onContextMenu={(item, index) => void sessionMenu(openProject as string, item, index)}
+    />
+  ) : project ? (
+    <SessionPreview
+      project={project}
+      samples={samplesOf}
+      onEnter={() => enterSessions(project.dir)}
+      onContextMenu={(item, index) => void sessionMenu(project.dir, item, index)}
+    />
+  ) : null;
 
   return (
     <div className="relative h-full flex flex-col bg-ink-900 overflow-hidden">
@@ -726,102 +601,12 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
                       onCommit={(height) => void api.saveUi({ stackTop: stackHeight ? height / stackHeight : 0 })}
                     />
                     <div data-testid="stack-sessions" className="flex-1 min-h-0 overflow-auto p-1 space-y-0.5">
-                  {screen === "sessions"
-                    ? sessions.map((item: SessionInfo, index: number) => (
-                      editing === item.id ? (
-                        <input
-                          key={item.id}
-                          ref={editRef}
-                          defaultValue={item.title}
-                          onBlur={(event) => void commitRename(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value, true);
-                            if (event.key === "Escape") setEditing(null);
-                          }}
-                          data-testid="rename-input"
-                  aria-label={t("tip.newName")}
-                  className="w-full bg-ink-700 border border-accent/60 rounded-lg px-3 py-2 text-sm"
-                        />
-                      ) : (
-                        <SessionRow
-                          key={item.id}
-                          session={item}
-                          selected={index === sessionIndex}
-                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
-                          onSelect={() => setSessionIndex(index)}
-                          onOpen={() => void open("sessionsWindow")}
-                          onContextMenu={() => void sessionMenu(openProject as string, item, index)}
-                        />
-                      )
-                    ))
-                    : project
-                      ? project.sessions.slice(0, 8).map((item, index) => (
-                        <SessionRow
-                          key={item.id}
-                          session={item}
-                          selected={false}
-                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
-                          onSelect={() => enterSessions(project.dir)}
-                          onOpen={() => enterSessions(project.dir)}
-                          onContextMenu={() => void sessionMenu(project.dir, item, index)}
-                        />
-                      ))
-                      : null}
-                  {screen === "projects" && project && project.sessions.length > 8 ? (
-                    <button type="button" className="btn w-full mt-1" onClick={() => enterSessions(project.dir)}>
-                      {t("app.showAll", { count: project.sessions.length })}
-                    </button>
-                  ) : null}
+                      {sessionRows}
                     </div>
                   </div>
                 ) : (
                 <div className={`flex-1 min-w-0 overflow-auto space-y-0.5 ${tight ? "p-1" : "p-2"}`}>
-                  {screen === "sessions"
-                    ? sessions.map((item: SessionInfo, index: number) => (
-                      editing === item.id ? (
-                        <input
-                          key={item.id}
-                          ref={editRef}
-                          defaultValue={item.title}
-                          onBlur={(event) => void commitRename(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value, true);
-                            if (event.key === "Escape") setEditing(null);
-                          }}
-                          data-testid="rename-input"
-                  aria-label={t("tip.newName")}
-                  className="w-full bg-ink-700 border border-accent/60 rounded-lg px-3 py-2 text-sm"
-                        />
-                      ) : (
-                        <SessionRow
-                          key={item.id}
-                          session={item}
-                          selected={index === sessionIndex}
-                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
-                          onSelect={() => setSessionIndex(index)}
-                          onOpen={() => void open("sessionsWindow")}
-                          onContextMenu={() => void sessionMenu(openProject as string, item, index)}
-                        />
-                      )
-                    ))
-                    : project
-                      ? project.sessions.slice(0, 8).map((item, index) => (
-                        <SessionRow
-                          key={item.id}
-                          session={item}
-                          selected={false}
-                          samples={monitoring ? sessionHistory[item.id] ?? [] : []}
-                          onSelect={() => enterSessions(project.dir)}
-                          onOpen={() => enterSessions(project.dir)}
-                          onContextMenu={() => void sessionMenu(project.dir, item, index)}
-                        />
-                      ))
-                      : null}
-                  {screen === "projects" && project && project.sessions.length > 8 ? (
-                    <button type="button" className="btn w-full mt-1" onClick={() => enterSessions(project.dir)}>
-                      {t("app.showAll", { count: project.sessions.length })}
-                    </button>
-                  ) : null}
+                  {sessionRows}
                 </div>
                 )}
 
