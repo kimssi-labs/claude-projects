@@ -9,11 +9,13 @@ import { dockContract } from "../features/dock/contract.js";
 import { gitContract } from "../features/git/contract.js";
 import { metricsContract } from "../features/metrics/contract.js";
 import { projectsContract } from "../features/projects/contract.js";
+import { settingsContract } from "../features/settings/contract.js";
 import { updatesContract } from "../features/updates/contract.js";
 import { usageContract } from "../features/usage/contract.js";
 
 export const CONTRACTS = {
   ...projectsContract,
+  ...settingsContract,
   ...updatesContract,
   ...gitContract,
   ...usageContract,

@@ -9,18 +9,12 @@ import { contextBridge, ipcRenderer } from "electron";
 import { buildApi } from "../bridge/build.js";
 import { CONTRACTS } from "../bridge/registry.js";
 import { CHANNEL } from "../main/ipc.js";
-import type { ActionResult, AppInfo, MenuItemSpec, PageName, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
-import type { DockConfig, GitConfig, LaunchConfig, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
+import type { ActionResult, AppInfo, MenuItemSpec, PageName, WindowCommand, WindowState } from "../main/ipc.js";
 
 const api = {
-  // Derived from the feature contracts. The entries written out below are the features that have
-  // not moved onto a contract yet; they leave this file one feature at a time.
+  // Derived from the feature contracts. The entries written out below are the shell's own: the
+  // window, its menus and pages, and the app's identity.
   ...buildApi(CONTRACTS, ipcRenderer),
-  onSettings: (listener: (settings: SettingsPayload) => void): (() => void) => {
-    const handler = (_event: unknown, settings: SettingsPayload): void => listener(settings);
-    ipcRenderer.on(CHANNEL.settingsPush, handler);
-    return () => ipcRenderer.removeListener(CHANNEL.settingsPush, handler);
-  },
   /** Shows a native menu at the pointer; resolves with the chosen id, or null when it was dismissed. */
   contextMenu: (items: MenuItemSpec[]): Promise<string | null> => ipcRenderer.invoke(CHANNEL.contextMenu, items),
   /** Something the app did on its own finished and is worth a line on screen. */
@@ -31,10 +25,6 @@ const api = {
   },
   /** Open one of the app's known pages in the default browser. */
   openPage: (page: PageName): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.openPage, page),
-  loadSettings: (): Promise<SettingsPayload> => ipcRenderer.invoke(CHANNEL.loadSettings),
-  saveSettings: (payload: { dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: Partial<UiConfig>; updates?: UpdateConfig; git?: GitConfig }): Promise<SettingsPayload> =>
-    ipcRenderer.invoke(CHANNEL.saveSettings, payload),
-  saveUi: (ui: Partial<UiConfig>): Promise<void> => ipcRenderer.invoke(CHANNEL.saveUi, ui),
   appInfo: (): Promise<AppInfo> => ipcRenderer.invoke(CHANNEL.appInfo),
   windowState: (): Promise<WindowState> => ipcRenderer.invoke(CHANNEL.windowState),
   windowCommand: (command: WindowCommand): Promise<WindowState> =>

@@ -15,17 +15,16 @@ import type { MainContext } from "../bridge/context.js";
 import { ConfigStore } from "../core/config.js";
 import { claudeHome } from "../core/paths.js";
 import { Store } from "../core/store.js";
-import type { DockConfig, GitConfig, LaunchConfig, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
 import { register as registerClipboard } from "../features/clipboard/main.js";
 import { register as registerDock } from "../features/dock/main.js";
 import { register as registerGit } from "../features/git/main.js";
 import { register as registerMetrics } from "../features/metrics/main.js";
 import { register as registerProjects } from "../features/projects/main.js";
+import { register as registerSettings } from "../features/settings/main.js";
 import { register as registerUpdates } from "../features/updates/main.js";
 import { register as registerUsage } from "../features/usage/main.js";
-import { setupKey } from "./dock.js";
 import { claudeExecutable, which } from "./executables.js";
-import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AppInfo, type MenuItemSpec, type PageName, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AppInfo, type MenuItemSpec, type PageName, type WindowCommand, type WindowState } from "./ipc.js";
 
 const DEV_SERVER = "http://localhost:5273";
 const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as const;
@@ -154,10 +153,10 @@ const context: MainContext = {
   notify: (text) => window?.webContents.send(CHANNEL.toast, text),
 };
 const wiring = wire(ipcMain, (channel, value) => window?.webContents.send(channel, value));
-// Registered here rather than with the others because `settingsPayload` below composes its state
-// into every settings answer. That dependency belongs to settings and moves with it; until then the
-// feature is a module-level constant, not a mutable global.
-const usageFeature = registerUsage(context, wiring, { settingsPayload });
+// Every feature registers here, at module level, and each hands back the one thing the rest of main
+// may still ask of it. Where two need each other — usage answers into the settings payload, and
+// asks for it back — the reference is a closure, read when called, after both exist.
+const usageFeature = registerUsage(context, wiring, { settingsPayload: () => settingsFeature.payload() });
 // The list every other feature reads, registered first: metrics asks it which sessions run, git
 // asks it for rows. Its one dependency points the other way — "the running set may have changed" —
 // and goes through main, so projects never imports metrics. Called at scan time, once both exist.
@@ -171,10 +170,36 @@ const clipboardFeature = registerClipboard(context, wiring, { announce });
 // The window itself stays the shell's; dock borrows it through the context and hands back the one
 // thing that is the shell's to do — giving an undocked window a window's shape.
 const dockFeature = registerDock(context, wiring, {
-  settingsPayload,
-  pushSettings: () => window?.webContents.send(CHANNEL.settingsPush, settingsPayload()),
+  settingsPayload: () => settingsFeature.payload(),
+  pushSettings: () => settingsFeature.push(),
   placeFloating,
   appNote: (text) => window?.webContents.send(CHANNEL.appInfo, text),
+});
+const updatesFeature = registerUpdates(context, wiring);
+// Git depends on the project rows, and says so: these are handed over rather than reached for.
+const gitFeature = registerGit(context, wiring, { findProject: projectsFeature.find, rescan: projectsFeature.scan, which });
+// Last, because it composes the others' slices. What a saved section sets in motion is decided here,
+// where every feature is in view — settings itself knows the config store and nothing else.
+const settingsFeature = registerSettings(context, wiring, {
+  slices: () => ({
+    ...dockFeature.slice(),
+    pasteHotkeyActive: clipboardFeature.active(),
+    usage: usageFeature.state(),
+    gitAvailable: Boolean(which("git")),
+  }),
+  applied: (patch) => {
+    if (patch.dock) dockFeature.save(patch.dock);
+    if (patch.git) {
+      projectsFeature.scan();                      // the rows gain or lose their git line at once
+      gitFeature.restartSweep();                   // and the timer starts, stops or re-arms with it
+    }
+    if (patch.updates) updatesFeature.setConfig(patch.updates);   // the timer starts, stops or re-arms with it
+    if (patch.launch) clipboardFeature.rearm();   // the shortcut, and the automatic path, may have changed
+    if (patch.ui) {
+      if (config.ui().monitor) metricsFeature.start();
+      else metricsFeature.stop();
+    }
+  },
 });
 let window: BrowserWindow | null = null;
 let splash: BrowserWindow | null = null;
@@ -302,20 +327,7 @@ function announce(title: string, body: string): void {
   }
 }
 
-function settingsPayload(): SettingsPayload {
-  return {
-    ...dockFeature.slice(),
-    status: config.status(),
-    launch: config.launch(),
-    ui: config.ui(),
-    pasteHotkeyActive: clipboardFeature.active(),
-    usage: usageFeature.state(),
-    updates: config.updates(),
-    git: config.git(),
-    gitAvailable: Boolean(which("git")),
-  };
-}
-
+/** The shell's own handlers: the window, its menus and pages, and what the app is. */
 function registerIpc(): void {
   /** A right-click menu — the OS's own, so it looks and behaves like every other one on the machine. */
   ipcMain.handle(CHANNEL.contextMenu, (event, items: MenuItemSpec[]) => new Promise<string | null>((resolve) => {
@@ -334,19 +346,6 @@ function registerIpc(): void {
     menu.popup({ window: owner, callback: () => setTimeout(() => resolve(null), 100) });
   }));
 
-  // Features on the contract bridge register themselves here; each hands back the one thing the
-  // rest of main may still ask of it. The handlers written out around this are the features that
-  // have not moved yet.
-  const updatesFeature = registerUpdates(context, wiring);
-  // Git depends on the project rows, and says so: these are handed over rather than reached for.
-  const gitFeature = registerGit(context, wiring, { findProject: projectsFeature.find, rescan: projectsFeature.scan, which });
-
-  /**
-   * Count what is uncommitted in one project — the expensive half, asked for a row at a time.
-   *
-   * Resolves with the count, or null when there is nothing to count or git did not answer. The
-   * renderer asks for the selected row only, so a long list never spawns a process per project.
-   */
   ipcMain.handle(CHANNEL.openPage, async (_event, page: PageName): Promise<ActionResult> => {
     const url = PAGES[page];
     if (!url) return { ok: false };
@@ -354,14 +353,6 @@ function registerIpc(): void {
     return { ok: true };
   });
 
-  ipcMain.handle(CHANNEL.loadSettings, () => settingsPayload());
-
-  /**
-   * A screenshot on the clipboard, as a file a terminal session can be pointed at.
-   *
-   * Claude Code takes an image by path, and a terminal cannot paste a bitmap — so the useful move
-   * is to write the clipboard image out and put its PATH back on the clipboard, ready to paste.
-   */
   ipcMain.handle(CHANNEL.windowState, () => windowState());
 
   ipcMain.handle(CHANNEL.windowCommand, async (_event, command: WindowCommand) => {
@@ -378,41 +369,6 @@ function registerIpc(): void {
     pushWindowState();
     return windowState();
   });
-
-  ipcMain.handle(CHANNEL.saveSettings, (_event, payload: {
-    dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: UiConfig; updates?: UpdateConfig;
-    git?: GitConfig;
-  }) => {
-    // With the arrangement key: without it the per-arrangement entry keeps the old edge and size
-    // and wins on the next read, so changing the dock in Settings looked like it did nothing.
-    if (payload.dock) config.saveDock(payload.dock, setupKey());
-    if (payload.status) config.saveStatus(payload.status);
-    if (payload.git) {
-      config.saveGit(payload.git);
-      projectsFeature.scan();                      // the rows gain or lose their git line at once
-      gitFeature.restartSweep();                   // and the timer starts, stops or re-arms with it
-    }
-    if (payload.updates) {
-      config.saveUpdates(payload.updates);
-      updatesFeature.setConfig(payload.updates);   // the timer starts, stops or re-arms with it
-    }
-    if (payload.launch) {
-      config.saveLaunch(payload.launch);
-      clipboardFeature.rearm();                   // the shortcut, and the automatic path, may have changed
-    }
-    // The theme lives with the rest of the remembered position, so it comes back with it.
-    if (payload.ui) {
-      config.saveUi({ ...config.ui(), ...payload.ui });
-      if (config.ui().monitor) metricsFeature.start();
-      else metricsFeature.stop();
-    }
-    const saved = settingsPayload();
-    // Tell the window too: whoever changed a setting, the screen should already agree with it.
-    window?.webContents.send(CHANNEL.settingsPush, saved);
-    return saved;
-  });
-
-  ipcMain.handle(CHANNEL.saveUi, (_event, ui: Partial<UiConfig>) => config.saveUi({ ...config.ui(), ...ui }));
 
   ipcMain.handle(CHANNEL.appInfo, (): AppInfo => ({
     // app.getLocale() is the OS's own choice, which is what an unset language should follow.

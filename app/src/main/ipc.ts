@@ -1,15 +1,11 @@
 /** The one place the renderer can reach the machine: every channel, with its argument checked. */
 export const CHANNEL = {
-  settingsPush: "settings:push",                 // main -> renderer, when main changed them
   windowCommand: "window:command",
   windowState: "window:state",
   windowStatePush: "window:state-push",           // main -> renderer, on maximise / restore
   contextMenu: "menu:context",
   openPage: "app:open-page",
   toast: "app:toast",                // main -> renderer, when something finished on its own
-  loadSettings: "settings:load",
-  saveSettings: "settings:save",
-  saveUi: "ui:save",
   appInfo: "app:info",
   quit: "app:quit",
 } as const;
