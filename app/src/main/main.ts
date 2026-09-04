@@ -19,11 +19,8 @@ import { hookCommand, hookFileName, hookInstalled, hookScript, withHook, without
 import { wire } from "../bridge/build.js";
 import type { MainContext } from "../bridge/context.js";
 import { register as registerUpdates } from "../features/updates/main.js";
-import {
-  countChanges, createWorktree, dropWorktree, headOf, isLinkedWorktree, listWorktrees, mainCheckoutOf,
-  updateFromBase,
-} from "./gitStatus.js";
-import { autoPlan, intervalMs, sweepSummary } from "../core/gitAuto.js";
+import { headOf, isLinkedWorktree, mainCheckoutOf } from "./gitStatus.js";
+import { register as registerGit } from "../features/git/main.js";
 import { clipFileName, Store } from "../core/store.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
 import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
@@ -715,48 +712,6 @@ function setUsageCollection(on: boolean): ActionResult {
   };
 }
 
-/**
- * Updating projects from their base branch without being asked.
- *
- * Only ever between sessions: the plan refuses anything with a session running in it, and in safe
- * mode git is asked for a fast-forward, which it declines rather than rewriting anything. A sweep
- * that changes nothing says nothing — a notification per hour reporting no news is worse than none.
- */
-let sweepTimer: NodeJS.Timeout | null = null;
-let sweeping = false;
-
-async function sweepFromBase(): Promise<void> {
-  if (sweeping) return;                            // a slow remote must not overlap the next tick
-  const git = config.git();
-  if (git.auto.mode === "off") return;
-  sweeping = true;
-  const updated: string[] = [];
-  let failed = 0;
-  try {
-    const plan = autoPlan(scanProjects(), { mode: git.auto.mode, strategy: git.strategy });
-    for (const item of plan.run) {
-      const project = findProject(item.dir);
-      if (!project?.cwd) continue;
-      const outcome = await updateFromBase(project.cwd, { strategy: item.strategy, base: git.base });
-      if (outcome.ok && outcome.kind === "updated") updated.push(project.name);
-      else if (!outcome.ok && outcome.kind !== "diverged" && outcome.kind !== "dirty") failed += 1;
-    }
-  } finally {
-    sweeping = false;
-  }
-  if (updated.length) scanProjects();            // the window's own refresh picks the branches up
-  const summary = sweepSummary(updated, failed);
-  if (summary) window?.webContents.send(CHANNEL.toast, summary);
-}
-
-function startSweep(): void {
-  if (sweepTimer) clearInterval(sweepTimer);
-  sweepTimer = null;
-  const git = config.git();
-  if (git.auto.mode === "off") return;
-  sweepTimer = setInterval(() => void sweepFromBase(), intervalMs(git.auto.everyMinutes));
-}
-
 function settingsPayload(): SettingsPayload {
   const dockConfig = config.dock(null, setupKey());
   const { display } = pickDisplay(dockConfig.device);
@@ -968,7 +923,8 @@ function registerIpc(): void {
   // rest of main may still ask of it. The handlers written out around this are the features that
   // have not moved yet.
   const updatesFeature = registerUpdates(context, wiring);
-  startSweep();
+  // Git depends on the project rows, and says so: these are handed over rather than reached for.
+  const gitFeature = registerGit(context, wiring, { findProject, rescan: scanProjects, which });
 
   /**
    * Count what is uncommitted in one project — the expensive half, asked for a row at a time.
@@ -976,74 +932,11 @@ function registerIpc(): void {
    * Resolves with the count, or null when there is nothing to count or git did not answer. The
    * renderer asks for the selected row only, so a long list never spawns a process per project.
    */
-  ipcMain.handle(CHANNEL.gitCount, async (_event, dir: string): Promise<number | null> => {
-    const project = findProject(dir);
-    if (!project?.cwd || !project.exists || !config.git().enabled || !config.git().countChanges) return null;
-    const cwd = project.cwd;
-    return new Promise<number | null>((resolve) => {
-      const timer = setTimeout(() => resolve(null), 5_000);
-      countChanges(cwd, (dirty) => {
-        clearTimeout(timer);
-        if (project.git) project.git.dirty = dirty;
-        resolve(dirty);
-      });
-    });
-  });
-
-  /** Bring the project's branch up to date with its base, the way the settings say to. */
   ipcMain.handle(CHANNEL.openPage, async (_event, page: PageName): Promise<ActionResult> => {
     const url = PAGES[page];
     if (!url) return { ok: false };
     await shell.openExternal(url);
     return { ok: true };
-  });
-
-  ipcMain.handle(CHANNEL.gitSync, async (_event, dir: string): Promise<ActionResult> => {
-    const project = findProject(dir);
-    if (!project?.cwd || !project.exists) return { ok: false, message: "Folder is not available." };
-    const git = config.git();
-    const outcome = await updateFromBase(project.cwd, { strategy: git.strategy, base: git.base });
-    scanProjects();                                // the branch, and what is uncommitted, may have moved
-    if (!outcome.ok) return { ok: false, message: outcome.message };
-    return {
-      ok: true,
-      message: outcome.kind === "current" ? "Already up to date." : "Updated from the base branch.",
-    };
-  });
-
-  /**
-   * A worktree of this project, on a new branch, added to the list as a project of its own.
-   *
-   * That is the whole point here: a second checkout is a second place to run a session, and this
-   * app's unit of "a place to run a session" is a project row.
-   */
-  /** Every checkout of the repository this project belongs to. */
-  ipcMain.handle(CHANNEL.worktreeList, async (_event, dir: string) => {
-    const project = findProject(dir);
-    if (!project?.cwd || !project.exists || !project.git) return [];
-    return listWorktrees(project.cwd);
-  });
-
-  ipcMain.handle(CHANNEL.worktreeAdd, async (_event, request: { dir: string; branch: string }): Promise<AddProjectResult> => {
-    const project = findProject(request.dir);
-    if (!project?.cwd || !project.exists) return { ok: false, message: "Folder is not available." };
-    if (!which("git")) return { ok: false, message: "git is not on PATH." };
-    const created = await createWorktree(project.cwd, request.branch, config.git().base);
-    if (!created.ok) return { ok: false, message: created.message };
-    const dir = store.addProject(created.path as string);
-    scanProjects();
-    return { ok: true, dir, message: `Worktree at ${created.path}` };
-  });
-
-  /** Remove a worktree. Its own project row goes with it, since the folder it named is gone. */
-  ipcMain.handle(CHANNEL.worktreeRemove, async (_event, request: { dir: string; force: boolean }): Promise<ActionResult> => {
-    const project = findProject(request.dir);
-    if (!project?.cwd) return { ok: false, message: "Folder is not available." };
-    const outcome = await dropWorktree(project.cwd, project.cwd, request.force);
-    if (!outcome.ok) return { ok: false, message: outcome.message };
-    store.deleteProject(project);
-    scanProjects();
-    return { ok: true, message: "Worktree removed." };
   });
 
   ipcMain.handle(CHANNEL.setUsageHook, (_event, on: boolean): ActionResult & { settings: SettingsPayload } => {
@@ -1104,7 +997,7 @@ function registerIpc(): void {
     if (payload.git) {
       config.saveGit(payload.git);
       scanProjects();                              // the rows gain or lose their git line at once
-      startSweep();                                // and the timer starts, stops or re-arms with it
+      gitFeature.restartSweep();                   // and the timer starts, stops or re-arms with it
     }
     if (payload.updates) {
       config.saveUpdates(payload.updates);

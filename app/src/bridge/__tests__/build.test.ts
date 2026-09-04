@@ -87,6 +87,11 @@ describe("the surface the page can reach", () => {
     expect(surfaceOf(CONTRACTS)).toEqual({
       updateAction: "invoke update:action",
       onUpdate: "event update:push",
+      gitCount: "invoke git:count",
+      gitSync: "invoke git:sync",
+      worktreeList: "invoke worktree:list",
+      worktreeAdd: "invoke worktree:add",
+      worktreeRemove: "invoke worktree:remove",
     });
   });
 

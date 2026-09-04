@@ -20,11 +20,6 @@ export const CHANNEL = {
   contextMenu: "menu:context",
   togglePin: "pin:toggle",
   setUsageHook: "usage:hook",
-  gitCount: "git:count",
-  gitSync: "git:sync",
-  worktreeAdd: "worktree:add",
-  worktreeRemove: "worktree:remove",
-  worktreeList: "worktree:list",
   openPage: "app:open-page",
   toast: "app:toast",                // main -> renderer, when something finished on its own
   loadSettings: "settings:load",

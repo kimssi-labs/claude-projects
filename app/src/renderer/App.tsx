@@ -382,7 +382,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
           confirm: t("dialog.create"),
         });
         if (typeof branch !== "string") break;
-        const result = await api.worktreeAdd(target.dir, branch);
+        const result = await api.worktreeAdd({ dir: target.dir, branch });
         notify(result);
         if (!result.ok || !result.dir) break;
         // Land on the new worktree: it is a project now, and the point of making it was to work in it.
@@ -400,7 +400,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
           danger: true,
         });
         if (!yes) break;
-        const first = await api.worktreeRemove(target.dir, false);
+        const first = await api.worktreeRemove({ dir: target.dir, force: false });
         if (first.ok) { notify(first); await refresh(); break; }
         // git refuses a worktree that holds work; forcing is the user's call, not ours.
         const force = await askUser({
@@ -410,7 +410,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
           danger: true,
         });
         if (!force) { notify(first); break; }
-        notify(await api.worktreeRemove(target.dir, true));
+        notify(await api.worktreeRemove({ dir: target.dir, force: true }));
         await refresh();
         break;
       }
