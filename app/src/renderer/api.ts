@@ -1,5 +1,6 @@
 /** The preload bridge, typed — the renderer talks to the machine through this and nothing else. */
-import type { HangarApi, MetricsHistoryPayload } from "../preload/preload";
+import type { HangarApi } from "../preload/preload";
+import type { MetricsHistoryPayload } from "../features/metrics/contract";
 import type { ActionResult, AppInfo, DisplayInfo, MenuItemSpec, SettingsPayload } from "../main/ipc";
 import type { UpdateState } from "@core/updates";
 
