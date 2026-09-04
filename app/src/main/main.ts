@@ -421,6 +421,10 @@ async function createWindow(): Promise<void> {
     const placement = await dock.apply(saved);
     if (placement.note) window?.webContents.send(CHANNEL.appInfo, placement.note);
   }
+  // Told again, because the renderer asked for this state while it was first rendering — which is
+  // before the band above exists. Without this the caption arrow offers to dock a window that is
+  // already a band, and the title bar stays undraggable for one that is not.
+  pushWindowState();
 }
 
 /** Sessions worth measuring right now: the running ones, from the last scan. */
@@ -494,12 +498,13 @@ async function reapplyDockForSetup(): Promise<void> {
   if (!window || !dock) return;
   const wanted = config.dock(null, setupKey());
   await dock.release();
-  if (!wanted.enabled) {
-    window.webContents.send(CHANNEL.settingsPush, settingsPayload());
-    return;
+  if (wanted.enabled) {
+    const placement = await dock.apply(wanted);
+    if (placement.note) console.log(`[hangar] ${placement.note}`);
   }
-  const placement = await dock.apply(wanted);
-  if (placement.note) console.log(`[hangar] ${placement.note}`);
+  // Plugging a monitor in or out docks and undocks the window on its own, and the caption arrow
+  // reads this rather than the settings — so it has to be told, on both paths.
+  pushWindowState();
   window.webContents.send(CHANNEL.settingsPush, settingsPayload());
 }
 
