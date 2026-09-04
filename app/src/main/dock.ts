@@ -31,6 +31,8 @@ const BAND_MINIMUM = 60;
  * the desktop showing through — the 1 px border and the rounded corners. Against a screen edge that
  * reads as the band not quite fitting, and anything behind it glows through the gap.
  */
+/** The rectangle DWM actually paints, which is inside the window's own by the invisible border. */
+const DWMWA_EXTENDED_FRAME_BOUNDS = 9;
 const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
 const DWMWA_BORDER_COLOR = 34;
 const DWMWCP_DEFAULT = 0;
@@ -166,13 +168,14 @@ interface Win32Api {
    *  work area it just shrank; an appbar has to sit in exactly the rectangle it reserved. */
   setWindowPos: (hwnd: number, rect: Rectangle) => void;
   /**
-   * Where the window is, in the same physical pixels `setWindowPos` was given.
+   * The window's rectangle and the part of it Windows actually paints, both physical.
    *
-   * The counterpart to the setter, and the only rectangle that can be compared with the
-   * reservation: from Electron 43 `getBounds()` answers with the DWM visible frame instead of the
-   * window rectangle, so it is short by the invisible resize border and never matches.
+   * They are not the same rectangle. A window carries an invisible resize border — measured here at
+   * seven pixels left, right and bottom — that belongs to the window but shows the desktop through.
+   * Electron 33 painted to the outer edge anyway; 43 paints only the inner one, which is what put a
+   * strip of wallpaper between a docked band and the screen edge.
    */
-  getWindowRect: (hwnd: number) => Rectangle | null;
+  frames: (hwnd: number) => { outer: Rectangle; painted: Rectangle } | null;
   /** Square corners and no border while docked; the window's usual look when not. */
   setEdges: (hwnd: number, flush: boolean) => void;
   make: (hwnd: number, edge: number, rect?: Rectangle) => AppBarData;
@@ -213,6 +216,9 @@ function loadWin32(): Win32Api | null {
     const DwmSetWindowAttribute = dwmapi.func("__stdcall", "DwmSetWindowAttribute", "int32", [
       "intptr", "uint32", koffi.pointer("uint32"), "uint32",
     ]);
+    const DwmGetWindowAttribute = dwmapi.func("__stdcall", "DwmGetWindowAttribute", "int32", [
+      "intptr", "uint32", koffi.out(koffi.pointer(RECT)), "uint32",
+    ]);
     win32 = {
       SHAppBarMessage: (message, data) => Number(SHAppBarMessage(message, data)),
       SHAppBarMessageAsync: (message, data) => new Promise((resolve, reject) => {
@@ -230,11 +236,19 @@ function loadWin32(): Win32Api | null {
       },
       setWindowPos: (hwnd, rect) =>
         void SetWindowPos(hwnd, 0, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING),
-      getWindowRect: (hwnd) => {
-        // koffi fills the struct that is passed in, the same way SHAppBarMessage's is filled.
-        const rc = { left: 0, top: 0, right: 0, bottom: 0 };
-        if (!GetWindowRect(hwnd, rc)) return null;
-        return { x: rc.left, y: rc.top, width: rc.right - rc.left, height: rc.bottom - rc.top };
+      frames: (hwnd) => {
+        // koffi fills the structs that are passed in, the same way SHAppBarMessage's is filled.
+        const box = (rc: { left: number; top: number; right: number; bottom: number }): Rectangle =>
+          ({ x: rc.left, y: rc.top, width: rc.right - rc.left, height: rc.bottom - rc.top });
+        const outer = { left: 0, top: 0, right: 0, bottom: 0 };
+        if (!GetWindowRect(hwnd, outer)) return null;
+        const painted = { left: 0, top: 0, right: 0, bottom: 0 };
+        // Non-zero means DWM has no answer — before the window is composited, for one. The outer
+        // rectangle is then the best guess, and the correction below becomes a no-op.
+        if (DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, painted, 16) !== 0) {
+          return { outer: box(outer), painted: box(outer) };
+        }
+        return { outer: box(outer), painted: box(painted) };
       },
       make: (hwnd, edge, rect) => ({
         cbSize: koffi.sizeof(APPBARDATA),
@@ -374,7 +388,7 @@ export class Dock {
    */
   private nativeRect(): Rectangle | null {
     if (process.platform !== "win32") return null;
-    return loadWin32()?.getWindowRect(nativeHandle(this.window)) ?? null;
+    return loadWin32()?.frames(nativeHandle(this.window))?.painted ?? null;
   }
 
   /** Put the window exactly on `rect` (physical pixels), without anyone second-guessing it. */
@@ -382,8 +396,22 @@ export class Dock {
     const api = process.platform === "win32" ? loadWin32() : null;
     this.placing = true;
     try {
-      if (api) api.setWindowPos(nativeHandle(this.window), rect);
-      else this.window.setBounds(rect);
+      if (!api) {
+        this.window.setBounds(rect);
+        return;
+      }
+      const hwnd = nativeHandle(this.window);
+      // `rect` is where the band has to APPEAR. SetWindowPos takes the window's own rectangle, which
+      // is bigger by the invisible border, so asking for the band exactly leaves the painted edge
+      // seven pixels inside it and the desktop showing through. Grow the request by that difference.
+      // Where the runtime paints to the outer edge the difference is zero and this is the old call.
+      const f = api.frames(hwnd);
+      api.setWindowPos(hwnd, f ? {
+        x: rect.x - (f.painted.x - f.outer.x),
+        y: rect.y - (f.painted.y - f.outer.y),
+        width: rect.width + (f.outer.width - f.painted.width),
+        height: rect.height + (f.outer.height - f.painted.height),
+      } : rect);
     } finally {
       this.placing = false;
     }
