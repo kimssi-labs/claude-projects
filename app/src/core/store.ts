@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { ConfigStore } from "./config.js";
 import { encodeProjectPath, homePaths, type HomePaths } from "./paths.js";
+import { factsFrom, type TranscriptFacts } from "./transcript.js";
 import type { ProjectInfo, SessionInfo } from "./types.js";
 
 const TRANSCRIPT_EXT = ".jsonl";
@@ -26,6 +27,15 @@ const HEAD_LINES = 20;
  * look at its first line is what made a scan take twenty seconds and the window go grey with it.
  */
 const HEAD_BYTES = 64 * 1024;
+/**
+ * How much of the END of a transcript is read, to find the newest `ai-title`.
+ *
+ * Claude Code rewrites that title as the conversation grows, so the last one is the good one and it
+ * sits near the end. Measured on a 139 KB session: 18 KB from the end. Half a megabyte is generous
+ * for that and still nothing next to a 48 MB file. A title further back than this window is simply
+ * not found, and the row falls back to the first prompt — which is what it showed before.
+ */
+const TAIL_BYTES = 512 * 1024;
 const NO_PROMPT = "(no prompt)";
 
 interface CacheEntry<T> { signature: string; value: T }
@@ -57,6 +67,30 @@ function readHead(file: string, bytes: number): string {
     handle = openSync(file, "r");
     const buffer = Buffer.allocUnsafe(bytes);
     const read = readSync(handle, buffer, 0, bytes, 0);
+    return buffer.subarray(0, read).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (handle !== null) {
+      try {
+        closeSync(handle);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+}
+
+/** The last `bytes` of a file as text. The first line comes back cut; callers drop it. */
+function readTail(file: string, bytes: number, size: number): string {
+  const from = Math.max(0, size - bytes);
+  if (from === 0) return "";                      // the head read already covered the whole file
+  let handle: number | null = null;
+  try {
+    handle = openSync(file, "r");
+    const want = size - from;
+    const buffer = Buffer.allocUnsafe(want);
+    const read = readSync(handle, buffer, 0, want, from);
     return buffer.subarray(0, read).toString("utf8");
   } catch {
     return "";
@@ -117,6 +151,8 @@ export class Store {
   private readonly folderExists: (path: string) => boolean;
   private titles: CacheEntry<Map<string, string>> | null = null;
   private cwds = new Map<string, CacheEntry<string | null>>();
+  /** Per transcript, re-read when it grows — unlike the cwd, the title keeps changing. */
+  private facts = new Map<string, CacheEntry<TranscriptFacts>>();
   /** Answers for `folderExists`, filled in by a background probe — see `folderReachable`. */
   private folders = new Map<string, boolean>();
   private probing = new Set<string>();
@@ -179,6 +215,23 @@ export class Store {
     }
     this.cwds.set(file, { signature: "", value: cwd });
     return cwd;
+  }
+
+  /**
+   * The title and the first real prompt, read from the transcript rather than from `history.jsonl`.
+   *
+   * Two bounded reads — the start for the prompt, the end for the newest `ai-title` — cached
+   * against size and mtime, so a session being appended to is re-read only when it actually grows.
+   */
+  transcriptFacts(file: string, st: { size: number; mtimeMs: number }): TranscriptFacts {
+    const sig = `${st.size}:${st.mtimeMs}`;
+    const hit = this.facts.get(file);
+    if (hit?.signature === sig) return hit.value;
+    const head = readHead(file, HEAD_BYTES);
+    const complete = st.size <= HEAD_BYTES;
+    const value = factsFrom(head, complete ? "" : readTail(file, TAIL_BYTES, st.size), complete);
+    this.facts.set(file, { signature: sig, value });
+    return value;
   }
 
   /**
@@ -265,14 +318,21 @@ export class Store {
     }
     cwd = cwd ?? known.get(dirName) ?? null;
 
-    const sessions: SessionInfo[] = stats.map(({ file, stat: st }) => {
+    const sessions: SessionInfo[] = stats.flatMap(({ file, stat: st }) => {
+      const facts = this.transcriptFacts(file, st);
+      // Not a session anyone can open: a few hundred bytes holding a title and no conversation.
+      // Claude Code leaves one behind whenever the talking ends up in a different file.
+      if (!facts.conversation) return [];
       const id = file.slice(file.lastIndexOf(sep()) + 1, -TRANSCRIPT_EXT.length);
       const custom = this.customTitle(dir, id);
-      const prompt = titles.get(id) ?? "";
-      return {
+      // The history file is the last resort now, not the first: it is not reliably per-session.
+      const prompt = facts.firstPrompt || titles.get(id) || "";
+      return [{
         id,
         file,
-        title: custom || prompt || NO_PROMPT,
+        // A name the user chose wins; then the one Claude Code wrote, which is what its own tab and
+        // /resume picker show; then the question that started it.
+        title: custom || facts.aiTitle || prompt || NO_PROMPT,
         named: Boolean(custom),
         prompt,
         startedAt: st.birthtimeMs || st.ctimeMs,
@@ -281,7 +341,7 @@ export class Store {
         live: live.has(id),
         pid: live.get(id) ?? null,
         pinned: pins.sessions.includes(id),
-      };
+      }];
     }).sort((a, b) => Number(b.pinned) - Number(a.pinned));   // stable: newest first within each group
 
     const dirMtime = statSync(dir).mtimeMs;

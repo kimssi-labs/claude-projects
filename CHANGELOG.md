@@ -3,6 +3,29 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.10.0
+
+- **A session is called what Claude Code calls it.** The terminal tab has always shown a tidied
+  title — `apiFuncGetStatus vs apiFuncGetSegmentStatus 차이` — while this app showed the raw
+  question it was typed as. That title is in the transcript all along, as an `ai-title` entry
+  rewritten as the conversation grows; the newest one is now what a row says. A name you chose still
+  wins over it, and the original question is still kept and still searchable.
+- **This app was destroying that title.** Reopening a session passed its own row text to Claude Code
+  as `--name`, which is stored as a *custom* title — so the raw question overwrote the good one
+  permanently, in Claude Code's own tab and `/resume` picker as well as here. `--name` is now passed
+  only for a session you actually renamed. If one was already overwritten, renaming it to an empty
+  name gives the generated title back.
+- **Files with no conversation in them are no longer listed.** Claude Code leaves behind a
+  few-hundred-byte transcript holding only a title whenever the talking ends up in another file;
+  there was nothing in one to open. A file too large to read in one go is never treated this way, so
+  a long session cannot be hidden by mistake.
+- Titles no longer come from `history.jsonl`, which turned out not to be reliable per session: the
+  first prompt of one session here is filed in it under a different session id that has no
+  transcript at all. It is now only a fallback.
+- Note that `/clear` genuinely starts a new session — a new id and a new transcript — so it still
+  adds a row. Those rows are real and resumable, and Claude Code's own `/resume` lists them too;
+  they just read as separate pieces of work now instead of near-duplicates.
+
 ## v2.9.1
 
 - **Updating itself works again — it never had.** Windows releases carried three different names for

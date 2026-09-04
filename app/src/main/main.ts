@@ -814,10 +814,11 @@ function registerIpc(): void {
       cwd: project.cwd,
       claudeExe: exe,
       sessionId: session?.id ?? null,
-      // The name goes to --name, which Claude Code puts in its prompt box, its /resume picker and
-      // the terminal tab. Passing the title this app shows is what keeps the tab and the row saying
-      // the same thing; a new session has no title yet and is left for Claude Code to name.
-      displayName: session ? session.title : null,
+      // Only a name the user chose. --name is persisted as a *custom* title, so passing the title
+      // this app happens to be showing overwrites the one Claude Code generated — permanently, in
+      // its own tab and /resume picker too. Left alone, it keeps refining that title as the
+      // conversation grows, and this app now reads it rather than competing with it.
+      displayName: session?.named ? session.title : null,
       config: launch,
       target: request.target,
       platform: process.platform,
