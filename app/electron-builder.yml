@@ -32,6 +32,13 @@ nsis:
   createDesktopShortcut: false        # the Start entry is enough; a desktop icon is clutter
   createStartMenuShortcut: true          # the Start entry is what Windows pins to the taskbar from
   shortcutName: Hangar
+  # No spaces in the name, or nothing can update. electron-builder's default is "Hangar Setup
+  # 2.9.0.exe"; it writes a space-to-dash form of that into latest.yml, while GitHub's upload turns
+  # the spaces into dots. Three different names, and the updater fetches the one that 404s. With no
+  # space to substitute, both rewrites become no-ops and the three finally agree.
+  artifactName: ${productName}-Setup-${version}.${ext}
+portable:
+  artifactName: ${productName}-${version}.${ext}
 linux:
   maintainer: kimssi-labs <kimssi-labs@users.noreply.github.com>
   icon: build/icon.png

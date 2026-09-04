@@ -3,6 +3,26 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.9.1
+
+- **Updating itself works again — it never had.** Windows releases carried three different names for
+  the same installer: electron-builder built `Hangar Setup 2.9.0.exe`, wrote the space-to-dash form
+  `Hangar-Setup-2.9.0.exe` into `latest.yml`, and GitHub stored the uploaded file as
+  `Hangar.Setup.2.9.0.exe`, because it turns spaces into dots. The updater asked for the dashed name
+  and got a 404 every time, silently, on every release so far. The installer is named without spaces
+  now, so all three agree. Linux was never affected — those names had no spaces to begin with.
+  An installed copy reads the newest release's metadata on each check, so existing installations
+  reach this one and are fixed from here on.
+- **A release cannot break that way again unnoticed**: after publishing, CI compares every `url:` in
+  `latest*.yml` against the assets GitHub actually hosts, and fails the run if one is missing. The
+  check has to live after the upload, because that is where the renaming happens.
+- **CI asks for far less.** Write access to the repository is granted to the publish job alone
+  instead of to every job in the file, tag names reach scripts through the environment rather than
+  being spliced into a shell command, and the four GitHub actions are pinned to commit hashes rather
+  than to tags that can be moved under us.
+- Node 20 in CI reached end of life in April; the workflow builds on 22.
+- Paths in comments, tests and the changelog use a placeholder account name.
+
 ## v2.9.0
 
 - **Every question the app asks is drawn in the app.** Deleting a project or a session, naming a
