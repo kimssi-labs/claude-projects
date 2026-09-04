@@ -11,6 +11,7 @@ import type { Language } from "@core/i18n";
 import { placeWorktrees, type Worktree } from "@core/worktree";
 import { gitMenuItems, isGitAction, runGitAction, useDirtyPatch, useGit } from "../features/git/ui";
 import { useUsage } from "../features/usage/ui";
+import { useMetrics } from "../features/metrics/ui";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
 import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
@@ -37,8 +38,6 @@ const NAV_MAX = 560;
 const ASIDE_MIN = 160;
 /** Enough of a stacked pane to be a list rather than a sliver. */
 const ASIDE_MAX = 640;
-
-const HISTORY_LIMIT = 300;
 
 type Toast = { text: string; tone: "ok" | "bad" } | null;
 
@@ -76,15 +75,13 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
   const [update, setUpdate] = useState<UpdateState>(() => initialUpdateState("", true));
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("dock");
-  const [systemHistory, setSystemHistory] = useState<MetricSample[]>([]);
-  // Not part of the history: a clock speed is a reading of right now, not a series.
-  const [cpuGhz, setCpuGhz] = useState<number | null>(null);
-  /** What the machine has, as the sampler reports it — the ceiling the memory graph is drawn to. */
-  const [memoryTotal, setMemoryTotal] = useState(0);
+  // The graphs' series and their readings live with the metrics feature; destructured so the
+  // markup below reads as it did.
+  const metrics = useMetrics();
+  const { systemHistory, sessionHistory, cpuGhz, memoryTotal, totalMemory, latestSystem } = metrics;
   // Docked counts as maximised: the band is the window at its full extent, so the middle caption
   // button offers to restore, and restoring is what gives the edge back.
   const [windowState, setWindowState] = useState({ maximized: false, docked: false });
-  const [sessionHistory, setSessionHistory] = useState<Record<string, MetricSample[]>>({});
   const [theme, setTheme] = useState<ThemeMode>("system");
   // Fractions of the window, not pixels: 0 = the size the layout would have chosen, anything else
   // is where the user left the divider — and it means the same thing when the window changes shape.
@@ -108,8 +105,8 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   // First paint: everything the window needs, plus the position the last run ended on.
   useEffect(() => {
     void (async () => {
-      const [scanned, appInfo, history, saved] = await Promise.all([
-        api.scan(), api.appInfo(), api.metrics(), api.loadSettings(), usage.refresh(),
+      const [scanned, appInfo, saved] = await Promise.all([
+        api.scan(), api.appInfo(), api.loadSettings(), usage.refresh(), metrics.load(),
       ]);
       setTheme(saved.ui.theme);
       setNavFraction(saved.ui.navWidth);
@@ -120,8 +117,6 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
       setInfo(appInfo);
       setUpdate((previous) => ({ ...previous, current: appInfo.version }));
       onLanguage({ language: saved.ui.language, locale: appInfo.locale });
-      setSystemHistory(history.system);
-      setSessionHistory(history.sessions);
     })();
   }, []);
 
@@ -155,21 +150,6 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     return () => observer.disconnect();
   }, [mode]);
   useEffect(() => { void api.windowState().then(setWindowState); }, []);
-
-  useEffect(() => api.onMetrics((snapshot: MetricsSnapshot) => {
-    setCpuGhz(snapshot.system.cpuGhz);
-    setMemoryTotal(snapshot.system.memoryTotalBytes);
-    setSystemHistory((previous) => cap([...previous, {
-      at: snapshot.at, cpu: snapshot.system.cpu, memoryBytes: snapshot.system.memoryBytes,
-    }]));
-    setSessionHistory((previous) => {
-      const next: Record<string, MetricSample[]> = {};
-      for (const [id, usage] of Object.entries(snapshot.sessions)) {
-        next[id] = cap([...(previous[id] ?? []), { at: snapshot.at, cpu: usage.cpu, memoryBytes: usage.memoryBytes }]);
-      }
-      return next;
-    });
-  }), []);
 
   /**
    * The list as it is drawn: matches in order, with each worktree tucked under its repository.
@@ -539,10 +519,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     await refresh();
   }, [screen, session, openProject, project, notify, refresh]);
 
-  // The machine's memory when the sampler has said so; until then, the largest reading seen.
-  const totalMemory = memoryTotal || (systemHistory.length ? Math.max(...systemHistory.map((s) => s.memoryBytes)) : 1);
   const usageWindows = usage.status?.windows ?? [];
-  const latestSystem = systemHistory.length ? systemHistory[systemHistory.length - 1] : null;
   // Both machine gauges read the same way: the share first, then the quantity behind it — a load
   // without its clock, or a percentage of memory without the gigabytes, is half a reading.
   const cpuValue = latestSystem
@@ -975,8 +952,4 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
       ) : null}
     </div>
   );
-}
-
-function cap(samples: MetricSample[]): MetricSample[] {
-  return samples.length > HISTORY_LIMIT ? samples.slice(samples.length - HISTORY_LIMIT) : samples;
 }

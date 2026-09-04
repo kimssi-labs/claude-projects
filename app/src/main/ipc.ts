@@ -1,8 +1,6 @@
 /** The one place the renderer can reach the machine: every channel, with its argument checked. */
 export const CHANNEL = {
   scan: "projects:scan",
-  metrics: "metrics:history",
-  metricsPush: "metrics:push",                   // main -> renderer, on every sample
   settingsPush: "settings:push",                 // main -> renderer, when main changed them
   pasteImage: "clipboard:paste-image",
   pasteResult: "clipboard:paste-result",   // main -> renderer, after the global shortcut

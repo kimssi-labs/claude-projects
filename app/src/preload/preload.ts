@@ -12,22 +12,11 @@ import { CHANNEL } from "../main/ipc.js";
 import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, DeleteRequest, DisplayInfo, OpenSessionRequest, PastedImage, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricSample, MetricsSnapshot, ProjectInfo, StatusConfig, StatusSnapshot, UiConfig, UpdateConfig } from "../core/types.js";
 
-export interface MetricsHistoryPayload {
-  system: MetricSample[];
-  sessions: Record<string, MetricSample[]>;
-}
-
 const api = {
   // Derived from the feature contracts. The entries written out below are the features that have
   // not moved onto a contract yet; they leave this file one feature at a time.
   ...buildApi(CONTRACTS, ipcRenderer),
   scan: (): Promise<ProjectInfo[]> => ipcRenderer.invoke(CHANNEL.scan),
-  metrics: (): Promise<MetricsHistoryPayload> => ipcRenderer.invoke(CHANNEL.metrics),
-  onMetrics: (listener: (snapshot: MetricsSnapshot) => void): (() => void) => {
-    const handler = (_event: unknown, snapshot: MetricsSnapshot): void => listener(snapshot);
-    ipcRenderer.on(CHANNEL.metricsPush, handler);
-    return () => ipcRenderer.removeListener(CHANNEL.metricsPush, handler);
-  },
   onSettings: (listener: (settings: SettingsPayload) => void): (() => void) => {
     const handler = (_event: unknown, settings: SettingsPayload): void => listener(settings);
     ipcRenderer.on(CHANNEL.settingsPush, handler);

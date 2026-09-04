@@ -12,7 +12,7 @@ import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, n
 
 import { ConfigStore, percentFloor } from "../core/config.js";
 import { launchCommand, sessionEnvironment, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
-import { MetricsHistory, SYSTEM_SERIES } from "../core/metrics.js";
+import { register as registerMetrics } from "../features/metrics/main.js";
 import { claudeHome, homePaths } from "../core/paths.js";
 import { register as registerUsage } from "../features/usage/main.js";
 import { wire } from "../bridge/build.js";
@@ -27,9 +27,8 @@ import { sendPaste } from "./keystroke.js";
 import { startClipboardWatch, stopClipboardWatch } from "./clipboardWatch.js";
 import { DOCK_PERCENT } from "../core/constants.js";
 import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
-import { Worker } from "node:worker_threads";
 
-import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
+import type { SessionTarget } from "./sampler.js";
 
 const DEV_SERVER = "http://localhost:5273";
 const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as const;
@@ -150,7 +149,6 @@ function pushWindowState(): void {
 
 const store = new Store();
 const config = new ConfigStore();
-const history = new MetricsHistory();
 
 /**
  * What a feature's main side may reach, and the plumbing it registers through.
@@ -170,10 +168,11 @@ const wiring = wire(ipcMain, (channel, value) => window?.webContents.send(channe
 // into every settings answer. That dependency belongs to settings and moves with it; until then the
 // feature is a module-level constant, not a mutable global.
 const usageFeature = registerUsage(context, wiring, { settingsPayload });
+// Module level for the same reason: the monitor starts at ready and stops at quit, both outside
+// registerIpc. The sessions worth measuring are projects' knowledge, handed over as a function.
+const metricsFeature = registerMetrics(context, wiring, { targets: sampleTargets });
 let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
-let sampling: NodeJS.Timeout | null = null;
-let worker: Worker | null = null;
 let splash: BrowserWindow | null = null;
 /** The step named before the loading page had parsed, so it is not lost. */
 let pendingStep = "Starting…";
@@ -302,7 +301,7 @@ function scanProjects(): ProjectInfo[] {
   }
   const ms = Date.now() - t0;
   if (ms > 200) console.log(`[hangar] scan took ${ms} ms for ${lastProjects.length} projects`);
-  pushTargets();                                  // the running set may have changed
+  metricsFeature.retarget();                      // the running set may have changed
   return lastProjects;
 }
 
@@ -441,62 +440,6 @@ function sampleTargets(): SessionTarget[] {
     project.sessions.filter((s) => s.live && s.pid).map((s) => ({ sessionId: s.id, pid: s.pid as number })));
 }
 
-function acceptSnapshot(snapshot: MetricsSnapshot): void {
-  history.push(snapshot);
-  history.keepOnly(Object.keys(snapshot.sessions));
-  window?.webContents.send(CHANNEL.metricsPush, snapshot);
-}
-
-function stopSampling(): void {
-  if (worker) {
-    worker.postMessage({ stop: true });
-    void worker.terminate();
-    worker = null;
-  }
-  if (sampling) {
-    clearInterval(sampling);
-    sampling = null;
-  }
-}
-
-/**
- * The in-process sampler, used only if the worker cannot start.
- *
- * Packaging can put the worker script somewhere `new Worker()` will not follow; measuring on the
- * main thread is worse than measuring off it, but far better than not measuring at all.
- */
-function startInlineSampling(): void {
-  if (sampling) return;
-  sampling = setInterval(() => {
-    void sample(sampleTargets())
-      .then(acceptSnapshot)
-      .catch(() => {
-        /* a sampling hiccup must never take the app down */
-      });
-  }, SAMPLE_INTERVAL_MS);
-}
-
-/** Runs only when the setting says so — the whole point of the setting is that off costs nothing. */
-/** Runs only when the setting says so — the whole point of the setting is that off costs nothing. */
-function startSampling(): void {
-  if (worker || sampling) return;
-  if (!config.ui().monitor) return;
-  try {
-    worker = new Worker(join(__dirname, "samplerWorker.js"), { workerData: { intervalMs: SAMPLE_INTERVAL_MS } });
-    worker.on("message", (snapshot: MetricsSnapshot) => acceptSnapshot(snapshot));
-    worker.on("error", (error) => {
-      console.error("[hangar] sampler worker failed, measuring in-process:", error.message);
-      worker = null;
-      startInlineSampling();
-    });
-    worker.unref();                               // a sampler must never hold the app open
-    pushTargets();
-  } catch (error) {
-    console.error("[hangar] sampler worker unavailable:", (error as Error).message);
-    startInlineSampling();
-  }
-}
-
 /**
  * Re-read the dock for the monitors attached right now, and do what it says.
  *
@@ -622,11 +565,6 @@ function announce(title: string, body: string): void {
   }
 }
 
-/** Tell the sampler which sessions to follow; called after every scan. */
-function pushTargets(): void {
-  worker?.postMessage({ targets: sampleTargets() });
-}
-
 function settingsPayload(): SettingsPayload {
   const dockConfig = config.dock(null, setupKey());
   const { display } = pickDisplay(dockConfig.device);
@@ -677,11 +615,6 @@ function displays(): DisplayInfo[] {
 
 function registerIpc(): void {
   ipcMain.handle(CHANNEL.scan, () => scanProjects());
-  ipcMain.handle(CHANNEL.metrics, () => ({
-    system: history.get(SYSTEM_SERIES),
-    sessions: Object.fromEntries(history.keys().filter((k) => k !== SYSTEM_SERIES).map((k) => [k, history.get(k)])),
-  }));
-
   ipcMain.handle(CHANNEL.openSession, (_event, request: OpenSessionRequest): ActionResult => {
     const project = findProject(request.projectDir);
     if (!project?.cwd) return { ok: false, message: "That project's folder is unknown." };
@@ -920,8 +853,8 @@ function registerIpc(): void {
     // The theme lives with the rest of the remembered position, so it comes back with it.
     if (payload.ui) {
       config.saveUi({ ...config.ui(), ...payload.ui });
-      if (config.ui().monitor) startSampling();
-      else stopSampling();
+      if (config.ui().monitor) metricsFeature.start();
+      else metricsFeature.stop();
     }
     const saved = settingsPayload();
     // Tell the window too: whoever changed a setting, the screen should already agree with it.
@@ -1010,7 +943,7 @@ app.whenReady().then(async () => {
   splashSays(`Opening ${lastProjects.length} project${lastProjects.length === 1 ? "" : "s"}…`);
   await createWindow();
   splashSays("Starting the monitor…");
-  startSampling();
+  metricsFeature.start();
   registerPasteHotkey();
   applyClipboardWatch();
 
@@ -1039,7 +972,7 @@ app.on("child-process-gone", (_event, details) =>
 
 app.on("window-all-closed", () => {
   console.log("[hangar] window-all-closed -> quitting");
-  stopSampling();
+  metricsFeature.stop();
   dock?.releaseSync();
   app.quit();
 });
