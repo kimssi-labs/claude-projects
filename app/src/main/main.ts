@@ -16,8 +16,9 @@ import { MetricsHistory, SYSTEM_SERIES } from "../core/metrics.js";
 import { claudeHome, homePaths } from "../core/paths.js";
 import { readStatus, readStatusUpdatedAt } from "../core/status.js";
 import { hookCommand, hookFileName, hookInstalled, hookScript, withHook, withoutHook } from "../core/usageHook.js";
-import type { UpdateState } from "../core/updates.js";
-import { UpdateService } from "./updater.js";
+import { wire } from "../bridge/build.js";
+import type { MainContext } from "../bridge/context.js";
+import { register as registerUpdates } from "../features/updates/main.js";
 import {
   countChanges, createWorktree, dropWorktree, headOf, isLinkedWorktree, listWorktrees, mainCheckoutOf,
   updateFromBase,
@@ -29,7 +30,7 @@ import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from
 import { sendPaste } from "./keystroke.js";
 import { startClipboardWatch, stopClipboardWatch } from "./clipboardWatch.js";
 import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type UpdateCommand, type UsageState, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type UsageState, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 import { Worker } from "node:worker_threads";
 
 import { sample, SAMPLE_INTERVAL_MS, type SessionTarget } from "./sampler.js";
@@ -153,15 +154,22 @@ function pushWindowState(): void {
 
 const store = new Store();
 const config = new ConfigStore();
+const history = new MetricsHistory();
 
 /**
- * Updating in place. Its state is pushed rather than polled: a download runs for a while, and a
- * settings screen that only learned about it when reopened would look stuck.
+ * What a feature's main side may reach, and the plumbing it registers through.
+ *
+ * Built before the window exists, which is why `window` is a getter: the closures read the
+ * variable when they are called, not now. Nothing else about the shared state is handed out — a
+ * feature that needs more asks for it here, and gets it only once a second feature does too.
  */
-const updates = new UpdateService(config.updates(), (state: UpdateState) => {
-  window?.webContents.send(CHANNEL.updatePush, state);
-});
-const history = new MetricsHistory();
+const context: MainContext = {
+  window: () => window,
+  config,
+  store,
+  notify: (text) => window?.webContents.send(CHANNEL.toast, text),
+};
+const wiring = wire(ipcMain, (channel, value) => window?.webContents.send(channel, value));
 let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
 let sampling: NodeJS.Timeout | null = null;
@@ -956,7 +964,10 @@ function registerIpc(): void {
     return { ok: true, message: pinned ? "Pinned to the top." : "Unpinned." };
   });
 
-  updates.start();
+  // Features on the contract bridge register themselves here; each hands back the one thing the
+  // rest of main may still ask of it. The handlers written out around this are the features that
+  // have not moved yet.
+  const updatesFeature = registerUpdates(context, wiring);
   startSweep();
 
   /**
@@ -1035,13 +1046,6 @@ function registerIpc(): void {
     return { ok: true, message: "Worktree removed." };
   });
 
-  ipcMain.handle(CHANNEL.updateAction, async (_event, command: UpdateCommand): Promise<UpdateState> => {
-    if (command === "check") return updates.check(true);
-    if (command === "download") return updates.download();
-    updates.install();
-    return updates.current();
-  });
-
   ipcMain.handle(CHANNEL.setUsageHook, (_event, on: boolean): ActionResult & { settings: SettingsPayload } => {
     const result = setUsageCollection(on);
     return { ...result, settings: settingsPayload() };
@@ -1104,7 +1108,7 @@ function registerIpc(): void {
     }
     if (payload.updates) {
       config.saveUpdates(payload.updates);
-      updates.setConfig(payload.updates);          // the timer starts, stops or re-arms with it
+      updatesFeature.setConfig(payload.updates);   // the timer starts, stops or re-arms with it
     }
     if (payload.launch) {
       config.saveLaunch(payload.launch);

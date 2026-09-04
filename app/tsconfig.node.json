@@ -12,5 +12,8 @@
     "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src/main", "src/preload", "src/core"]
+  "include": [
+    "src/main", "src/preload", "src/core", "src/bridge",
+    "src/features/**/contract.ts", "src/features/**/main.ts"
+  ]
 }

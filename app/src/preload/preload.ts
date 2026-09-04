@@ -6,10 +6,11 @@
  */
 import { contextBridge, ipcRenderer } from "electron";
 
+import { buildApi } from "../bridge/build.js";
+import { CONTRACTS } from "../bridge/registry.js";
 import { CHANNEL } from "../main/ipc.js";
-import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, UpdateCommand, DeleteRequest, DisplayInfo, OpenSessionRequest, PastedImage, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
+import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, DeleteRequest, DisplayInfo, OpenSessionRequest, PastedImage, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricSample, MetricsSnapshot, ProjectInfo, StatusConfig, StatusSnapshot, UiConfig, UpdateConfig } from "../core/types.js";
-import type { UpdateState } from "../core/updates.js";
 
 export interface MetricsHistoryPayload {
   system: MetricSample[];
@@ -17,6 +18,9 @@ export interface MetricsHistoryPayload {
 }
 
 const api = {
+  // Derived from the feature contracts. The entries written out below are the features that have
+  // not moved onto a contract yet; they leave this file one feature at a time.
+  ...buildApi(CONTRACTS, ipcRenderer),
   scan: (): Promise<ProjectInfo[]> => ipcRenderer.invoke(CHANNEL.scan),
   status: (): Promise<StatusSnapshot> => ipcRenderer.invoke(CHANNEL.status),
   metrics: (): Promise<MetricsHistoryPayload> => ipcRenderer.invoke(CHANNEL.metrics),
@@ -62,13 +66,6 @@ const api = {
     ipcRenderer.invoke(CHANNEL.worktreeRemove, { dir, force }),
   /** Bring one project's branch up to date with its base branch. */
   gitSync: (dir: string): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.gitSync, dir),
-  /** Ask the updater to check, download, or restart into what it downloaded. */
-  updateAction: (command: UpdateCommand): Promise<UpdateState> => ipcRenderer.invoke(CHANNEL.updateAction, command),
-  onUpdate: (listener: (state: UpdateState) => void): (() => void) => {
-    const handler = (_event: unknown, state: UpdateState): void => listener(state);
-    ipcRenderer.on(CHANNEL.updatePush, handler);
-    return () => ipcRenderer.removeListener(CHANNEL.updatePush, handler);
-  },
   /** Install or remove the Stop hook that publishes Claude Code's usage figures. */
   setUsageHook: (on: boolean): Promise<ActionResult & { settings: SettingsPayload }> =>
     ipcRenderer.invoke(CHANNEL.setUsageHook, on),
