@@ -14,5 +14,8 @@
     "baseUrl": ".",
     "paths": { "@core/*": ["src/core/*"] }
   },
-  "include": ["src/core", "src/renderer", "src/preload", "e2e"]
+  "include": [
+    "src/core", "src/renderer", "src/preload", "src/bridge", "e2e",
+    "src/features/**/contract.ts", "src/features/**/ui.tsx"
+  ]
 }

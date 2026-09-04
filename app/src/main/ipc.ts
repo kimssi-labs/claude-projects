@@ -20,7 +20,6 @@ export const CHANNEL = {
   contextMenu: "menu:context",
   togglePin: "pin:toggle",
   setUsageHook: "usage:hook",
-  updateAction: "update:action",
   gitCount: "git:count",
   gitSync: "git:sync",
   worktreeAdd: "worktree:add",
@@ -28,7 +27,6 @@ export const CHANNEL = {
   worktreeList: "worktree:list",
   openPage: "app:open-page",
   toast: "app:toast",                // main -> renderer, when something finished on its own
-  updatePush: "update:push",          // main -> renderer, as a check or download moves on
   loadSettings: "settings:load",
   saveSettings: "settings:save",
   displays: "settings:displays",
@@ -99,7 +97,6 @@ export const PAGES = {
 export type PageName = keyof typeof PAGES;
 
 /** What the settings screen can ask of the updater. */
-export type UpdateCommand = "check" | "download" | "install";
 
 export interface UsageState {
   /** Our Stop hook is registered in Claude Code's settings. */
