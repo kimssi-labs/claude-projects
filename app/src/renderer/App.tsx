@@ -14,13 +14,14 @@ import {
   ProjectPane, projectMenuItems, rename, runProjectAction, runSessionAction, SessionList, sessionMenuItems, SessionPreview,
   useProjects,
 } from "../features/projects/ui";
+import { useSettings } from "../features/settings/ui";
+import { useUpdates } from "../features/updates/ui";
 import { useUsage } from "../features/usage/ui";
 import { useMetrics } from "../features/metrics/ui";
 import { usePasteResults } from "../features/clipboard/ui";
 import type { ProjectInfo, SessionInfo, ThemeMode } from "@core/types";
 
-import { api, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
-import { initialState as initialUpdateState } from "@core/updates";
+import { api, type AppInfo, type DisplayInfo, type SettingsPayload } from "./api";
 import { DockButton, DockGrip, useDock } from "../features/dock/ui";
 import { AreaChart, UsageCard } from "./components/Chart";
 import { ProjectDetail, SessionDetail } from "./components/Lists";
@@ -77,9 +78,10 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const [toast, setToast] = useState<Toast>(null);
   /** The dialog on screen, and the promise waiting on its answer. */
   const [dialog, setDialog] = useState<{ ask: Ask; settle: (result: AskResult) => void } | null>(null);
-  const [settings, setSettings] = useState<SettingsPayload | null>(null);
+  // The payload is the settings feature's; the screen it is edited on is opened from here.
+  const { settings, setSettings, load: loadSettings, save: saveSettings } = useSettings();
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
-  const [update, setUpdate] = useState<UpdateState>(() => initialUpdateState("", true));
+  const updates = useUpdates(info?.version);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("dock");
   // The graphs' series and their readings live with the metrics feature; destructured so the
   // markup below reads as it did.
@@ -113,15 +115,13 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   useEffect(() => {
     void (async () => {
       const [, appInfo, saved] = await Promise.all([
-        scan(), api.appInfo(), api.loadSettings(), usage.refresh(), metrics.load(),
+        scan(), api.appInfo(), loadSettings(), usage.refresh(), metrics.load(),
       ]);
       setTheme(saved.ui.theme);
       setNavFraction(saved.ui.navWidth);
       setAsideFraction(saved.ui.asideWidth);
       setStackFraction(saved.ui.stackTop);
-      setSettings(saved);
       setInfo(appInfo);
-      setUpdate((previous) => ({ ...previous, current: appInfo.version }));
       onLanguage({ language: saved.ui.language, locale: appInfo.locale });
     })();
   }, []);
@@ -131,16 +131,11 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     return () => clearInterval(timer);
   }, [refresh]);
 
-  // Live samples arrive from the main process; keep the same bounded history the sampler keeps.
-  // Main can change the settings on its own — undocking when the window is dragged out of its band.
-  useEffect(() => api.onSettings((next) => setSettings(next)), []);
   // Main can save the settings too, so the language follows from wherever it changed.
   useEffect(() => {
     if (settings && info) onLanguage({ language: settings.ui.language, locale: info.locale });
   }, [settings?.ui.language, info?.locale, onLanguage, settings, info]);
   useEffect(() => api.onWindowState(setWindowState), []);
-  // A download runs for a while; the screen learns about it as it happens rather than on reopen.
-  useEffect(() => api.onUpdate(setUpdate), []);
 
   // Measure the room the two stacked panes share, rather than guessing it from the window: the
   // header and toolbar above them came to 149 px here, which is more than a divider can spare.
@@ -307,7 +302,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const applySettings = useCallback(async (next: SettingsPayload) => {
     // Every section, not a list that has to be remembered: a section left out of this call is a
     // setting the screen appears to change and then silently reverts on the next push.
-    const saved = await api.saveSettings({
+    const saved = await saveSettings({
       dock: next.dock,
       status: next.status,
       launch: next.launch,
@@ -315,14 +310,12 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
       git: next.git,
       updates: next.updates,
     });
-    setSettings(saved);
     setTheme(saved.ui.theme);
     await usage.refresh();                          // which windows are shown is a setting
   }, [usage.refresh]);
 
   const openSettings = useCallback(async () => {
-    const [loaded, screens] = await Promise.all([api.loadSettings(), dock.displays()]);
-    setSettings(loaded);
+    const [, screens] = await Promise.all([loadSettings(), dock.displays()]);
     setDisplays(screens);
     setScreen("settings");
   }, []);
@@ -547,8 +540,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
               onCollectUsage={(on) => void collectUsage(on)}
               onOpenPage={(page) => void api.openPage(page)}
               locale={info?.locale ?? "en"}
-              updateState={update}
-              onUpdateAction={(command) => void api.updateAction(command).then(setUpdate)}
+              updates={updates}
               onClose={back}
             />
           ) : (

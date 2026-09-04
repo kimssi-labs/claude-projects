@@ -8,12 +8,15 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import type { ProjectInfo } from "@core/types";
+import { AUTO_DEFAULTS, AUTO_MODES, MIN_INTERVAL_MINUTES } from "@core/gitAuto";
+import { MERGE_STRATEGIES } from "@core/gitSync";
+import type { GitConfig, ProjectInfo } from "@core/types";
 import type { Worktree } from "@core/worktree";
 
 import { api, type MenuItemSpec } from "../../renderer/api";
 import type { Ask, AskResult } from "../../renderer/components/Modal";
-import type { useText } from "../../renderer/useText";
+import { Choice } from "../../renderer/components/SettingsCard";
+import { useText } from "../../renderer/useText";
 
 type Translate = ReturnType<typeof useText>;
 
@@ -136,4 +139,106 @@ export function useDirtyPatch(setProjects: (update: (previous: ProjectInfo[]) =>
       ? { ...item, git: { ...item.git, dirty } }
       : item)));
   }, [setProjects]);
+}
+
+/** The settings card body: the row line, the change count, and how updating from the base works. */
+export function GitSettings({ git, available, onChange, onInstall }: {
+  git: GitConfig;
+  /** Whether the git command line is on PATH — the branch line does not need it, the rest does. */
+  available: boolean;
+  onChange(git: GitConfig): void;
+  /** Open the download page. */
+  onInstall(): void;
+}) {
+  const t = useText();
+  const set = (patch: Partial<GitConfig>): void => onChange({ ...git, ...patch });
+  return (
+    <>
+      <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink-700/60">
+        <input
+          type="checkbox"
+          checked={git.enabled}
+          onChange={() => set({ enabled: !git.enabled })}
+          className="accent-accent"
+        />
+        <span className="text-sm text-bone-100">{t("settings.git.show")}</span>
+      </label>
+      <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink-700/60">
+        <input
+          type="checkbox"
+          checked={git.countChanges}
+          disabled={!git.enabled}
+          onChange={() => set({ countChanges: !git.countChanges })}
+          className="accent-accent"
+        />
+        <span className={`text-sm ${git.enabled ? "text-bone-100" : "text-bone-500"}`}>
+          {t("settings.git.count")}
+        </span>
+      </label>
+      <div className="text-[11px] text-bone-500">{t("settings.git.note")}</div>
+
+      <div className="text-[11px] text-bone-500 pt-2">{t("settings.git.updating")}</div>
+      <label className="block px-3 py-1.5">
+        <span className="text-[11px] text-bone-500">{t("settings.git.base")}</span>
+        <input
+          value={git.base}
+          onChange={(event) => set({ base: event.target.value })}
+          placeholder={t("settings.git.base.placeholder")}
+          spellCheck={false}
+          className="mt-1 w-full bg-ink-800 border border-ink-600 rounded-lg px-3 py-1.5 text-sm placeholder:text-bone-500 focus:border-accent/60"
+        />
+      </label>
+      {MERGE_STRATEGIES.map((strategy) => (
+        <Choice
+          key={strategy.key}
+          label={strategy.label}
+          note={strategy.note}
+          selected={git.strategy === strategy.key}
+          onSelect={() => set({ strategy: strategy.key })}
+        />
+      ))}
+      <div className="text-[11px] text-bone-500">{t("settings.git.runNote")}</div>
+
+      <div className="text-[11px] text-bone-500 pt-2">{t("settings.git.auto")}</div>
+      {AUTO_MODES.map((mode) => (
+        <Choice
+          key={mode.key}
+          label={mode.label}
+          note={mode.note}
+          selected={git.auto.mode === mode.key}
+          onSelect={() => set({ auto: { ...git.auto, mode: mode.key } })}
+        />
+      ))}
+      {git.auto.mode === "off" ? null : (
+        <label className="flex items-center gap-2 px-3 py-1.5">
+          <span className="text-[11px] text-bone-500">{t("settings.git.every")}</span>
+          <input
+            type="number"
+            min={MIN_INTERVAL_MINUTES}
+            value={git.auto.everyMinutes}
+            onChange={(event) => set({
+              auto: { ...git.auto, everyMinutes: Number(event.target.value) || AUTO_DEFAULTS.everyMinutes },
+            })}
+            className="w-20 bg-ink-800 border border-ink-600 rounded-lg px-2 py-1 text-sm focus:border-accent/60"
+          />
+          <span className="text-[11px] text-bone-500">
+            {t("settings.git.minutes", { min: MIN_INTERVAL_MINUTES })}
+          </span>
+        </label>
+      )}
+      {git.auto.mode === "full" ? (
+        <div className="text-[11px] text-warn">{t("settings.git.fullWarning")}</div>
+      ) : null}
+      {/* The branch line is read from .git and needs nothing installed; everything below it
+          shells out, so say which half is unavailable rather than failing quietly later. */}
+      {available ? null : (
+        <div className="flex items-center gap-2 pt-1">
+          <span className="text-[11px] text-warn flex-1">{t("settings.git.missing")}</span>
+          <button type="button" className="btn btn-accent shrink-0" onClick={onInstall}>
+            {t("settings.git.install")}
+          </button>
+        </div>
+      )}
+    </>
+  );
 }
