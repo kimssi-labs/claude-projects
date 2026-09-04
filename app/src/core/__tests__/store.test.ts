@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -189,6 +189,53 @@ describe("Store.addProject", () => {
     expect(added?.cwd).toBe(cwd);
     expect(added?.name).toBe("Fresh");
     expect(added?.sessions).toHaveLength(0);
+  });
+});
+
+describe("titles come from the transcript, not the history file", () => {
+  it("shows the title Claude Code generated, in preference to the raw first prompt", () => {
+    const fixture = makeHome();
+    const transcript = join(fixture.home, "projects", fixture.dir, `${fixture.sessionId}.jsonl`);
+    appendFileSync(
+      transcript,
+      `${JSON.stringify({ type: "ai-title", aiTitle: "다듬어진 제목", sessionId: fixture.sessionId })}\n`,
+    );
+    const store = new Store(fixture.home, { isAlive: () => false, folderExists: () => true });
+    const session = store.scan()[0]?.sessions[0];
+    expect(session?.title).toBe("다듬어진 제목");
+    expect(session?.prompt).toBe("첫 프롬프트");     // the question itself is still known
+    expect(session?.named).toBe(false);             // and it is not treated as a name the user chose
+  });
+
+  it("still lets a name the user chose win over it", () => {
+    const fixture = makeHome();
+    appendFileSync(
+      join(fixture.home, "projects", fixture.dir, `${fixture.sessionId}.jsonl`),
+      `${JSON.stringify({ type: "ai-title", aiTitle: "다듬어진 제목" })}\n`,
+    );
+    const store = new Store(fixture.home, { isAlive: () => false, folderExists: () => true });
+    store.renameSession(store.scan()[0]!.sessions[0]!, "내가 붙인 이름");
+    expect(store.scan()[0]?.sessions[0]?.title).toBe("내가 붙인 이름");
+
+    // An empty name takes it off again — the only way back for a session whose generated title an
+    // earlier version of this app overwrote by passing --name.
+    store.renameSession(store.scan()[0]!.sessions[0]!, "");
+    const back = store.scan()[0]?.sessions[0];
+    expect(back?.title).toBe("다듬어진 제목");
+    expect(back?.named).toBe(false);
+  });
+
+  it("leaves out a title-only file, which has no conversation to open", () => {
+    const fixture = makeHome();
+    const stub = "88888888-2222-3333-4444-555555555555";
+    writeFileSync(
+      join(fixture.home, "projects", fixture.dir, `${stub}.jsonl`),
+      `${JSON.stringify({ type: "ai-title", aiTitle: "어딘가 다른 파일에 있는 대화" })}\n`
+      + `${JSON.stringify({ type: "agent-name", agentName: "어딘가 다른 파일에 있는 대화" })}\n`,
+    );
+    const store = new Store(fixture.home, { isAlive: () => false, folderExists: () => true });
+    const sessions = store.scan()[0]?.sessions ?? [];
+    expect(sessions.map((s) => s.id)).toEqual([fixture.sessionId]);
   });
 });
 

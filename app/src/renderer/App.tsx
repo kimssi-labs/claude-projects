@@ -583,11 +583,14 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     if (editing) editRef.current?.focus();
   }, [editing]);
 
-  const commitRename = useCallback(async (value: string) => {
+  const commitRename = useCallback(async (value: string, explicit = false) => {
     const now = latest.current;
     const title = value.trim();
     setEditing(null);
-    if (!title) return;
+    // An empty name takes the name off again, which is how the generated title is got back. Only
+    // when it was typed and entered, though: blurring a field someone happened to clear, or clicked
+    // into and out of, must not quietly rename anything.
+    if (!title && !explicit) return;
     // Which thing is being renamed is decided by what is on screen at commit time, not by what was
     // on screen when this callback was created.
     const result = now.screen === "sessions" && now.session
@@ -678,7 +681,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
                   defaultValue={item.alias ?? item.name}
                   onBlur={(event) => void commitRename(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value);
+                    if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value, true);
                     if (event.key === "Escape") setEditing(null);
                   }}
                   data-testid="rename-input"
@@ -819,7 +822,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
                           defaultValue={item.title}
                           onBlur={(event) => void commitRename(event.target.value)}
                           onKeyDown={(event) => {
-                            if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value);
+                            if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value, true);
                             if (event.key === "Escape") setEditing(null);
                           }}
                           data-testid="rename-input"
@@ -869,7 +872,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
                           defaultValue={item.title}
                           onBlur={(event) => void commitRename(event.target.value)}
                           onKeyDown={(event) => {
-                            if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value);
+                            if (event.key === "Enter") void commitRename((event.target as HTMLInputElement).value, true);
                             if (event.key === "Escape") setEditing(null);
                           }}
                           data-testid="rename-input"
