@@ -9,7 +9,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { buildApi } from "../bridge/build.js";
 import { CONTRACTS } from "../bridge/registry.js";
 import { CHANNEL } from "../main/ipc.js";
-import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, DeleteRequest, DisplayInfo, OpenSessionRequest, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
+import type { ActionResult, AddProjectResult, AppInfo, MenuItemSpec, PageName, PinRequest, DeleteRequest, OpenSessionRequest, RenameRequest, SettingsPayload, WindowCommand, WindowState } from "../main/ipc.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricSample, MetricsSnapshot, ProjectInfo, StatusConfig, StatusSnapshot, UiConfig, UpdateConfig } from "../core/types.js";
 
 const api = {
@@ -44,14 +44,8 @@ const api = {
   loadSettings: (): Promise<SettingsPayload> => ipcRenderer.invoke(CHANNEL.loadSettings),
   saveSettings: (payload: { dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: Partial<UiConfig>; updates?: UpdateConfig; git?: GitConfig }): Promise<SettingsPayload> =>
     ipcRenderer.invoke(CHANNEL.saveSettings, payload),
-  displays: (): Promise<DisplayInfo[]> => ipcRenderer.invoke(CHANNEL.displays),
-  applyDock: (config: DockConfig): Promise<ActionResult & { settings?: SettingsPayload }> => ipcRenderer.invoke(CHANNEL.applyDock, config),
-  releaseDock: (): Promise<SettingsPayload> => ipcRenderer.invoke(CHANNEL.releaseDock),
   saveUi: (ui: Partial<UiConfig>): Promise<void> => ipcRenderer.invoke(CHANNEL.saveUi, ui),
   appInfo: (): Promise<AppInfo> => ipcRenderer.invoke(CHANNEL.appInfo),
-  /** Drag the docked band's inner edge. `done` marks the end, when the size is written down. */
-  dragDock: (thickness: number, done: boolean): void =>
-    ipcRenderer.send(CHANNEL.dragDock, { thickness, done }),
   windowState: (): Promise<WindowState> => ipcRenderer.invoke(CHANNEL.windowState),
   windowCommand: (command: WindowCommand): Promise<WindowState> =>
     ipcRenderer.invoke(CHANNEL.windowCommand, command),

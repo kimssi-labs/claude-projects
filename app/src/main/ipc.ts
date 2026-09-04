@@ -18,22 +18,12 @@ export const CHANNEL = {
   toast: "app:toast",                // main -> renderer, when something finished on its own
   loadSettings: "settings:load",
   saveSettings: "settings:save",
-  displays: "settings:displays",
-  applyDock: "dock:apply",
-  dragDock: "dock:drag",           // the band's own grip, since the window frame no longer resizes
-  releaseDock: "dock:release",
   saveUi: "ui:save",
   appInfo: "app:info",
   quit: "app:quit",
 } as const;
 
 export type Channel = (typeof CHANNEL)[keyof typeof CHANNEL];
-
-/** One step of a drag on the band's grip: how thick the band should be, and whether the hand let go. */
-export interface DockDrag {
-  thickness: number;
-  done: boolean;
-}
 
 export interface OpenSessionRequest {
   projectDir: string;
@@ -89,27 +79,16 @@ export type PageName = keyof typeof PAGES;
 // both directions between this file and the contract is erased, so there is no cycle at runtime.
 import type { UsageState } from "../features/usage/contract.js";
 
-/** What the caption buttons need to know. Docked counts as maximised: the band IS the full state. */
+/**
+ * What the window's own caption buttons need to know. Whether it is a band is the dock feature's
+ * state, asked and pushed through its contract — not carried here, where two paths once forgot it.
+ */
 export interface WindowState {
   maximized: boolean;
-  docked: boolean;
 }
 
-/**
- * Docking and maximising are separate commands.
- *
- * They shared one before, so "restore" gave back an edge in one state and a window size in the
- * other — the same button meaning two things depending on how the window got where it was.
- */
-export type WindowCommand = "minimize" | "maximize" | "dock" | "close";
-
-export interface DisplayInfo {
-  id: string;
-  label: string;
-  bounds: { x: number; y: number; width: number; height: number };
-  primary: boolean;
-  saved: boolean;
-}
+/** The window's own commands. Docking is the dock feature's, through its own channel. */
+export type WindowCommand = "minimize" | "maximize" | "close";
 
 export interface AppInfo {
   /** The machine's own locale, so "system" can resolve to something. */

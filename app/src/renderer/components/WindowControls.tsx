@@ -1,73 +1,32 @@
 /**
  * The caption buttons, drawn by us.
  *
- * Four, not three: docking and maximising are different things and used to share a button, so
- * "restore" sometimes gave the edge back and sometimes gave the window its old size. The dock
- * button now toggles the band, and maximise means what it says everywhere else.
- *
- * The dock glyph is drawn for the edge that is actually configured: the wall sits on that side and
- * the arrow points into it — or away from it, when pressing the button would let the edge go.
+ * Minimise, maximise and close are the window's own. Anything else a feature wants beside them —
+ * the dock button, today — arrives through `slot`: this component does not know what a band is,
+ * and a feature that changes what its button means changes its own file, not this one.
  */
-import type { DockEdge } from "@core/types";
+import type { ReactNode } from "react";
+
 import { useText } from "../useText";
 
-/** The top-edge glyph, turned to put the wall on the configured side. */
-const EDGE_ROTATION: Record<DockEdge, number> = { top: 0, right: 90, bottom: 180, left: 270 };
-
-/** The wall on one side, and an arrow into it (dock) or out of it (undock). */
-function DockGlyph({ edge, releasing }: { edge: DockEdge; releasing: boolean }) {
-  return (
-    <svg width="11" height="11" viewBox="0 0 10 10" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-      <g transform={`rotate(${EDGE_ROTATION[edge]} 5 5)`}>
-        <path d="M0.6 0.6h8.8" strokeWidth="1.6" />
-        {releasing ? (
-          <>
-            <path d="M5 3.2v5.6" />
-            <path d="M2.6 6.4L5 8.8l2.4-2.4" />
-          </>
-        ) : (
-          <>
-            <path d="M5 8.8V3.2" />
-            <path d="M2.6 5.6L5 3.2l2.4 2.4" />
-          </>
-        )}
-      </g>
-    </svg>
-  );
-}
-
 export interface WindowControlsProps {
-  /** The window is maximised (not docked): the middle button offers its old size back. */
+  /** The window is maximised: the middle button offers its old size back. */
   maximized: boolean;
-  /** The band is reserved: the dock button offers to let the edge go. */
-  docked: boolean;
-  /** Which edge this window docks to — the side the glyph draws its wall on. */
-  edge: DockEdge;
   onMinimize: () => void;
   /** Maximise, or restore when already maximised. */
   onMaximize: () => void;
-  /** Dock to the remembered edge, or undock. */
-  onDock: () => void;
   onClose: () => void;
+  /** A feature's own button, drawn before the window's three. */
+  slot?: ReactNode;
 }
 
 const BUTTON = "no-drag grid h-8 w-11 place-items-center text-bone-400 transition-colors";
 
-export function WindowControls({ maximized, docked, edge, onMinimize, onMaximize, onDock, onClose }: WindowControlsProps) {
+export function WindowControls({ maximized, onMinimize, onMaximize, onClose, slot }: WindowControlsProps) {
   const t = useText();
   return (
     <div className="flex shrink-0 self-start">
-      <button
-        type="button"
-        aria-label={docked ? t("tip.undock") : t("tip.dock")}
-        title={docked
-          ? t("tip.undockEdge", { edge: t(`edge.${edge}` as "edge.top") })
-          : t("tip.dockEdge", { edge: t(`edge.${edge}` as "edge.top") })}
-        onClick={onDock}
-        className={`${BUTTON} hover:bg-ink-700 hover:text-bone-100 ${docked ? "text-accent" : ""}`}
-      >
-        <DockGlyph edge={edge} releasing={docked} />
-      </button>
+      {slot}
 
       <button type="button" aria-label={t("tip.minimise")} title={t("tip.minimise")} onClick={onMinimize}
         className={`${BUTTON} hover:bg-ink-700 hover:text-bone-100`}>

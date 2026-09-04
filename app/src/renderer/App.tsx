@@ -17,7 +17,7 @@ import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSna
 
 import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
 import { initialState as initialUpdateState } from "@core/updates";
-import { DockGrip } from "./components/DockGrip";
+import { DockButton, DockGrip, useDock } from "../features/dock/ui";
 import { AreaChart, UsageCard } from "./components/Chart";
 import { ProjectDetail, ProjectRow, SessionDetail, SessionRow } from "./components/Lists";
 import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from "./components/Settings";
@@ -82,7 +82,9 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const { systemHistory, sessionHistory, cpuGhz, memoryTotal, totalMemory, latestSystem } = metrics;
   // Docked counts as maximised: the band is the window at its full extent, so the middle caption
   // button offers to restore, and restoring is what gives the edge back.
-  const [windowState, setWindowState] = useState({ maximized: false, docked: false });
+  const [windowState, setWindowState] = useState({ maximized: false });
+  // Whether the window is a band is dock's state, pushed on every change; nothing here guesses it.
+  const dock = useDock();
   const [theme, setTheme] = useState<ThemeMode>("system");
   // Fractions of the window, not pixels: 0 = the size the layout would have chosen, anything else
   // is where the user left the divider — and it means the same thing when the window changes shape.
@@ -428,7 +430,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   }, [usage.refresh]);
 
   const openSettings = useCallback(async () => {
-    const [loaded, screens] = await Promise.all([api.loadSettings(), api.displays()]);
+    const [loaded, screens] = await Promise.all([api.loadSettings(), dock.displays()]);
     setSettings(loaded);
     setDisplays(screens);
     setScreen("settings");
@@ -437,11 +439,11 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const applyDock = useCallback(async (enabled: boolean) => {
     if (!settings) return;
     if (!enabled) {
-      setSettings(await api.releaseDock());
+      setSettings(await dock.release());
       notify({ ok: true, message: "Undocked." });
       return;
     }
-    const result = await api.applyDock({ ...settings.dock, enabled: true });
+    const result = await dock.apply({ ...settings.dock, enabled: true });
     if (result.settings) setSettings(result.settings);
     notify({ ok: result.ok, message: result.message ?? "Docked." });
   }, [settings, notify]);
@@ -623,21 +625,17 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   return (
     <div className="relative h-full flex flex-col bg-ink-900 overflow-hidden">
       {/* Docked, the frame does not resize; this is the one side that does. */}
-      {windowState.docked && settings ? (
-        <DockGrip edge={settings.dock.edge} onDrag={(thickness, done) => api.dragDock(thickness, done)} />
-      ) : null}
+      {dock.docked ? <DockGrip edge={dock.edge} onDrag={dock.drag} /> : null}
       <TitleBar
         version={info?.version ?? "—"}
-        draggable={!windowState.docked}
+        draggable={!dock.docked}
         controls={
           <WindowControls
             maximized={windowState.maximized}
-            docked={windowState.docked}
-            edge={settings?.dock.edge ?? "top"}
             onMinimize={() => void api.windowCommand("minimize")}
             onMaximize={() => void api.windowCommand("maximize")}
-            onDock={() => void api.windowCommand("dock")}
             onClose={() => void api.windowCommand("close")}
+            slot={<DockButton docked={dock.docked} edge={dock.edge} onToggle={() => void dock.toggle()} />}
           />
         }
       />

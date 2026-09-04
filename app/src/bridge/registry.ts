@@ -5,6 +5,7 @@
  * added or removed, and never when one is edited: that is the point of it.
  */
 import { clipboardContract } from "../features/clipboard/contract.js";
+import { dockContract } from "../features/dock/contract.js";
 import { gitContract } from "../features/git/contract.js";
 import { metricsContract } from "../features/metrics/contract.js";
 import { updatesContract } from "../features/updates/contract.js";
@@ -16,4 +17,5 @@ export const CONTRACTS = {
   ...usageContract,
   ...metricsContract,
   ...clipboardContract,
+  ...dockContract,
 } as const;
