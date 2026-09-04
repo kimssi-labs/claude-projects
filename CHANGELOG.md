@@ -3,6 +3,28 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.11.3
+
+- **No more hairline of desktop along a docked band.** The band was placed exactly right: Windows
+  reports its painted frame flush with the monitor on every edge, to the pixel. But from Electron 43
+  the page sits one pixel inside that frame on the left, the right and the open face — the room
+  Windows keeps for the window's border, which a band switches off, so what showed through was the
+  wallpaper. The band is now placed and measured by the page itself, which is what a band is. The
+  window's own background colour was also a shade off the page's, which is what made the sliver
+  visible while it lasted.
+- **The band's open face can be dragged again.** The grip is a strip in the page rather than a
+  window edge, and in v2.11.2 it had no size at all: it moved to a folder the stylesheet was not
+  built from, so its classes existed in the markup and nowhere in the CSS.
+- Two faults that only showed once the grip worked. Making a window unresizable pins its size to
+  whatever it measured at that moment, which was the window before it was docked — so every time
+  the shell moved the band it was clamped back to that shape for a frame and then snapped to its
+  previous thickness. And putting the band back while our own reservation call was still running
+  could take the whole app down; that call is now left to finish.
+- **In a thin band, the count of running sessions is below the gauges rather than under them.** The
+  gauge row takes whatever height is left, but a gauge has a height of its own, so in a short band
+  the cards ran past the bottom of their row and were drawn straight over the line beneath. The row
+  now keeps what overflows to itself.
+
 ## v2.11.2
 
 - **The caption arrow says what the window is actually doing.** Two paths — the band restored at
