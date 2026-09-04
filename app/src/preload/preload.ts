@@ -45,8 +45,6 @@ const api = {
   /** Shows a native menu at the pointer; resolves with the chosen id, or null when it was dismissed. */
   contextMenu: (items: MenuItemSpec[]): Promise<string | null> => ipcRenderer.invoke(CHANNEL.contextMenu, items),
   togglePin: (request: PinRequest): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.togglePin, request),
-  /** Count the uncommitted files of one project; null when there is nothing to count. */
-  gitCount: (dir: string): Promise<number | null> => ipcRenderer.invoke(CHANNEL.gitCount, dir),
   /** Something the app did on its own finished and is worth a line on screen. */
   onToast: (listener: (message: string) => void): (() => void) => {
     const handler = (_event: unknown, message: string): void => listener(message);
@@ -55,17 +53,6 @@ const api = {
   },
   /** Open one of the app's known pages in the default browser. */
   openPage: (page: PageName): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.openPage, page),
-  /** Every checkout of the repository this project belongs to. */
-  worktreeList: (dir: string): Promise<import("../core/worktree.js").Worktree[]> =>
-    ipcRenderer.invoke(CHANNEL.worktreeList, dir),
-  /** Add a worktree of this project on a new branch; it joins the list as its own project. */
-  worktreeAdd: (dir: string, branch: string): Promise<AddProjectResult> =>
-    ipcRenderer.invoke(CHANNEL.worktreeAdd, { dir, branch }),
-  /** Remove a worktree and its project row. */
-  worktreeRemove: (dir: string, force: boolean): Promise<ActionResult> =>
-    ipcRenderer.invoke(CHANNEL.worktreeRemove, { dir, force }),
-  /** Bring one project's branch up to date with its base branch. */
-  gitSync: (dir: string): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.gitSync, dir),
   /** Install or remove the Stop hook that publishes Claude Code's usage figures. */
   setUsageHook: (on: boolean): Promise<ActionResult & { settings: SettingsPayload }> =>
     ipcRenderer.invoke(CHANNEL.setUsageHook, on),
