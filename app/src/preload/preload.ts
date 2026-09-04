@@ -22,7 +22,6 @@ const api = {
   // not moved onto a contract yet; they leave this file one feature at a time.
   ...buildApi(CONTRACTS, ipcRenderer),
   scan: (): Promise<ProjectInfo[]> => ipcRenderer.invoke(CHANNEL.scan),
-  status: (): Promise<StatusSnapshot> => ipcRenderer.invoke(CHANNEL.status),
   metrics: (): Promise<MetricsHistoryPayload> => ipcRenderer.invoke(CHANNEL.metrics),
   onMetrics: (listener: (snapshot: MetricsSnapshot) => void): (() => void) => {
     const handler = (_event: unknown, snapshot: MetricsSnapshot): void => listener(snapshot);
@@ -53,9 +52,6 @@ const api = {
   },
   /** Open one of the app's known pages in the default browser. */
   openPage: (page: PageName): Promise<ActionResult> => ipcRenderer.invoke(CHANNEL.openPage, page),
-  /** Install or remove the Stop hook that publishes Claude Code's usage figures. */
-  setUsageHook: (on: boolean): Promise<ActionResult & { settings: SettingsPayload }> =>
-    ipcRenderer.invoke(CHANNEL.setUsageHook, on),
   loadSettings: (): Promise<SettingsPayload> => ipcRenderer.invoke(CHANNEL.loadSettings),
   saveSettings: (payload: { dock?: DockConfig; status?: StatusConfig; launch?: LaunchConfig; ui?: Partial<UiConfig>; updates?: UpdateConfig; git?: GitConfig }): Promise<SettingsPayload> =>
     ipcRenderer.invoke(CHANNEL.saveSettings, payload),

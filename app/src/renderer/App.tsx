@@ -10,6 +10,7 @@ import { nextIndex, resolveAction, SHORTCUTS, type Screen } from "@core/keymap";
 import type { Language } from "@core/i18n";
 import { placeWorktrees, type Worktree } from "@core/worktree";
 import { gitMenuItems, isGitAction, runGitAction, useDirtyPatch, useGit } from "../features/git/ui";
+import { useUsage } from "../features/usage/ui";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
 import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
@@ -59,7 +60,7 @@ export function App() {
 function Window({ onLanguage }: { onLanguage: (next: { language: Language; locale: string }) => void }) {
   const t = useText();
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
-  const [status, setStatus] = useState<StatusSnapshot | null>(null);
+  const usage = useUsage();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("projects");
   const [projectIndex, setProjectIndex] = useState(0);
@@ -99,17 +100,16 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   const editRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const [scanned, statusSnapshot] = await Promise.all([api.scan(), api.status()]);
+    const [scanned] = await Promise.all([api.scan(), usage.refresh()]);
     setProjects(scanned);
-    setStatus(statusSnapshot);
     return scanned;
-  }, []);
+  }, [usage.refresh]);
 
   // First paint: everything the window needs, plus the position the last run ended on.
   useEffect(() => {
     void (async () => {
-      const [scanned, statusSnapshot, appInfo, history, saved] = await Promise.all([
-        api.scan(), api.status(), api.appInfo(), api.metrics(), api.loadSettings(),
+      const [scanned, appInfo, history, saved] = await Promise.all([
+        api.scan(), api.appInfo(), api.metrics(), api.loadSettings(), usage.refresh(),
       ]);
       setTheme(saved.ui.theme);
       setNavFraction(saved.ui.navWidth);
@@ -117,7 +117,6 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
       setStackFraction(saved.ui.stackTop);
       setSettings(saved);
       setProjects(scanned);
-      setStatus(statusSnapshot);
       setInfo(appInfo);
       setUpdate((previous) => ({ ...previous, current: appInfo.version }));
       onLanguage({ language: saved.ui.language, locale: appInfo.locale });
@@ -424,13 +423,12 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   // A sweep runs on a timer in the main process; it speaks only when it changed something.
   useEffect(() => api.onToast((message) => notify({ ok: true, message })), [notify]);
 
-  /** Turn usage collection on or off, then show the figures it did or did not find. */
+  /** Turn usage collection on or off; the settings it comes back with are this file's to keep. */
   const collectUsage = useCallback(async (on: boolean) => {
-    const result = await api.setUsageHook(on);
+    const result = await usage.collect(on);
     setSettings(result.settings);
     notify(result);
-    setStatus(await api.status());
-  }, [notify]);
+  }, [notify, usage.collect]);
 
   const applySettings = useCallback(async (next: SettingsPayload) => {
     // Every section, not a list that has to be remembered: a section left out of this call is a
@@ -445,8 +443,8 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
     });
     setSettings(saved);
     setTheme(saved.ui.theme);
-    setStatus(await api.status());
-  }, []);
+    await usage.refresh();                          // which windows are shown is a setting
+  }, [usage.refresh]);
 
   const openSettings = useCallback(async () => {
     const [loaded, screens] = await Promise.all([api.loadSettings(), api.displays()]);
@@ -543,7 +541,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
 
   // The machine's memory when the sampler has said so; until then, the largest reading seen.
   const totalMemory = memoryTotal || (systemHistory.length ? Math.max(...systemHistory.map((s) => s.memoryBytes)) : 1);
-  const usageWindows = status?.windows ?? [];
+  const usageWindows = usage.status?.windows ?? [];
   const latestSystem = systemHistory.length ? systemHistory[systemHistory.length - 1] : null;
   // Both machine gauges read the same way: the share first, then the quantity behind it — a load
   // without its clock, or a percentage of memory without the gigabytes, is half a reading.
