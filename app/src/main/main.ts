@@ -1,33 +1,31 @@
 /**
- * The Electron main process: one window, the IPC surface the renderer is allowed to use, the
- * session launcher, the dock and the metrics sampler.
+ * The Electron main process: the shell.
  *
- * All the reading and the command building live in `src/core`, which is why this file is mostly
- * wiring: the parts worth testing are tested without Electron.
+ * One window and the loading window before it, the caption buttons, the settings answer composed
+ * from every feature's slice, and the features themselves — each registered here on the bridge and
+ * living in its own folder under `src/features`. All the reading and the command building live in
+ * `src/core`, which is why this file is mostly wiring: the parts worth testing are tested without
+ * Electron.
  */
-import { execFile, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, screen, shell } from "electron";
+import { join } from "node:path";
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, Notification, screen, shell } from "electron";
 
-import { ConfigStore } from "../core/config.js";
-import { launchCommand, sessionEnvironment, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
-import { register as registerMetrics } from "../features/metrics/main.js";
-import { claudeHome, homePaths } from "../core/paths.js";
-import { register as registerUsage } from "../features/usage/main.js";
 import { wire } from "../bridge/build.js";
 import type { MainContext } from "../bridge/context.js";
-import { register as registerUpdates } from "../features/updates/main.js";
-import { headOf, isLinkedWorktree, mainCheckoutOf } from "./gitStatus.js";
-import { register as registerGit } from "../features/git/main.js";
+import { ConfigStore } from "../core/config.js";
+import { claudeHome } from "../core/paths.js";
 import { Store } from "../core/store.js";
-import type { DockConfig, GitConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
-import { setupKey } from "./dock.js";
-import { register as registerDock } from "../features/dock/main.js";
+import type { DockConfig, GitConfig, LaunchConfig, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
 import { register as registerClipboard } from "../features/clipboard/main.js";
-import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type DeleteRequest, type OpenSessionRequest, type RenameRequest, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
-
-import type { SessionTarget } from "./sampler.js";
+import { register as registerDock } from "../features/dock/main.js";
+import { register as registerGit } from "../features/git/main.js";
+import { register as registerMetrics } from "../features/metrics/main.js";
+import { register as registerProjects } from "../features/projects/main.js";
+import { register as registerUpdates } from "../features/updates/main.js";
+import { register as registerUsage } from "../features/usage/main.js";
+import { setupKey } from "./dock.js";
+import { claudeExecutable, which } from "./executables.js";
+import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AppInfo, type MenuItemSpec, type PageName, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 
 const DEV_SERVER = "http://localhost:5273";
 const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as const;
@@ -160,9 +158,13 @@ const wiring = wire(ipcMain, (channel, value) => window?.webContents.send(channe
 // into every settings answer. That dependency belongs to settings and moves with it; until then the
 // feature is a module-level constant, not a mutable global.
 const usageFeature = registerUsage(context, wiring, { settingsPayload });
+// The list every other feature reads, registered first: metrics asks it which sessions run, git
+// asks it for rows. Its one dependency points the other way — "the running set may have changed" —
+// and goes through main, so projects never imports metrics. Called at scan time, once both exist.
+const projectsFeature = registerProjects(context, wiring, { scanned: () => metricsFeature.retarget() });
 // Module level for the same reason: the monitor starts at ready and stops at quit, both outside
 // registerIpc. The sessions worth measuring are projects' knowledge, handed over as a function.
-const metricsFeature = registerMetrics(context, wiring, { targets: sampleTargets });
+const metricsFeature = registerMetrics(context, wiring, { targets: projectsFeature.liveTargets });
 // Likewise: armed at ready, released at quit, and the settings payload asks whether the shortcut
 // took. The desktop notification is the shell's, handed over.
 const clipboardFeature = registerClipboard(context, wiring, { announce });
@@ -178,50 +180,6 @@ let window: BrowserWindow | null = null;
 let splash: BrowserWindow | null = null;
 /** The step named before the loading page had parsed, so it is not lost. */
 let pendingStep = "Starting…";
-/** Whether the system-wide paste shortcut is held; false when something else owns it. */
-let lastProjects: ProjectInfo[] = [];
-
-/**
- * Which shells this machine actually has, remembered for the life of the run.
- *
- * `where` costs a process each time and the answer does not change while the app is open; without
- * the cache this would run up to three times per session opened.
- */
-const shellPresence = new Map<string, boolean>();
-function haveExecutable(exe: string): boolean {
-  const known = shellPresence.get(exe);
-  if (known !== undefined) return known;
-  const found = Boolean(which(exe));
-  shellPresence.set(exe, found);
-  return found;
-}
-
-function which(exe: string): string | null {
-  const command = process.platform === "win32" ? "where" : "which";
-  try {
-    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
-    const out = execFileSync(command, [exe], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    const first = out.split(/\r?\n/).find((line) => line.trim());
-    return first ? first.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Resolve the claude executable, never the bare name: a shell function of that name would win. */
-function claudeExecutable(): string | null {
-  return which(CLAUDE_EXE);
-}
-
-function detectLinuxTerminal(configured: string): { exe: string; args: readonly string[] } | null {
-  if (configured) return { exe: configured, args: [] };
-  for (const candidate of LINUX_TERMINALS) if (which(candidate.exe)) return candidate;
-  return null;
-}
-
-function findProject(dir: string): ProjectInfo | undefined {
-  return lastProjects.find((p) => p.dir === dir);
-}
 
 /** Do two rectangles share any pixel? Enough to decide a saved position is still reachable. */
 function rectsOverlap(a: Electron.Rectangle, b: Electron.Rectangle): boolean {
@@ -261,49 +219,6 @@ function placeFloating(): void {
       y: area.y + Math.round((area.height - WINDOW.height) / 2),
     };
   window.setBounds(clampInto(rect, screen.getDisplayMatching(rect).workArea));
-}
-
-function scanProjects(): ProjectInfo[] {
-  const t0 = Date.now();
-  lastProjects = store.scan();
-  // The head line is three small reads per project; the change count is a git process, so it is
-  // asked for separately and only for the row in front of the user.
-  if (config.git().enabled) {
-    for (const project of lastProjects) {
-      if (project.cwd && project.exists) {
-        project.git = headOf(project.cwd);
-        project.worktree = Boolean(project.git) && isLinkedWorktree(project.cwd);
-      }
-    }
-    // Second pass: a worktree points at a folder, and the list is keyed by project. Match the two so
-    // the window can show each worktree under the repository it came from.
-    // Compared with separators and case normalised: the pointer file writes forward slashes where
-    // a transcript's cwd on Windows has backslashes, and the two would never match as written.
-    const key = (path: string): string => {
-      let real = path;
-      try {
-        // 8.3 short names are the one that actually bit: TEMP reads C:\Users\EXAMPL~1 in a
-        // transcript's cwd and C:/Users/ExampleUser in git's own pointer file. Only resolving
-        // the real path makes those the same folder.
-        real = realpathSync.native(path);
-      } catch {
-        /* gone, or unreachable: fall back to what was written */
-      }
-      return real.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-    };
-    const byPath = new Map(lastProjects
-      .filter((p) => p.cwd)
-      .map((p) => [key(p.cwd as string), p.dir]));
-    for (const project of lastProjects) {
-      if (!project.worktree || !project.cwd) continue;
-      const repo = mainCheckoutOf(project.cwd);
-      project.parentDir = repo ? byPath.get(key(repo)) ?? null : null;
-    }
-  }
-  const ms = Date.now() - t0;
-  if (ms > 200) console.log(`[hangar] scan took ${ms} ms for ${lastProjects.length} projects`);
-  metricsFeature.retarget();                      // the running set may have changed
-  return lastProjects;
 }
 
 async function createWindow(): Promise<void> {
@@ -377,12 +292,6 @@ async function createWindow(): Promise<void> {
   await dockFeature.restore();
 }
 
-/** Sessions worth measuring right now: the running ones, from the last scan. */
-function sampleTargets(): SessionTarget[] {
-  return lastProjects.flatMap((project) =>
-    project.sessions.filter((s) => s.live && s.pid).map((s) => ({ sessionId: s.id, pid: s.pid as number })));
-}
-
 /** A desktop notification: the only feedback that reaches a user working in another window. */
 function announce(title: string, body: string): void {
   if (!Notification.isSupported()) return;
@@ -407,146 +316,7 @@ function settingsPayload(): SettingsPayload {
   };
 }
 
-function safeJson(file: string): Record<string, unknown> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { readFileSync } = require("node:fs") as typeof import("node:fs");
-    return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
 function registerIpc(): void {
-  ipcMain.handle(CHANNEL.scan, () => scanProjects());
-  ipcMain.handle(CHANNEL.openSession, (_event, request: OpenSessionRequest): ActionResult => {
-    const project = findProject(request.projectDir);
-    if (!project?.cwd) return { ok: false, message: "That project's folder is unknown." };
-    if (!project.exists) return { ok: false, message: `Folder is gone: ${project.cwd}` };
-    const exe = claudeExecutable();
-    if (!exe) return { ok: false, message: "claude is not on PATH — install Claude Code first." };
-    const session = request.sessionId ? project.sessions.find((s) => s.id === request.sessionId) : null;
-    if (session?.live) return { ok: false, message: "That session is already running." };
-
-    const launch: LaunchConfig = config.launch();
-    const command = launchCommand({
-      cwd: project.cwd,
-      claudeExe: exe,
-      sessionId: session?.id ?? null,
-      // Only a name the user chose. --name is persisted as a *custom* title, so passing the title
-      // this app happens to be showing overwrites the one Claude Code generated — permanently, in
-      // its own tab and /resume picker too. Left alone, it keeps refining that title as the
-      // conversation grows, and this app now reads it rather than competing with it.
-      displayName: session?.named ? session.title : null,
-      config: launch,
-      target: request.target,
-      platform: process.platform,
-      hasWindowsTerminal: process.platform === "win32" && Boolean(which("wt.exe")),
-      linuxTerminal: process.platform === "win32" ? null : detectLinuxTerminal(launch.terminal),
-    }, haveExecutable);
-    try {
-      const child = spawn(command.exe, command.args, {
-        cwd: command.cwd,
-        // Not process.env as it is: started from inside a Claude Code session, this app carries that
-        // session's markers, and a claude that inherits them stops saving its transcript.
-        env: sessionEnvironment(process.env),
-        detached: true,
-        stdio: "ignore",
-        // Without a terminal of its own the shell needs a console window to appear in.
-        windowsHide: false,
-        shell: false,
-      });
-      child.unref();
-      const what = session ? session.title : project.name;
-      return {
-        ok: true,
-        message: command.fellBack
-          ? `Opened ${what} in ${command.shell} — the shell chosen in Settings is not installed here.`
-          : `Opened ${what}`,
-      };
-    } catch (error) {
-      return { ok: false, message: `Could not start: ${(error as Error).message}` };
-    }
-  });
-
-  ipcMain.handle(CHANNEL.renameSession, (_event, request: RenameRequest): ActionResult => {
-    const project = findProject(request.projectDir);
-    const session = project?.sessions.find((s) => s.id === request.sessionId);
-    if (!session) return { ok: false, message: "Session not found." };
-    store.renameSession(session, request.title);
-    scanProjects();
-    return { ok: true };
-  });
-
-  ipcMain.handle(CHANNEL.renameProject, (_event, request: RenameRequest): ActionResult => {
-    const project = findProject(request.projectDir);
-    if (!project) return { ok: false, message: "Project not found." };
-    store.renameProject(project, request.title);
-    scanProjects();
-    return { ok: true };
-  });
-
-  ipcMain.handle(CHANNEL.deleteSession, async (_event, request: DeleteRequest): Promise<ActionResult> => {
-    const project = findProject(request.projectDir);
-    const session = project?.sessions.find((s) => s.id === request.sessionId);
-    if (!session) return { ok: false, message: "Session not found." };
-    if (session.live) return { ok: false, message: "That session is running." };
-    // The window asks in its own dialog, which matches the app; the native box is the fallback for
-    // a caller that did not.
-    if (!request.confirmed
-      && !await confirm(`Delete session “${session.title}”?`, "The transcript is removed from disk.")) {
-      return { ok: false };
-    }
-    store.deleteSession(session);
-    scanProjects();
-    return { ok: true, message: "Session deleted." };
-  });
-
-  ipcMain.handle(CHANNEL.deleteProject, async (_event, request: DeleteRequest): Promise<ActionResult> => {
-    const project = findProject(request.projectDir);
-    if (!project) return { ok: false, message: "Project not found." };
-    if (project.liveCount) return { ok: false, message: "A session in this project is running." };
-    const extra = project.hasMemory ? " Its memory/ folder goes with it." : "";
-    if (!request.confirmed && !await confirm(
-      `Delete “${project.name}” and its ${project.sessions.length} session(s)?`,
-      `Only Claude Code's history is deleted; your code is untouched.${extra}`,
-    )) {
-      return { ok: false };
-    }
-    store.deleteProject(project);
-    scanProjects();
-    return { ok: true, message: "Project deleted." };
-  });
-
-  ipcMain.handle(CHANNEL.revealProject, (_event, dir: string): ActionResult => {
-    const project = findProject(dir);
-    if (!project?.cwd || !project.exists) return { ok: false, message: "Folder is not available." };
-    shell.openPath(project.cwd);
-    return { ok: true };
-  });
-
-  /**
-   * A folder chosen in a dialog becomes a project — one with no sessions yet, from which the
-   * first can be started. Until now the only way in was to run claude in a terminal there first.
-   */
-  ipcMain.handle(CHANNEL.addProject, async (): Promise<AddProjectResult> => {
-    if (!window) return { ok: false };
-    // Electron 43 changed the default starting folder from "wherever you were last" to Downloads,
-    // which is nowhere near where anyone keeps code. Start beside the project used most recently
-    // instead — the list is newest first, so that is the first row with a folder still on disk.
-    const recent = lastProjects.find((p) => p.cwd && p.exists)?.cwd;
-    const picked = await dialog.showOpenDialog(window, {
-      title: "Add a project folder",
-      properties: ["openDirectory", "createDirectory"],
-      ...(recent ? { defaultPath: dirname(recent) } : {}),
-    });
-    const folder = picked.filePaths[0];
-    if (picked.canceled || !folder) return { ok: false };
-    const dir = store.addProject(folder);
-    scanProjects();
-    return { ok: true, dir, message: `Added ${folder}` };
-  });
-
   /** A right-click menu — the OS's own, so it looks and behaves like every other one on the machine. */
   ipcMain.handle(CHANNEL.contextMenu, (event, items: MenuItemSpec[]) => new Promise<string | null>((resolve) => {
     const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;
@@ -564,18 +334,12 @@ function registerIpc(): void {
     menu.popup({ window: owner, callback: () => setTimeout(() => resolve(null), 100) });
   }));
 
-  ipcMain.handle(CHANNEL.togglePin, (_event, request: PinRequest): ActionResult => {
-    const pinned = config.togglePin(request.kind, request.key);
-    scanProjects();
-    return { ok: true, message: pinned ? "Pinned to the top." : "Unpinned." };
-  });
-
   // Features on the contract bridge register themselves here; each hands back the one thing the
   // rest of main may still ask of it. The handlers written out around this are the features that
   // have not moved yet.
   const updatesFeature = registerUpdates(context, wiring);
   // Git depends on the project rows, and says so: these are handed over rather than reached for.
-  const gitFeature = registerGit(context, wiring, { findProject, rescan: scanProjects, which });
+  const gitFeature = registerGit(context, wiring, { findProject: projectsFeature.find, rescan: projectsFeature.scan, which });
 
   /**
    * Count what is uncommitted in one project — the expensive half, asked for a row at a time.
@@ -625,7 +389,7 @@ function registerIpc(): void {
     if (payload.status) config.saveStatus(payload.status);
     if (payload.git) {
       config.saveGit(payload.git);
-      scanProjects();                              // the rows gain or lose their git line at once
+      projectsFeature.scan();                      // the rows gain or lose their git line at once
       gitFeature.restartSweep();                   // and the timer starts, stops or re-arms with it
     }
     if (payload.updates) {
@@ -666,19 +430,6 @@ function registerIpc(): void {
   ipcMain.handle(CHANNEL.quit, () => app.quit());
 }
 
-async function confirm(message: string, detail: string): Promise<boolean> {
-  if (!window) return false;
-  const { response } = await dialog.showMessageBox(window, {
-    type: "warning",
-    buttons: ["Delete", "Cancel"],
-    defaultId: 1,
-    cancelId: 1,
-    message,
-    detail,
-  });
-  return response === 0;
-}
-
 app.whenReady().then(async () => {
   openSplash();
   // Alone on the machine for its first frame: the app's renderer is a much heavier start.
@@ -687,8 +438,8 @@ app.whenReady().then(async () => {
   splashSays("Reading settings…");
   registerIpc();
   splashSays("Scanning projects…");
-  scanProjects();
-  splashSays(`Opening ${lastProjects.length} project${lastProjects.length === 1 ? "" : "s"}…`);
+  const found = projectsFeature.scan().length;
+  splashSays(`Opening ${found} project${found === 1 ? "" : "s"}…`);
   await createWindow();
   splashSays("Starting the monitor…");
   metricsFeature.start();
@@ -697,7 +448,7 @@ app.whenReady().then(async () => {
   closeSplash();
   window?.show();
   window?.focus();
-  console.log(`[hangar] window ready — ${lastProjects.length} projects from ${claudeHome()}`);
+  console.log(`[hangar] window ready — ${found} projects from ${claudeHome()}`);
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
@@ -736,7 +487,3 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   void pending.finally(() => app.quit());
 });
-
-export { which, detectLinuxTerminal };
-void execFile;
-void existsSync;

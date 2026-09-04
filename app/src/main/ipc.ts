@@ -1,19 +1,10 @@
 /** The one place the renderer can reach the machine: every channel, with its argument checked. */
 export const CHANNEL = {
-  scan: "projects:scan",
   settingsPush: "settings:push",                 // main -> renderer, when main changed them
   windowCommand: "window:command",
   windowState: "window:state",
-  windowStatePush: "window:state-push",           // main -> renderer, on maximise / dock / restore
-  openSession: "session:open",
-  renameSession: "session:rename",
-  deleteSession: "session:delete",
-  renameProject: "project:rename",
-  deleteProject: "project:delete",
-  revealProject: "project:reveal",
-  addProject: "project:add",
+  windowStatePush: "window:state-push",           // main -> renderer, on maximise / restore
   contextMenu: "menu:context",
-  togglePin: "pin:toggle",
   openPage: "app:open-page",
   toast: "app:toast",                // main -> renderer, when something finished on its own
   loadSettings: "settings:load",
@@ -24,25 +15,6 @@ export const CHANNEL = {
 } as const;
 
 export type Channel = (typeof CHANNEL)[keyof typeof CHANNEL];
-
-export interface OpenSessionRequest {
-  projectDir: string;
-  sessionId: string | null;
-  target: "sessionsWindow" | "currentWindow" | "newWindow";
-}
-
-export interface RenameRequest {
-  projectDir: string;
-  sessionId?: string;
-  title: string;
-}
-
-export interface DeleteRequest {
-  /** The window already asked; skip the native box rather than asking twice. */
-  confirmed?: boolean;
-  projectDir: string;
-  sessionId?: string;
-}
 
 export interface SettingsPayload {
   dock: import("../core/types.js").DockConfig;
@@ -116,12 +88,7 @@ export interface MenuItemSpec {
 }
 export const MENU_SEPARATOR = "-";
 
-export interface PinRequest {
-  kind: "projects" | "sessions";
-  key: string;
-}
-
-/** Adding a project: where it landed, when a folder was actually picked. */
+/** Adding a project: where it landed, when a folder was actually picked. Shared with worktrees. */
 export interface AddProjectResult extends ActionResult {
   dir?: string;
 }
