@@ -3,6 +3,20 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.11.2
+
+- **The caption arrow says what the window is actually doing.** Two paths — the band restored at
+  start-up, and the one re-applied when a monitor comes or goes — never told the window, so the
+  arrow could offer to dock a window that was already a band, and the title bar stayed undraggable
+  for one that was not. Whether the window is a band is now pushed on every change, from the one
+  place that knows, and asked for once when the page first draws.
+- **Inside, the app is now eight features on one bridge.** Projects, dock, git, usage, metrics,
+  clipboard, updates and settings each own their channels, their main-process side and their part
+  of the page in one folder; the bridge the page talks through is derived from those contracts, and
+  a test pins every key the page can reach. Nothing is meant to look or behave differently — the
+  point is that a change to one feature now touches that feature. The settings screen is the same
+  cards; each card's body belongs to its feature.
+
 ## v2.11.1
 
 - **The strip of desktop along a docked band is gone.** It appeared in v2.11.0 and the runtime is
