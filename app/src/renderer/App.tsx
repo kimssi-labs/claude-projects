@@ -12,6 +12,7 @@ import { placeWorktrees, type Worktree } from "@core/worktree";
 import { gitMenuItems, isGitAction, runGitAction, useDirtyPatch, useGit } from "../features/git/ui";
 import { useUsage } from "../features/usage/ui";
 import { useMetrics } from "../features/metrics/ui";
+import { usePasteResults } from "../features/clipboard/ui";
 import type { MetricSample, MetricsSnapshot, ProjectInfo, SessionInfo, StatusSnapshot, ThemeMode } from "@core/types";
 
 import { api, MENU_SEPARATOR, type AppInfo, type DisplayInfo, type SettingsPayload, type UpdateState } from "./api";
@@ -399,7 +400,7 @@ function Window({ onLanguage }: { onLanguage: (next: { language: Language; local
   }, [enterSessions, notify, refresh, askUser, t]);
 
   // The global shortcut can fire while another window has focus; its verdict still belongs here.
-  useEffect(() => api.onPasteResult(notify), [notify]);
+  usePasteResults(notify);
   // A sweep runs on a timer in the main process; it speaks only when it changed something.
   useEffect(() => api.onToast((message) => notify({ ok: true, message })), [notify]);
 

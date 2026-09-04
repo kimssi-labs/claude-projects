@@ -20,13 +20,12 @@ import type { MainContext } from "../bridge/context.js";
 import { register as registerUpdates } from "../features/updates/main.js";
 import { headOf, isLinkedWorktree, mainCheckoutOf } from "./gitStatus.js";
 import { register as registerGit } from "../features/git/main.js";
-import { clipFileName, Store } from "../core/store.js";
+import { Store } from "../core/store.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
 import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
-import { sendPaste } from "./keystroke.js";
-import { startClipboardWatch, stopClipboardWatch } from "./clipboardWatch.js";
+import { register as registerClipboard } from "../features/clipboard/main.js";
 import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type PastedImage, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 
 import type { SessionTarget } from "./sampler.js";
 
@@ -42,8 +41,6 @@ const SPLASH = { width: 380, height: 96 } as const;
 const FIRST_PAINT_CAP_MS = 4000;
 /** How long the app waits for the loading window to paint before getting on with it. */
 const SPLASH_PAINT_CAP_MS = 450;
-/** A moment for the clipboard write to settle before the paste is sent. */
-const PASTE_KEY_DELAY_MS = 60;
 /** Electron's indeterminate value for the taskbar progress; -1 clears it. */
 const TASKBAR_BUSY = 2;
 const TASKBAR_IDLE = -1;
@@ -171,13 +168,15 @@ const usageFeature = registerUsage(context, wiring, { settingsPayload });
 // Module level for the same reason: the monitor starts at ready and stops at quit, both outside
 // registerIpc. The sessions worth measuring are projects' knowledge, handed over as a function.
 const metricsFeature = registerMetrics(context, wiring, { targets: sampleTargets });
+// Likewise: armed at ready, released at quit, and the settings payload asks whether the shortcut
+// took. The desktop notification is the shell's, handed over.
+const clipboardFeature = registerClipboard(context, wiring, { announce });
 let window: BrowserWindow | null = null;
 let dock: Dock | null = null;
 let splash: BrowserWindow | null = null;
 /** The step named before the loading page had parsed, so it is not lost. */
 let pendingStep = "Starting…";
 /** Whether the system-wide paste shortcut is held; false when something else owns it. */
-let pasteHotkeyActive = false;
 let lastProjects: ProjectInfo[] = [];
 
 /**
@@ -480,81 +479,6 @@ async function applyDockConfig(wanted: DockConfig): Promise<ActionResult & { set
   return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
 }
 
-/**
- * A screenshot on the clipboard, as a file a terminal session can be pointed at.
- *
- * Claude Code takes an image by path and a terminal cannot paste a bitmap, so the clipboard's image
- * is written out and its PATH put back on the clipboard. Nobody has to save anything by hand.
- */
-function pasteClipboardImage(): PastedImage {
-  const image = clipboard.readImage();
-  if (image.isEmpty()) return { ok: false, message: "No image on the clipboard." };
-  const file = saveClipImage(image);
-  if (!file) return { ok: false, message: "Could not save the image." };
-  clipboard.writeText(file);
-  return { ok: true, file, message: `Image ready to paste: ${file}` };
-}
-
-/** Write an image into the clips folder. Shared by the shortcut and the clipboard watch. */
-function saveClipImage(image: Electron.NativeImage): string | null {
-  try {
-    mkdirSync(store.paths.clips, { recursive: true });
-    const file = join(store.paths.clips, clipFileName());
-    writeFileSync(file, image.toPNG());
-    return file;
-  } catch (error) {
-    console.error("[hangar] could not save the clipboard image:", (error as Error).message);
-    return null;
-  }
-}
-
-/**
- * Give copied screenshots a path, so the ordinary paste key works in a terminal.
- *
- * Nothing is intercepted: the clipboard is left holding the picture AND the path, and each window
- * takes the one it understands.
- */
-function applyClipboardWatch(): void {
-  if (!config.launch().autoClipPath) {
-    stopClipboardWatch();
-    return;
-  }
-  startClipboardWatch({ save: saveClipImage, clipsDir: store.paths.clips });
-}
-
-/**
- * Register the system-wide paste shortcut, replacing whatever was registered before.
- *
- * Pressed in a terminal, it turns the clipboard's image into a path and presses Ctrl+V there, so
- * the path arrives where the cursor already is.
- */
-function registerPasteHotkey(): boolean {
-  globalShortcut.unregisterAll();
-  const accelerator = config.launch().pasteHotkey.trim();
-  if (!accelerator) {
-    pasteHotkeyActive = false;
-    return true;                                  // deliberately off
-  }
-  try {
-    pasteHotkeyActive = globalShortcut.register(accelerator, () => {
-      const result = pasteClipboardImage();
-      window?.webContents.send(CHANNEL.pasteResult, result);
-      // The shortcut is pressed in some other window, so the answer has to be visible from there —
-      // a toast inside a window nobody is looking at is the same as saying nothing.
-      announce(result.ok ? "Screenshot ready" : "Nothing to paste", result.message ?? "");
-      // sendPaste waits for the user's fingers to leave Ctrl+Alt before it sends anything.
-      if (result.ok) setTimeout(() => void sendPaste(), PASTE_KEY_DELAY_MS);
-    });
-  } catch (error) {
-    console.error("[hangar] paste shortcut unavailable:", (error as Error).message);
-    pasteHotkeyActive = false;
-  }
-  if (accelerator && !pasteHotkeyActive) {
-    console.error(`[hangar] the paste shortcut ${accelerator} is held by something else`);
-  }
-  return pasteHotkeyActive;
-}
-
 /** A desktop notification: the only feedback that reaches a user working in another window. */
 function announce(title: string, body: string): void {
   if (!Notification.isSupported()) return;
@@ -576,7 +500,7 @@ function settingsPayload(): SettingsPayload {
     ui: config.ui(),
     dockDevices: config.dockDevices(),
     dockFloor: config.dockFloor(dockConfig.edge),
-    pasteHotkeyActive,
+    pasteHotkeyActive: clipboardFeature.active(),
     usage: usageFeature.state(),
     updates: config.updates(),
     git: config.git(),
@@ -795,7 +719,6 @@ function registerIpc(): void {
    * Claude Code takes an image by path, and a terminal cannot paste a bitmap — so the useful move
    * is to write the clipboard image out and put its PATH back on the clipboard, ready to paste.
    */
-  ipcMain.handle(CHANNEL.pasteImage, (): PastedImage => pasteClipboardImage());
   ipcMain.handle(CHANNEL.windowState, () => windowState());
 
   ipcMain.handle(CHANNEL.windowCommand, async (_event, command: WindowCommand) => {
@@ -847,8 +770,7 @@ function registerIpc(): void {
     }
     if (payload.launch) {
       config.saveLaunch(payload.launch);
-      registerPasteHotkey();                      // the shortcut may have just changed
-      applyClipboardWatch();                      // as may the automatic path
+      clipboardFeature.rearm();                   // the shortcut, and the automatic path, may have changed
     }
     // The theme lives with the rest of the remembered position, so it comes back with it.
     if (payload.ui) {
@@ -944,8 +866,7 @@ app.whenReady().then(async () => {
   await createWindow();
   splashSays("Starting the monitor…");
   metricsFeature.start();
-  registerPasteHotkey();
-  applyClipboardWatch();
+  clipboardFeature.rearm();
 
   closeSplash();
   window?.show();
@@ -981,8 +902,7 @@ app.on("window-all-closed", () => {
 // waiting for — so hold the quit open exactly once, for that.
 let clearingStruts = false;
 app.on("will-quit", () => {
-  globalShortcut.unregisterAll();
-  stopClipboardWatch();
+  clipboardFeature.dispose();
 });
 
 app.on("before-quit", (event) => {
