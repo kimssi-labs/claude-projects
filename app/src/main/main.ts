@@ -10,7 +10,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, w
 import { dirname, join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, screen, shell } from "electron";
 
-import { ConfigStore, percentFloor } from "../core/config.js";
+import { ConfigStore } from "../core/config.js";
 import { launchCommand, sessionEnvironment, LINUX_TERMINALS, CLAUDE_EXE } from "../core/launcher.js";
 import { register as registerMetrics } from "../features/metrics/main.js";
 import { claudeHome, homePaths } from "../core/paths.js";
@@ -22,19 +22,15 @@ import { headOf, isLinkedWorktree, mainCheckoutOf } from "./gitStatus.js";
 import { register as registerGit } from "../features/git/main.js";
 import { Store } from "../core/store.js";
 import type { DockConfig, GitConfig, LaunchConfig, MetricsSnapshot, ProjectInfo, StatusConfig, UiConfig, UpdateConfig } from "../core/types.js";
-import { bandRect, bandThickness, displayKey, Dock, pickDisplay, setupKey } from "./dock.js";
+import { setupKey } from "./dock.js";
+import { register as registerDock } from "../features/dock/main.js";
 import { register as registerClipboard } from "../features/clipboard/main.js";
-import { DOCK_PERCENT } from "../core/constants.js";
-import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type DeleteRequest, type DisplayInfo, type DockDrag, type OpenSessionRequest, type RenameRequest, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
+import { CHANNEL, MENU_SEPARATOR, PAGES, type ActionResult, type AddProjectResult, type AppInfo, type MenuItemSpec, type PinRequest, type PageName, type DeleteRequest, type OpenSessionRequest, type RenameRequest, type SettingsPayload, type WindowCommand, type WindowState } from "./ipc.js";
 
 import type { SessionTarget } from "./sampler.js";
 
 const DEV_SERVER = "http://localhost:5273";
 const WINDOW = { width: 1180, height: 760, minWidth: 420, minHeight: 320 } as const;
-/** How long a drag has to stop before its new thickness is written down. */
-const DOCK_RESIZE_SETTLE_MS = 400;
-/** A band within this many pixels of what was asked for counts as "the platform agreed". */
-const FLOOR_SLACK_PX = 4;
 /** Small enough to read at a glance, large enough for the longest step. */
 const SPLASH = { width: 380, height: 96 } as const;
 /** How long the app waits for its own first paint before showing the window regardless. */
@@ -135,7 +131,6 @@ function closeSplash(): void {
 function windowState(): WindowState {
   return {
     maximized: window ? !window.isDestroyed() && window.isMaximized() : false,
-    docked: dock?.isDocked === true,
   };
 }
 
@@ -171,8 +166,15 @@ const metricsFeature = registerMetrics(context, wiring, { targets: sampleTargets
 // Likewise: armed at ready, released at quit, and the settings payload asks whether the shortcut
 // took. The desktop notification is the shell's, handed over.
 const clipboardFeature = registerClipboard(context, wiring, { announce });
+// The window itself stays the shell's; dock borrows it through the context and hands back the one
+// thing that is the shell's to do — giving an undocked window a window's shape.
+const dockFeature = registerDock(context, wiring, {
+  settingsPayload,
+  pushSettings: () => window?.webContents.send(CHANNEL.settingsPush, settingsPayload()),
+  placeFloating,
+  appNote: (text) => window?.webContents.send(CHANNEL.appInfo, text),
+});
 let window: BrowserWindow | null = null;
-let dock: Dock | null = null;
 let splash: BrowserWindow | null = null;
 /** The step named before the loading page had parsed, so it is not lost. */
 let pendingStep = "Starting…";
@@ -338,69 +340,19 @@ async function createWindow(): Promise<void> {
   // invisible resize border, and a window that grows a little on every run is a bug people notice.
   if (onScreen && savedBounds) window.setBounds(savedBounds);
 
-  dock = new Dock(window);
-  window.on("maximize", () => {
-    // setMaximizable(false) stops the caption button and the system menu, not the API or every
-    // window-manager gesture. While docked the band already is the full state, so undo it.
-    if (dock?.isDocked && window && !window.isDestroyed()) window.unmaximize();
-    pushWindowState();
-  });
+  dockFeature.attach(window);
+  window.on("maximize", pushWindowState);
   window.on("unmaximize", pushWindowState);
   window.on("restore", pushWindowState);
-  // Plugging a monitor in or out is a different arrangement, with its own remembered dock.
-  const rearranged = (): void => void reapplyDockForSetup();
-  screen.on("display-added", rearranged);
-  screen.on("display-removed", rearranged);
-  screen.on("display-metrics-changed", (_event, _display, changed) => {
-    // A work-area change is usually OUR band being applied or released; reacting to it would
-    // re-dock the window the moment the user undocked it. Resolution and scaling are real changes.
-    if (changed.every((metric) => metric === "workArea")) return;
-    rearranged();
-  });
-  // Dragging a docked window out of its band is how you undock it; the saved setting follows.
-  // Applying a band talks to the shell, so a drag must not do it per mouse-move: settle first.
-  let resizeTimer: NodeJS.Timeout | null = null;
-  dock.onUserResize = (thickness) => {
-    if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      resizeTimer = null;
-      // The same drag can end in an undock; by the time this fires there may be no band to size.
-      if (!dock?.isDocked) return;
-      const current = config.dock(null, setupKey());
-      if (!current.enabled || !window) return;
-      const { display } = pickDisplay(current.device);
-      const span = bandThickness(dock?.workArea(display) ?? display.workArea, current.edge);
-      const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
-      config.saveDock({ ...current, percent }, setupKey());
-      // Tell the shell the new extent, and nothing else. Re-applying the dock would place the
-      // window at `percent` rounded to a whole number — up to twenty pixels away from where the
-      // drag ended — which is the jump-and-flicker at the end of every resize. The outer edges
-      // cannot be dragged at all now, so there is no longer a band to pull back onto its edge.
-      void dock.resizeTo(thickness).then(() => {
-        window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
-      });
-    }, DOCK_RESIZE_SETTLE_MS);
-  };
-  dock.onUserUndock = () => {
-    if (resizeTimer) {                            // a pending size for a band that no longer exists
-      clearTimeout(resizeTimer);
-      resizeTimer = null;
-    }
-    const current = config.dock(null, setupKey());
-    if (!current.enabled) return;
-    config.saveDock({ ...current, enabled: false }, setupKey());
-    pushWindowState();
-    window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
-  };
 
   // `close` and not `closed`: the reservation is removed while the window still exists, and
   // synchronously, because nothing waits for us once the process starts shutting down.
   window.on("close", () => {
     // Docked, the bounds are the band's, not the user's choice — do not remember those.
-    if (window && !dock?.isDocked && !window.isMinimized()) {
+    if (window && !dockFeature.isDocked() && !window.isMinimized()) {
       config.saveUi({ ...config.ui(), window: window.getNormalBounds() });
     }
-    dock?.releaseSync();
+    dockFeature.releaseSync();
   });
   window.on("closed", () => {
     window = null;
@@ -422,61 +374,13 @@ async function createWindow(): Promise<void> {
     firstPaint,
     new Promise<void>((resolve) => setTimeout(resolve, FIRST_PAINT_CAP_MS)),
   ]);
-  const saved = config.dock(null, setupKey());
-  if (saved.enabled) {
-    const placement = await dock.apply(saved);
-    if (placement.note) window?.webContents.send(CHANNEL.appInfo, placement.note);
-  }
-  // Told again, because the renderer asked for this state while it was first rendering — which is
-  // before the band above exists. Without this the caption arrow offers to dock a window that is
-  // already a band, and the title bar stays undraggable for one that is not.
-  pushWindowState();
+  await dockFeature.restore();
 }
 
 /** Sessions worth measuring right now: the running ones, from the last scan. */
 function sampleTargets(): SessionTarget[] {
   return lastProjects.flatMap((project) =>
     project.sessions.filter((s) => s.live && s.pid).map((s) => ({ sessionId: s.id, pid: s.pid as number })));
-}
-
-/**
- * Re-read the dock for the monitors attached right now, and do what it says.
- *
- * The band is released either way first: the monitor it was on may be the one that just left.
- */
-async function reapplyDockForSetup(): Promise<void> {
-  if (!window || !dock) return;
-  const wanted = config.dock(null, setupKey());
-  await dock.release();
-  if (wanted.enabled) {
-    const placement = await dock.apply(wanted);
-    if (placement.note) console.log(`[hangar] ${placement.note}`);
-  }
-  // Plugging a monitor in or out docks and undocks the window on its own, and the caption arrow
-  // reads this rather than the settings — so it has to be told, on both paths.
-  pushWindowState();
-  window.webContents.send(CHANNEL.settingsPush, settingsPayload());
-}
-
-/** Put the window in the band `wanted` describes, and report what the platform actually gave. */
-async function applyDockConfig(wanted: DockConfig): Promise<ActionResult & { settings?: SettingsPayload }> {
-  if (!window || !dock) return { ok: false, message: "No window." };
-  const { display } = pickDisplay(wanted.device);
-  // Apply exactly what was asked for. Forcing the percentage up to a previously measured floor
-  // made the next measurement bigger again, and the floor climbed with it — 12 % became 26 %,
-  // then 35 %. The floor is what the slider stops at, not what the band is set to.
-  const applied: DockConfig = { ...wanted };
-  config.saveDock(applied, setupKey());
-  const placement = await dock.apply(applied);
-  // What the window really got is the floor for this axis: remember it so the slider can stop
-  // there. A band that came back the size it asked for proves there is no floor above it, which
-  // is what un-learns a floor measured when something else was wrong.
-  const got = bandThickness(placement.applied, applied.edge);
-  const asked = bandThickness(bandRect(dock.workArea(display), applied.edge, applied.percent), applied.edge);
-  if (got > asked + FLOOR_SLACK_PX) config.saveDockFloor(applied.edge, got);
-  else config.saveDockFloor(applied.edge, 0);   // it fitted, so nothing is stopping it here
-  pushWindowState();
-  return { ok: true, message: placement.note ?? undefined, settings: settingsPayload() };
 }
 
 /** A desktop notification: the only feedback that reaches a user working in another window. */
@@ -490,22 +394,16 @@ function announce(title: string, body: string): void {
 }
 
 function settingsPayload(): SettingsPayload {
-  const dockConfig = config.dock(null, setupKey());
-  const { display } = pickDisplay(dockConfig.device);
-  const span = bandThickness(display.workArea, dockConfig.edge);
   return {
-    dock: dockConfig,
+    ...dockFeature.slice(),
     status: config.status(),
     launch: config.launch(),
     ui: config.ui(),
-    dockDevices: config.dockDevices(),
-    dockFloor: config.dockFloor(dockConfig.edge),
     pasteHotkeyActive: clipboardFeature.active(),
     usage: usageFeature.state(),
     updates: config.updates(),
     git: config.git(),
     gitAvailable: Boolean(which("git")),
-    minPercent: percentFloor(config.dockFloor(dockConfig.edge), span),
   };
 }
 
@@ -517,24 +415,6 @@ function safeJson(file: string): Record<string, unknown> {
   } catch {
     return {};
   }
-}
-
-function displays(): DisplayInfo[] {
-  const saved = new Set(config.dockDevices());
-  const primary = screen.getPrimaryDisplay();
-  const all = screen.getAllDisplays();
-  return all.map((display, index) => {
-    const key = displayKey(display);
-    return {
-      // The key, not the id: ids are reshuffled between runs, and the saved dock has to survive.
-      id: key,
-      // Windows leaves `label` empty for some monitors, and "" is not something to pick from a list.
-      label: display.label || `Monitor ${index + 1}`,
-      bounds: display.bounds,
-      primary: display.id === primary.id,
-      saved: saved.has(key) || saved.has(String(display.id)),
-    };
-  });
 }
 
 function registerIpc(): void {
@@ -711,7 +591,6 @@ function registerIpc(): void {
   });
 
   ipcMain.handle(CHANNEL.loadSettings, () => settingsPayload());
-  ipcMain.handle(CHANNEL.displays, () => displays());
 
   /**
    * A screenshot on the clipboard, as a file a terminal session can be pointed at.
@@ -725,25 +604,10 @@ function registerIpc(): void {
     if (!window || window.isDestroyed()) return windowState();
     if (command === "minimize") window.minimize();
     else if (command === "close") window.close();
-    else if (command === "dock") {
-      if (dock?.isDocked) {
-        await dock.release();
-        placeFloating();
-        dock.onUserUndock?.();
-      } else {
-        // Back to the band this arrangement of monitors remembers.
-        await applyDockConfig({ ...config.dock(null, setupKey()), enabled: true });
-      }
-    } else {
+    else {
       // Maximise means fill the screen, and never the band: a docked window gives the edge back
-      // first, so the two states cannot be held at once. It is placed as a window before it is
-      // maximised, so the restore AFTER the maximise has a window shape to come back to — without
-      // this, restoring returned to the band's rectangle, pressed against the edge.
-      if (dock?.isDocked) {
-        await dock.release();
-        placeFloating();
-        dock.onUserUndock?.();
-      }
+      // first. Main asks dock for that here, as the place the two are composed.
+      await dockFeature.undockForMaximize();
       if (window.isMaximized()) window.unmaximize();
       else window.maximize();
     }
@@ -782,44 +646,6 @@ function registerIpc(): void {
     // Tell the window too: whoever changed a setting, the screen should already agree with it.
     window?.webContents.send(CHANNEL.settingsPush, saved);
     return saved;
-  });
-
-  ipcMain.handle(CHANNEL.applyDock, async (_event, wanted: DockConfig) => applyDockConfig(wanted));
-
-  /**
-   * The band's own resize grip.
-   *
-   * The window frame does not resize while docked — that is what takes the resize cursor off the
-   * three sides that are against the screen — so the one side that may be dragged is a handle in
-   * the page. Each step only moves the window, which is cheap; the shell is told once, at the end,
-   * because reserving costs the best part of half a second.
-   */
-  ipcMain.on(CHANNEL.dragDock, (_event, { thickness, done }: DockDrag) => {
-    if (!dock?.isDocked) return;
-    if (!done) {
-      dock.preview(thickness);
-      return;
-    }
-    const current = config.dock(null, setupKey());
-    if (!current.enabled) return;
-    const { display } = pickDisplay(current.device);
-    const span = bandThickness(dock.workArea(display), current.edge);
-    const percent = Math.max(DOCK_PERCENT.min, Math.min(DOCK_PERCENT.max, Math.round((thickness / span) * 100)));
-    config.saveDock({ ...current, percent }, setupKey());
-    void dock.resizeTo(thickness).then(() => {
-      window?.webContents.send(CHANNEL.settingsPush, settingsPayload());
-    });
-  });
-
-
-  ipcMain.handle(CHANNEL.releaseDock, async () => {
-    await dock?.release();
-    placeFloating();
-    pushWindowState();
-    const current = config.dock(null, setupKey());
-    config.saveDock({ ...current, enabled: false }, setupKey());
-    pushWindowState();
-    return settingsPayload();
   });
 
   ipcMain.handle(CHANNEL.saveUi, (_event, ui: Partial<UiConfig>) => config.saveUi({ ...config.ui(), ...ui }));
@@ -894,23 +720,21 @@ app.on("child-process-gone", (_event, details) =>
 app.on("window-all-closed", () => {
   console.log("[hangar] window-all-closed -> quitting");
   metricsFeature.stop();
-  dock?.releaseSync();
+  dockFeature.releaseSync();
   app.quit();
 });
 
-// Windows is already handled synchronously on close; X11 needs an `xprop` call, which does need
-// waiting for — so hold the quit open exactly once, for that.
-let clearingStruts = false;
 app.on("will-quit", () => {
   clipboardFeature.dispose();
 });
 
+// Dock decides whether the quit has to wait (X11 struts need an `xprop` call); the shell only holds
+// the door, and exactly once.
 app.on("before-quit", (event) => {
-  dock?.releaseSync();                            // never leave a reserved edge behind
-  if (process.platform === "win32" || clearingStruts) return;
-  clearingStruts = true;
+  const pending = dockFeature.releaseOnQuit();
+  if (!pending) return;
   event.preventDefault();
-  void dock?.release().finally(() => app.quit());
+  void pending.finally(() => app.quit());
 });
 
 export { which, detectLinuxTerminal };

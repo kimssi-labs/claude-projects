@@ -98,6 +98,13 @@ describe("the surface the page can reach", () => {
       onMetrics: "event metrics:push",
       pasteImage: "invoke clipboard:paste-image",
       onPasteResult: "event clipboard:paste-result",
+      displays: "invoke settings:displays",
+      applyDock: "invoke dock:apply",
+      dragDock: "send dock:drag",
+      releaseDock: "invoke dock:release",
+      dockToggle: "invoke dock:toggle",
+      dockState: "invoke dock:state",
+      onDockState: "event dock:state-push",
     });
   });
 
