@@ -7,14 +7,15 @@
  * in every geometry test:
  *
  * 1. DWM draws a 1 px border around a frameless window, top row included, and `DWMWA_COLOR_NONE`
- *    does not remove it — it paints #f3f3f3 (DEFAULT paints #474747). A real COLORREF is honoured,
- *    so a band's border is painted in the page's own background and cannot be told from it.
- * 2. Showing the window — the first show at start-up, a hide and show, a minimise and restore — and
- *    every change of activation — another window clicked, this one clicked again — hands the frame
- *    back to Chromium, which writes its own colour over the one DWM was given (measured: a band was
- *    right while focused and grey the moment another window was chosen). So the frame is told again
- *    on every `show`, `restore`, `focus` and `blur`, by this module's own listeners; nothing outside
- *    has to remember to.
+ *    does not remove it — it paints #f3f3f3 (DEFAULT paints a translucent grey). A real colour is
+ *    honoured, so a band's border is painted in the page's own background and cannot be told from it.
+ * 2. Electron writes that colour itself — from the window's ACCENT colour — on every show and every
+ *    change of activation. A colour written straight to DWM behind its back was therefore undone by
+ *    the next show (a grey ring on every band restored at start-up) and by the next click elsewhere;
+ *    writing it again from the `blur` event put it back two frames later, which is a flash. So the
+ *    colour is not written to DWM at all: it is handed to Electron as the accent colour, and Electron
+ *    keeps it (measured: no change of the border pixel at all across losing focus, or a hide/show).
+ *    `false` is the system's own grey — what a window that is not a band wears.
  * 3. On a scaled display there is a second ring pixel that Chromium draws and no attribute reaches;
  *    it follows Chromium's own light/dark, which `nativeTheme.themeSource` sets. The page's theme is
  *    therefore mirrored into Chromium, and the window's background is the page's colour too.
@@ -31,17 +32,8 @@ import type { ThemeMode } from "../core/types.js";
 
 /** DwmSetWindowAttribute: the corner preference, and its values. */
 export const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
-const DWMWCP_DEFAULT = 0;
-const DWMWCP_DONOTROUND = 1;
-/** DwmSetWindowAttribute: the border colour, and "the system's own" — what an undocked window wears. */
-export const DWMWA_BORDER_COLOR = 34;
-export const DWMWA_COLOR_DEFAULT = 0xffffffff;
-
-/** A CSS `#rrggbb` as the COLORREF (0x00BBGGRR) DWM takes. */
-export function colourRef(hex: string): number {
-  const n = Number.parseInt(hex.replace("#", ""), 16);
-  return (((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff)) >>> 0;
-}
+export const DWMWCP_DEFAULT = 0;
+export const DWMWCP_DONOTROUND = 1;
 
 /** Which palette `mode` puts the page in, resolving "system" the way the page does. */
 export function resolveTheme(mode: ThemeMode, systemIsDark = nativeTheme.shouldUseDarkColors): "light" | "dark" {
@@ -64,21 +56,21 @@ export function followTheme(mode: ThemeMode): string {
   return surfaceFor(mode);
 }
 
-/** What the frame is told — both attributes, as values a test can read back. */
+/** What the frame is told — as values a test can read back. */
 export interface FrameLook {
+  /** The DWM corner preference. */
   corners: number;
-  border: number;
+  /** Electron's accent colour for the window: the page's colour for a band, `false` for a window. */
+  accent: string | false;
 }
 
-/** Square corners and a border in `colour` for a band; the system's own look for a window. */
-export function lookFor(flush: boolean, colour: number): FrameLook {
-  return flush
-    ? { corners: DWMWCP_DONOTROUND, border: colour }
-    : { corners: DWMWCP_DEFAULT, border: DWMWA_COLOR_DEFAULT };
+/** Square corners and a border in the page's colour for a band; the system's own look for a window. */
+export function lookFor(flush: boolean, surface: string): FrameLook {
+  return flush ? { corners: DWMWCP_DONOTROUND, accent: surface } : { corners: DWMWCP_DEFAULT, accent: false };
 }
 
-/** The window events after which Chromium has written its own frame colour (fact 2 above). */
-export const RESETS_THE_FRAME = ["show", "restore", "focus", "blur"] as const;
+/** The window events after which the frame is told again (fact 2 — the colour is Electron's to keep). */
+export const RESETS_THE_FRAME = ["show", "restore"] as const;
 
 /** The one DWM call this needs, as something a test can stand in for. */
 export interface FrameSetter {
@@ -117,7 +109,8 @@ export function nativeHandle(window: BrowserWindow): number {
  * The frame of one window, kept as it should look for as long as the window lives.
  *
  * Two inputs — is it a band (`flush`), and which theme is the page in (`theme`) — and the frame is
- * told the answer now and again every time Chromium could have forgotten it.
+ * told the answer: the border colour to Electron, which keeps it; the corners to DWM, again on each
+ * show in case Chromium redrew the frame.
  */
 export class WindowChrome {
   private flushed = false;
@@ -129,7 +122,7 @@ export class WindowChrome {
     private readonly handleOf: (window: BrowserWindow) => number = nativeHandle,
   ) {
     const again = (): void => this.apply();
-    // Fact 2. Through the plain emitter: BrowserWindow's per-event overloads take one literal, not a list.
+    // Through the plain emitter: BrowserWindow's per-event overloads take one literal, not a list.
     for (const event of RESETS_THE_FRAME) (window as NodeJS.EventEmitter).on(event, again);
     nativeTheme.on("updated", again);             // "system" follows the machine's own switch
     window.once("closed", () => nativeTheme.removeListener("updated", again));
@@ -149,10 +142,9 @@ export class WindowChrome {
   }
 
   private apply(): void {
-    if (!this.frame || this.window.isDestroyed()) return;
-    const look = lookFor(this.flushed, colourRef(surfaceFor(this.mode)));
-    const hwnd = this.handleOf(this.window);
-    this.frame.set(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, look.corners);
-    this.frame.set(hwnd, DWMWA_BORDER_COLOR, look.border);
+    if (this.window.isDestroyed()) return;
+    const look = lookFor(this.flushed, surfaceFor(this.mode));
+    this.window.setAccentColor(look.accent);
+    this.frame?.set(this.handleOf(this.window), DWMWA_WINDOW_CORNER_PREFERENCE, look.corners);
   }
 }

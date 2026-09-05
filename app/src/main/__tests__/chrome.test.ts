@@ -1,9 +1,10 @@
 /**
  * The window's frame, tested without a window or a desktop.
  *
- * What DWM does with the values is proven by the e2e pixel tests; what is pinned here is that the
- * frame is told the right values at the right moments — above all again after every `show`, which
- * is the fact that shipped a grey ring in v2.11.4 while every other test passed.
+ * What DWM and Electron do with the values is proven by the e2e pixel tests; what is pinned here is
+ * that the frame is told the right values at the right moments: the border as Electron's accent
+ * colour (which it keeps across shows and activation changes — the fact that shipped a grey ring in
+ * v2.11.4 and a flash in v2.12.1 while every other test passed), the corners to DWM.
  */
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,45 +36,33 @@ vi.mock("electron", () => ({
 
 import { SURFACE } from "../../core/constants.js";
 import {
-  colourRef, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT, DWMWA_WINDOW_CORNER_PREFERENCE, lookFor, resolveTheme, RESETS_THE_FRAME, surfaceFor, WindowChrome,
+  DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND, lookFor, resolveTheme, RESETS_THE_FRAME, surfaceFor, WindowChrome,
 } from "../chrome.js";
 
-const LIGHT = colourRef(SURFACE.light);
-const DARK = colourRef(SURFACE.dark);
-
-/** A window that can be shown, restored and closed, and says whether it is gone. */
+/** A window that can be shown, restored and closed, says whether it is gone, and records its accent. */
 class FakeWindow extends EventEmitter {
   destroyed = false;
+  accents: (string | boolean | null)[] = [];
   isDestroyed(): boolean { return this.destroyed; }
+  setAccentColor(value: string | boolean | null): void { this.accents.push(value); }
 }
 
-/** Every attribute the frame was told, in order, as `[attribute, value]`. */
-function chrome(): { chrome: WindowChrome; window: FakeWindow; told: [number, number][] } {
-  const told: [number, number][] = [];
+/** A chrome over a fake window and a fake DWM; `corners` is every corner preference DWM was told. */
+function chrome(): { chrome: WindowChrome; window: FakeWindow; corners: number[] } {
+  const corners: number[] = [];
   const window = new FakeWindow();
   const instance = new WindowChrome(
     window as unknown as Electron.BrowserWindow,
-    { set: (_hwnd, attribute, value) => void told.push([attribute, value]) },
+    { set: (_hwnd, attribute, value) => { if (attribute === DWMWA_WINDOW_CORNER_PREFERENCE) corners.push(value); } },
     () => 0x1234,
   );
-  return { chrome: instance, window, told };
+  return { chrome: instance, window, corners };
 }
-
-const band = (colour: number): [number, number][] => [[DWMWA_WINDOW_CORNER_PREFERENCE, 1], [DWMWA_BORDER_COLOR, colour]];
-const plain: [number, number][] = [[DWMWA_WINDOW_CORNER_PREFERENCE, 0], [DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT]];
 
 beforeEach(() => {
   theme.state.themeSource = "system";
   theme.state.shouldUseDarkColors = false;
   theme.listeners.clear();
-});
-
-describe("colourRef", () => {
-  it("is the COLORREF DWM takes: 0x00BBGGRR", () => {
-    expect(colourRef("#ff0000")).toBe(0x0000ff);
-    expect(colourRef("#141413")).toBe(0x131414);
-    expect(colourRef("faf9f7")).toBe(0xf7f9fa);
-  });
 });
 
 describe("the page's colour for a theme", () => {
@@ -86,78 +75,89 @@ describe("the page's colour for a theme", () => {
 });
 
 describe("what the frame is told", () => {
-  it("is square corners and the given colour for a band, and the system's own look for a window", () => {
-    expect(lookFor(true, DARK)).toEqual({ corners: 1, border: DARK });
-    expect(lookFor(false, DARK)).toEqual({ corners: 0, border: DWMWA_COLOR_DEFAULT });
+  it("is square corners and the page's colour as the accent for a band; the system's own look for a window", () => {
+    expect(lookFor(true, SURFACE.dark)).toEqual({ corners: DWMWCP_DONOTROUND, accent: SURFACE.dark });
+    expect(lookFor(false, SURFACE.dark)).toEqual({ corners: DWMWCP_DEFAULT, accent: false });
   });
 });
 
 describe("a window's chrome", () => {
-  it("dresses a band in the page's colour, and mirrors the theme into Chromium", () => {
-    const { chrome: c, told } = chrome();
+  it("dresses a band in the page's colour through Electron's accent, and mirrors the theme into Chromium", () => {
+    const { chrome: c, window, corners } = chrome();
     c.theme("dark");
     expect(theme.state.themeSource).toBe("dark");
-    told.length = 0;
     c.flush(true);
-    expect(told).toEqual(band(DARK));
+    expect(window.accents.at(-1)).toBe(SURFACE.dark);
+    expect(corners.at(-1)).toBe(DWMWCP_DONOTROUND);
   });
 
-  it("tells the frame again after every event Chromium writes its own colour on — the v2.11.4 and v2.12.0 regressions", () => {
-    const { chrome: c, window, told } = chrome();
+  it("does not write the border colour to DWM itself — Electron would undo it on the next show or click elsewhere", () => {
+    const told: number[] = [];
+    const window = new FakeWindow();
+    const c = new WindowChrome(window as unknown as Electron.BrowserWindow, { set: (_h, attribute) => { told.push(attribute); } }, () => 1);
     c.theme("dark");
     c.flush(true);
-    // show/restore: the band restored at start-up wore a grey ring (v2.11.4). focus/blur: the ring
-    // was right until another window was clicked (v2.12.0).
-    expect([...RESETS_THE_FRAME]).toEqual(["show", "restore", "focus", "blur"]);
+    expect(told.every((attribute) => attribute === DWMWA_WINDOW_CORNER_PREFERENCE)).toBe(true);
+  });
+
+  it("tells the frame again after a show or restore, in case Chromium redrew it", () => {
+    const { chrome: c, window, corners } = chrome();
+    c.theme("dark");
+    c.flush(true);
+    expect([...RESETS_THE_FRAME]).toEqual(["show", "restore"]);
     for (const event of RESETS_THE_FRAME) {
-      told.length = 0;
+      corners.length = 0;
+      window.accents.length = 0;
       window.emit(event);
-      expect(told, `after ${event}`).toEqual(band(DARK));
+      expect(corners, `corners after ${event}`).toEqual([DWMWCP_DONOTROUND]);
+      expect(window.accents, `accent after ${event}`).toEqual([SURFACE.dark]);
     }
   });
 
   it("gives the window its own look back when it is no longer a band", () => {
-    const { chrome: c, window, told } = chrome();
+    const { chrome: c, window, corners } = chrome();
     c.flush(true);
     c.flush(false);
-    expect(told.slice(-2)).toEqual(plain);
-    told.length = 0;
-    window.emit("show");
-    expect(told, "a window stays a window through a show").toEqual(plain);
+    expect(window.accents.at(-1)).toBe(false);
+    expect(corners.at(-1)).toBe(DWMWCP_DEFAULT);
   });
 
   it("follows the machine's own switch while the theme is 'system'", () => {
-    const { chrome: c, told } = chrome();
+    const { chrome: c, window } = chrome();
     c.theme("system");
     c.flush(true);
-    expect(told.slice(-2)).toEqual(band(LIGHT));
+    expect(window.accents.at(-1)).toBe(SURFACE.light);
     theme.flip(true);
-    expect(told.slice(-2), "re-coloured on the machine's switch").toEqual(band(DARK));
+    expect(window.accents.at(-1), "re-coloured on the machine's switch").toBe(SURFACE.dark);
   });
 
   it("re-colours a band the moment the theme changes", () => {
-    const { chrome: c, told } = chrome();
+    const { chrome: c, window } = chrome();
     c.theme("light");
     c.flush(true);
     c.theme("dark");
-    expect(told.slice(-2)).toEqual(band(DARK));
+    expect(window.accents.at(-1)).toBe(SURFACE.dark);
   });
 
   it("leaves a destroyed window alone, and stops listening to the machine once it is closed", () => {
-    const { chrome: c, window, told } = chrome();
+    const { chrome: c, window, corners } = chrome();
     c.flush(true);
     window.destroyed = true;
-    told.length = 0;
+    corners.length = 0;
+    window.accents.length = 0;
     window.emit("show");
     c.theme("dark");
-    expect(told).toEqual([]);
+    expect(corners).toEqual([]);
+    expect(window.accents).toEqual([]);
     window.emit("closed");
     expect(theme.listeners.size).toBe(0);
   });
 
-  it("does nothing at all where there is no DWM", () => {
+  it("still colours the border where there is no DWM binding", () => {
     const window = new FakeWindow();
     const c = new WindowChrome(window as unknown as Electron.BrowserWindow, null, () => 1);
-    expect(() => { c.theme("dark"); c.flush(true); window.emit("show"); }).not.toThrow();
+    c.theme("dark");
+    c.flush(true);
+    expect(window.accents.at(-1)).toBe(SURFACE.dark);
   });
 });
