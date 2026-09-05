@@ -438,7 +438,8 @@ if (process.env[CLAUDE_HOME_ENV]) app.setPath("userData", join(claudeHome(), "ca
 // hands over to the running one and leaves: two would fight over the same band and the same
 // settings file, and there is nothing a second window could show that the first does not.
 if (!app.requestSingleInstanceLock()) {
-  app.quit();
+  // exit, not quit: nothing has been created that the quit events would have to release.
+  app.exit(0);
 } else {
   app.on("second-instance", () => {
     // Not during start-up: showing the window then puts it beside the splash, and it is about to
