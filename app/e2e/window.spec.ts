@@ -697,7 +697,13 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
   // released, and captured again bare: minutes on a two-monitor desk, and the shared 60 s budget is
   // for a test that clicks something. Measured at ~50 s for two monitors; this leaves room for a third.
   test.setTimeout(4 * 60_000);
-  const { app, page } = await launch(fixture());
+  // Dark: the page is #141413 there, so every wrong colour a border can have — Chromium's #f3f3f3,
+  // the system's #474747, a wallpaper-tinted grey, the desktop itself — is a hundred channels away,
+  // while the shadow a neighbouring window casts onto the band's outermost pixel darkens it by a
+  // few. That shadow is real (measured 4 with another band docked beside the one under test), and
+  // is what the tolerance below is for.
+  const { app, page } = await launch(fixture({ theme: "dark" }));
+  const BORDER_TOLERANCE = 6;
   try {
     for (const display of await monitors(page)) {
       const before = await workAreaOf(app, display.id);
@@ -760,10 +766,13 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
 
         const where = (points: { x: number; y: number }[], seen: (string | null)[], keep: (c: string | null, i: number) => boolean) =>
           seen.map((c, i) => (keep(c, i) ? `${points[i]!.x},${points[i]!.y}=${c}` : null)).filter((s) => s !== null);
-        expect(where(outer, outerSeen, (c, i) => (isBorder(i) ? c !== surface : c === null || c === bare[i])),
-          `${label}: the band's outermost pixels are its border in the page's colour, or its content — never the desktop (page is ${surface}; band ${band.x},${band.y} ${band.width}x${band.height})`)
+        expect(where(outer, outerSeen, (c, i) => (isBorder(i) ? c === null || channelGap(c, surface) > BORDER_TOLERANCE : c === null || c === bare[i])),
+          `${label}: the band's outermost pixels are its border in the page's colour (within ${BORDER_TOLERANCE} for a neighbour's shadow), or its content — never the desktop (page is ${surface}; band ${band.x},${band.y} ${band.width}x${band.height})`)
           .toEqual([]);
-        expect(where(inner, innerSeen, (c) => c === null || channelGap(c, surface) > 24), `${label}: Chromium's frame pixel is in the page's theme (page is ${surface})`)
+        // The second ring pixel is Chromium's own frame, which follows its theme and, in the dark one,
+        // the machine's accent: measured #1a202f against a #141413 page on the 125 % display (28 in
+        // blue). The desktop is a hundred or more away, a light frame on a dark page two hundred.
+        expect(where(inner, innerSeen, (c) => c === null || channelGap(c, surface) > 32), `${label}: Chromium's frame pixel is in the page's theme (page is ${surface})`)
           .toEqual([]);
       }
     }

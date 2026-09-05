@@ -8,14 +8,14 @@
  * Electron.
  */
 import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, Notification, screen, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, Notification, screen, shell } from "electron";
 
 import { wire } from "../bridge/build.js";
 import type { MainContext } from "../bridge/context.js";
 import { ConfigStore } from "../core/config.js";
-import { SURFACE } from "../core/constants.js";
 import { CLAUDE_HOME_ENV, claudeHome } from "../core/paths.js";
 import { Store } from "../core/store.js";
+import { followTheme, resolveTheme, surfaceFor, WindowChrome } from "./chrome.js";
 import { register as registerClipboard } from "../features/clipboard/main.js";
 import { register as registerDock } from "../features/dock/main.js";
 import { register as registerGit } from "../features/git/main.js";
@@ -38,28 +38,6 @@ const SPLASH_PAINT_CAP_MS = 450;
 /** Electron's indeterminate value for the taskbar progress; -1 clears it. */
 const TASKBAR_BUSY = 2;
 const TASKBAR_IDLE = -1;
-/** The page's own background, so the window is painted the instant it appears. */
-const WINDOW_BACKGROUND = SURFACE;
-
-/** Which palette the window is in, resolving "system" the way the page does. */
-function resolvedTheme(): "light" | "dark" {
-  const mode = config.ui().theme;
-  if (mode === "system") return nativeTheme.shouldUseDarkColors ? "dark" : "light";
-  return mode;
-}
-
-/**
- * Tell Chromium which side the app is on, so what IT draws agrees with the page.
- *
- * Native menus and dialogs, and — the reason this exists — the one pixel of frame Chromium paints
- * around a docked band on a scaled display, which no attribute of ours reaches: measured #f3f3f3
- * when Chromium thinks it is light, #202020 when dark. Against a dark band the former is a bright
- * hairline. The setting's own values are exactly what `themeSource` takes.
- */
-function followTheme(): void {
-  nativeTheme.themeSource = config.ui().theme;
-}
-
 /**
  * The loading window: shown first, alone, and closed when the app is ready to take over.
  *
@@ -80,12 +58,12 @@ function openSplash(): void {
       center: true,
       title: "Hangar",
       icon: join(__dirname, "..", "..", "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
-      backgroundColor: WINDOW_BACKGROUND[resolvedTheme()],
+      backgroundColor: surfaceFor(config.ui().theme),   // the page's own, so it is painted the instant it appears
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     splash.setMenu(null);
     splash.setProgressBar(TASKBAR_BUSY);
-    const theme = resolvedTheme();
+    const theme = resolveTheme(config.ui().theme);
     void splash.loadFile(join(__dirname, "..", "renderer", "splash.html"));
     splash.webContents.once("did-finish-load", () => {
       void splash?.webContents
@@ -211,12 +189,13 @@ const settingsFeature = registerSettings(context, wiring, {
     if (patch.ui) {
       if (config.ui().monitor) metricsFeature.start();
       else metricsFeature.stop();
-      followTheme();
-      dockFeature.refreshChrome();                 // a band's border is drawn in the page's colour
+      chrome?.theme(config.ui().theme);            // Chromium's frame and a band's border follow the page
     }
   },
 });
 let window: BrowserWindow | null = null;
+/** The window's frame — its look is kept by this, not by whoever last touched the window. */
+let chrome: WindowChrome | null = null;
 let splash: BrowserWindow | null = null;
 /** Start-up is over and the window is on screen — before that a second launch has nothing to raise. */
 let shown = false;
@@ -276,7 +255,7 @@ async function createWindow(): Promise<void> {
     // Hidden until it has something to show: the loading window is on screen meanwhile, and a
     // half-drawn app appearing before it is ready is worse than a moment more of the splash.
     show: false,
-    backgroundColor: WINDOW_BACKGROUND[resolvedTheme()],
+    backgroundColor: surfaceFor(config.ui().theme),   // the page's own, so it is painted the instant it appears
     title: "Hangar",
     autoHideMenuBar: true,
     // Docked, a title bar is a strip of the band that shows nothing. The caption buttons are drawn
@@ -297,7 +276,9 @@ async function createWindow(): Promise<void> {
   // invisible resize border, and a window that grows a little on every run is a bug people notice.
   if (onScreen && savedBounds) window.setBounds(savedBounds);
 
-  dockFeature.attach(window);
+  chrome = new WindowChrome(window);
+  chrome.theme(config.ui().theme);
+  dockFeature.attach(window, chrome);
   window.on("maximize", pushWindowState);
   window.on("unmaximize", pushWindowState);
   window.on("restore", pushWindowState);
@@ -405,7 +386,7 @@ function registerIpc(): void {
 
 /** Start-up, once the platform is ready: splash, scan, window, monitor. */
 async function start(): Promise<void> {
-  followTheme();                                  // before any window: the splash is painted in it too
+  followTheme(config.ui().theme);                 // before any window: the splash is painted in it too
   openSplash();
   // Alone on the machine for its first frame: the app's renderer is a much heavier start.
   await splashReady(SPLASH_PAINT_CAP_MS);
