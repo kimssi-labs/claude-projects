@@ -4,6 +4,7 @@
  * These drive the real shell — the band really is reserved on the primary monitor while a test
  * runs — so every test releases it again in a `finally`, and the bands are small.
  */
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,7 +23,8 @@ test.afterAll(() => {
   }
 });
 
-function fixture(ui: Record<string, unknown> = {}): string {
+/** A throwaway Claude home; `dock` is written as a saved band, so the app starts docked. */
+function fixture(ui: Record<string, unknown> = {}, dock?: Record<string, unknown>): string {
   const root = mkdtempSync(join(tmpdir(), "hangar-window-"));
   roots.push(root);
   const home = join(root, ".claude");
@@ -37,8 +39,8 @@ function fixture(ui: Record<string, unknown> = {}): string {
   );
   writeFileSync(join(home, "history.jsonl"), `${JSON.stringify({ display: "프롬프트", sessionId: SESSION })}\n`);
   writeFileSync(join(root, ".claude.json"), JSON.stringify({ projects: { [workspace]: {} } }));
-  if (Object.keys(ui).length) {
-    writeFileSync(join(home, "config", "manager.json"), JSON.stringify({ ui }));
+  if (Object.keys(ui).length || dock) {
+    writeFileSync(join(home, "config", "manager.json"), JSON.stringify({ ui, ...(dock ? { dock } : {}) }));
   }
   return home;
 }
@@ -58,6 +60,10 @@ async function launch(home: string): Promise<{ app: ElectronApplication; page: P
     args: [".", "--lang=en-US"],
     cwd: process.cwd(),
     env: { ...process.env, CLAUDE_HOME: home },
+  });
+  // An app that dies mid-test says how — the code is the only clue a "browser has been closed" leaves.
+  app.process().once("exit", (code, signal) => {
+    if (code !== 0) console.log(`  [e2e] the app exited with code ${code}${signal ? ` (${signal})` : ""}`);
   });
   const page = await mainWindow(app);
   await page.waitForLoadState("domcontentloaded");
@@ -363,6 +369,32 @@ test("opens one window, with no title bar above the content", async () => {
   }
 });
 
+/**
+ * One Hangar. A second launch — the shortcut again, `claude --p` from another terminal — used to open
+ * a second window: two bands fighting for one edge, two writers of one settings file. It now hands
+ * over to the running one and leaves. The lock is per Claude home, which is also what lets this
+ * suite run beside an installed Hangar.
+ */
+test("a second launch hands over to the running Hangar and leaves", async () => {
+  const home = fixture();
+  const { app } = await launch(home);
+  try {
+    await expect.poll(() => app.windows().length, "start-up is over: the splash is gone").toBe(1);
+    const binary = join(process.cwd(), "node_modules", "electron", "dist", process.platform === "win32" ? "electron.exe" : "electron");
+    const second = spawn(binary, [".", "--lang=en-US"], { cwd: process.cwd(), env: { ...process.env, CLAUDE_HOME: home }, stdio: "ignore" });
+    const code = await new Promise<number | null>((resolve) => {
+      const cap = setTimeout(() => { second.kill(); resolve(-1); }, 20_000);
+      second.once("exit", (exitCode) => { clearTimeout(cap); resolve(exitCode); });
+    });
+    expect(code, "the second instance left on its own, cleanly").toBe(0);
+    const windows = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().filter((w) => w.isVisible()).map((w) => `${w.getTitle()} ${w.webContents.getURL()}`));
+    expect(windows, "the first still has its one window").toHaveLength(1);
+  } finally {
+    await app.close();
+  }
+});
+
 test("remembers where the window was left", async () => {
   const home = fixture();
   const first = await launch(home);
@@ -406,6 +438,7 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
     for (const display of displays) {
       const label = `${display.label} ${display.bounds.width}x${display.bounds.height}`;
       const before = await workAreaOf(app, display.id);
+      const free = await nativeWorkArea(app, display.id);            // physical, before the band
       await dockTo(page, display.id, "top", 12);
       const shrank = await settled(async () => (await workAreaOf(app, display.id)).height < before.height);
 
@@ -428,10 +461,12 @@ test("every monitor: a band reserves the space, fills it, and gives it back", as
       // And to the pixel, in the shell's own units: every pixel the window paints is inside the
       // space it reserved, and none of it is anywhere else. Placing the band by the page instead
       // put its border one pixel outside — over the desktop, and over the next monitor along.
+      // Against the work area the band was cut from, not the monitor: another appbar on this
+      // monitor (an installed Hangar beside the one under test) rightly keeps its own strip.
       const f = await nativeFrames(app);
       const shown = seen(f);
-      expect([shown.x, shown.y, shown.x + shown.width], `${label}: band flush with three monitor edges`)
-        .toEqual([f.monitor.x, f.monitor.y, f.monitor.x + f.monitor.width]);
+      expect([shown.x, shown.y, shown.x + shown.width], `${label}: band flush with the three edges of the free work area`)
+        .toEqual([free.x, free.y, free.x + free.width]);
       expect(shown.y + shown.height, `${label}: band ends exactly where the work area begins`).toBe(f.work.y);
 
       expect(await undock(app, page, display.id, before).then(() => workAreaOf(app, display.id)), `${label}: released`)
@@ -733,6 +768,58 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
 });
 
 /**
+ * The band the app STARTS with is the one seen most, and it is the one the all-edges test above
+ * never saw: it is applied while the window is still hidden, before the first `show()`. Measured on
+ * v2.11.4: showing a window — that first show, a hide and show, a minimise and restore — resets the
+ * border colour DWM was given, so a band restored at start-up wore a wallpaper-tinted grey ring
+ * (#6b7279 … #8e9ba6) on all four sides in both themes, while the same band docked from Settings
+ * was flawless. Dark theme here, where the difference between the page and any grey is largest.
+ */
+test("a band restored at start-up wears the page's colour, and keeps it through hide and show", async () => {
+  test.setTimeout(2 * 60_000);
+  const { app, page } = await launch(fixture({ theme: "dark" }, { enabled: true, edge: "right", percent: 15 }));
+  try {
+    const primary = (await monitors(page)).find((d) => d.primary);
+    expect(primary, "a primary display").toBeTruthy();
+    const reserved = await settled(async () => (await workAreaOf(app, primary!.id)).width < primary!.bounds.width);
+    test.skip(!reserved, "this desktop cannot reserve space");
+    await page.waitForTimeout(1700);                          // past the settle window
+    const surface = await pageSurface(page);
+
+    // Every pixel of the ring DWM draws — top row included, which on a frameless window is a border
+    // too — must be the page's colour. Reported as `x,y=colour` where it is not.
+    const ringOf = async (): Promise<string[]> => {
+      const { painted } = await nativeFrames(app);
+      const along = (from: number, size: number, n: number) => from + Math.round(((n + 0.5) / 5) * (size - 1));
+      const right = painted.x + painted.width - 1;
+      const bottom = painted.y + painted.height - 1;
+      const points: { x: number; y: number }[] = [];
+      for (let n = 0; n < 5; n += 1) {
+        const ax = along(painted.x, painted.width, n);
+        const ay = along(painted.y, painted.height, n);
+        points.push({ x: ax, y: painted.y }, { x: ax, y: bottom }, { x: painted.x, y: ay }, { x: right, y: ay });
+      }
+      const centre = { x: Math.round(painted.x + painted.width / 2), y: Math.round(painted.y + painted.height / 2) };
+      const [inside, ...ring] = await screenPixels(app, [centre, ...points]);
+      test.skip(!inside || inside === "000000", "this desktop cannot be captured");
+      return ring.map((c, i) => (c === surface ? null : `${points[i]!.x},${points[i]!.y}=${c}`)).filter((s): s is string => s !== null);
+    };
+    expect(await ringOf(), `restored at start-up: the ring is the page's colour (${surface})`).toEqual([]);
+
+    await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      win?.hide();
+      win?.show();
+    });
+    await page.waitForTimeout(900);
+    expect(await ringOf(), `after hide and show: the ring is the page's colour (${surface})`).toEqual([]);
+  } finally {
+    await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
+    await app.close();
+  }
+});
+
+/**
  * The one side of a band you may resize is a strip in the page, not the window frame. It has to be
  * there — a real strip with a size, since a 0 × 0 element cannot be grabbed — and dragging it has to
  * change the band. The strip lost its size once when its component moved to a folder the stylesheet
@@ -750,6 +837,7 @@ test("dragging the band's grip resizes it", async () => {
     expect(await settled(async () => (await workAreaOf(app, display.id)).height < before.height)).toBe(true);
     await page.waitForTimeout(1700);                          // past the settle window
     const was = (await nativeFrames(app)).painted;
+    const docked = await workAreaOf(app, display.id);
 
     const grip = page.getByRole("separator", { name: "Resize the docked band" });
     const box = await grip.boundingBox();
@@ -764,15 +852,19 @@ test("dragging the band's grip resizes it", async () => {
     for (let step = 1; step <= 8; step += 1) await page.mouse.move(x, y + 10 * step);
     await page.mouse.up();
 
-    // The band grew by about what was dragged (physical pixels, so at least 40 at any sane scale)…
-    await expect.poll(async () => (await nativeFrames(app)).painted.height - was.height, { timeout: 8000 })
+    // The reservation follows the drag once the drag has settled — polled through Electron's own
+    // `screen`, and NOT through the Win32 bindings: the app is inside its SHAppBarMessage call on a
+    // worker thread just then, and a koffi call against the same window from the main thread while
+    // it is in flight kills the process (exit 0xFFFF7003 — seen here with another appbar on the
+    // monitor slowing the shell's answer). The drag was 80 DIP, so the work area moves at least 40.
+    await expect.poll(async () => (await workAreaOf(app, display.id)).y - docked.y, { message: "the work area moved with the band", timeout: 8000 })
       .toBeGreaterThan(40);
-    // …the reservation followed it — polled, because the shell takes a moment and reports odd
-    // intermediate work areas while it rearranges the desktop — and the size was written down.
-    await expect.poll(async () => {
-      const now = await nativeFrames(app);
-      return now.work.y - (now.painted.y + now.painted.height);
-    }, { message: "the work area moved with the band", timeout: 8000 }).toBe(0);
+    await page.waitForTimeout(800);                           // the shell has answered; the band is placed
+    // Then, once: the band grew by about what was dragged, and it ends exactly where the work area
+    // begins — the reservation and the window are the same rectangle.
+    const now = await nativeFrames(app);
+    expect(now.painted.height - was.height, "the band grew (physical pixels)").toBeGreaterThan(40);
+    expect(now.work.y - (now.painted.y + now.painted.height), "the band ends where the work area begins").toBe(0);
     expect((await settingsOf(page)).dock.percent, "the new size is the setting").toBeGreaterThan(12);
   } finally {
     await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);

@@ -482,6 +482,17 @@ export class Dock {
     window.on("move", reassert);
     window.on("resize", reassert);
 
+    // Showing the window — the first show at start-up, a hide and show, a minimise and restore —
+    // hands the frame back to Chromium, which resets the border colour DWM was given. Measured on
+    // v2.11.4: a band restored at start-up (applied while the window was still hidden) wore a
+    // wallpaper-tinted grey ring on all four sides, while the same band docked from Settings did
+    // not. So the colour is given again every time the window appears.
+    const recolour = (): void => {
+      if (this.isDocked && !window.isDestroyed()) loadWin32()?.setEdges(nativeHandle(window), true, this.borderColour);
+    };
+    window.on("show", recolour);
+    window.on("restore", recolour);
+
     // Refusing the gesture beats undoing it. `reassert` above puts a dragged band back, but the
     // window has already moved by then, so the user sees it jump and return. These two events are
     // emitted before the window manager acts and only for a real drag, so nothing moves at all.
