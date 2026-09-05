@@ -35,7 +35,7 @@ vi.mock("electron", () => ({
 
 import { SURFACE } from "../../core/constants.js";
 import {
-  colourRef, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT, DWMWA_WINDOW_CORNER_PREFERENCE, lookFor, resolveTheme, surfaceFor, WindowChrome,
+  colourRef, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT, DWMWA_WINDOW_CORNER_PREFERENCE, lookFor, resolveTheme, RESETS_THE_FRAME, surfaceFor, WindowChrome,
 } from "../chrome.js";
 
 const LIGHT = colourRef(SURFACE.light);
@@ -102,16 +102,18 @@ describe("a window's chrome", () => {
     expect(told).toEqual(band(DARK));
   });
 
-  it("tells the frame again whenever the window is shown or restored — the v2.11.4 regression", () => {
+  it("tells the frame again after every event Chromium writes its own colour on — the v2.11.4 and v2.12.0 regressions", () => {
     const { chrome: c, window, told } = chrome();
     c.theme("dark");
     c.flush(true);
-    told.length = 0;
-    window.emit("show");
-    expect(told, "after show").toEqual(band(DARK));
-    told.length = 0;
-    window.emit("restore");
-    expect(told, "after restore").toEqual(band(DARK));
+    // show/restore: the band restored at start-up wore a grey ring (v2.11.4). focus/blur: the ring
+    // was right until another window was clicked (v2.12.0).
+    expect([...RESETS_THE_FRAME]).toEqual(["show", "restore", "focus", "blur"]);
+    for (const event of RESETS_THE_FRAME) {
+      told.length = 0;
+      window.emit(event);
+      expect(told, `after ${event}`).toEqual(band(DARK));
+    }
   });
 
   it("gives the window its own look back when it is no longer a band", () => {

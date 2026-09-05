@@ -111,7 +111,9 @@ async function nativeFrames(app: ElectronApplication): Promise<NativeFrames> {
   // By absolute path: inside `evaluate` there is no module to resolve a bare name against.
   const koffiPath = join(process.cwd(), "node_modules", "koffi");
   const frames = await app.evaluate(({ BrowserWindow, screen }, koffiFrom) => {
-    const win = BrowserWindow.getAllWindows()[0];
+    // The app's window by what it shows — getAllWindows() has no order, and a test may have opened another.
+    const all = BrowserWindow.getAllWindows();
+    const win = all.find((w) => w.webContents.getURL().includes("index.html")) ?? all[0];
     if (!win) return null;
     // Read the same way the app reads it: bounds against content bounds, scaled, rounded up — and,
     // as in the app, none for a window whose top is the screen's: it draws where it is there
@@ -790,7 +792,7 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
  * (#6b7279 … #8e9ba6) on all four sides in both themes, while the same band docked from Settings
  * was flawless. Dark theme here, where the difference between the page and any grey is largest.
  */
-test("a band restored at start-up wears the page's colour, and keeps it through hide and show", async () => {
+test("a band restored at start-up wears the page's colour, and keeps it through hide, show and focus changes", async () => {
   test.setTimeout(2 * 60_000);
   const { app, page } = await launch(fixture({ theme: "dark" }, { enabled: true, edge: "right", percent: 15 }));
   try {
@@ -828,6 +830,22 @@ test("a band restored at start-up wears the page's colour, and keeps it through 
     });
     await page.waitForTimeout(900);
     expect(await ringOf(), `after hide and show: the ring is the page's colour (${surface})`).toEqual([]);
+
+    // Another window chosen: Chromium writes its own frame colour on every change of activation, so
+    // v2.12.0 was right until the first click elsewhere (measured: grey on all four sides after it).
+    // A second window of the app's own takes the focus — deterministic under Playwright, which keeps
+    // the page it drives focused through a plain `blur()`, and it works on a bare CI desktop.
+    const ELSEWHERE = "elsewhere";
+    await app.evaluate(({ BrowserWindow }, title) => {
+      new BrowserWindow({ width: 200, height: 120, show: true, title }).focus();
+    }, ELSEWHERE);
+    await page.waitForTimeout(900);
+    expect(await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes("index.html"))?.isFocused()), "the band did lose focus").toBe(false);
+    expect(await ringOf(), `after losing focus: the ring is the page's colour (${surface})`).toEqual([]);
+    await app.evaluate(({ BrowserWindow }, title) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === title)?.close(), ELSEWHERE);
+    await page.waitForTimeout(900);
+    expect(await ringOf(), `after regaining focus: the ring is the page's colour (${surface})`).toEqual([]);
   } finally {
     await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
     await app.close();
