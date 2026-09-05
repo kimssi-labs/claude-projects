@@ -120,6 +120,7 @@ export class WindowChrome {
     private readonly window: BrowserWindow,
     private readonly frame: FrameSetter | null = loadFrameSetter(),
     private readonly handleOf: (window: BrowserWindow) => number = nativeHandle,
+    private readonly platform: NodeJS.Platform = process.platform,
   ) {
     const again = (): void => this.apply();
     // Through the plain emitter: BrowserWindow's per-event overloads take one literal, not a list.
@@ -144,7 +145,9 @@ export class WindowChrome {
   private apply(): void {
     if (this.window.isDestroyed()) return;
     const look = lookFor(this.flushed, surfaceFor(this.mode));
-    this.window.setAccentColor(look.accent);
+    // Windows only: elsewhere there is no such border, and the accent call is not implemented — it
+    // threw on Linux, from inside start-up, and the app never got a window (CI, Electron 43).
+    if (this.platform === "win32") this.window.setAccentColor(look.accent);
     this.frame?.set(this.handleOf(this.window), DWMWA_WINDOW_CORNER_PREFERENCE, look.corners);
   }
 }

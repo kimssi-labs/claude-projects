@@ -155,9 +155,18 @@ describe("a window's chrome", () => {
 
   it("still colours the border where there is no DWM binding", () => {
     const window = new FakeWindow();
-    const c = new WindowChrome(window as unknown as Electron.BrowserWindow, null, () => 1);
+    const c = new WindowChrome(window as unknown as Electron.BrowserWindow, null, () => 1, "win32");
     c.theme("dark");
     c.flush(true);
     expect(window.accents.at(-1)).toBe(SURFACE.dark);
+  });
+
+  it("never touches the accent colour off Windows — the call is not implemented there and stopped start-up on Linux", () => {
+    const window = new FakeWindow();
+    const c = new WindowChrome(window as unknown as Electron.BrowserWindow, null, () => 1, "linux");
+    c.theme("dark");
+    c.flush(true);
+    window.emit("show");
+    expect(window.accents).toEqual([]);
   });
 });
