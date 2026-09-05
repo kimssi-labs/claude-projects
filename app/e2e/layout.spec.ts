@@ -218,11 +218,11 @@ test("every shape draws the usage gauges beside the machine graphs", async () =>
     // 430, not narrower: the window has a 420 px minimum and will not shrink past it.
     await resize(app, page, 430, 900);
     await expect(page.getByText("workspace", { exact: false }).first()).toBeVisible();
-    await expect.poll(labels, { timeout: 8000 }).toEqual(expect.arrayContaining(["5h", "7d"]));
+    await expect.poll(labels, { timeout: 8000 }).toEqual(expect.arrayContaining(["5h", "1w"]));
 
     // Wide, where the graphs live in the side panel.
     await resize(app, page, 1200, 800);
-    await expect.poll(labels, { timeout: 8000 }).toEqual(expect.arrayContaining(["5h", "7d"]));
+    await expect.poll(labels, { timeout: 8000 }).toEqual(expect.arrayContaining(["5h", "1w"]));
   } finally {
     await app.close();
   }

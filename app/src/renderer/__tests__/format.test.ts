@@ -36,9 +36,12 @@ describe("resetLabel", () => {
     expect(resetLabel(minutes(20 * 60), NOW.getTime())).toBe(`20h 0m left · ${CLOCK(minutes(20 * 60))}`);
   });
 
-  it("counts a weekly window in days, not in three-digit hours", () => {
+  it("counts a weekly window in days, hours and minutes, not in three-digit hours", () => {
     // The seven-day window read "167h 47m left", which is a number to be decoded rather than read.
-    expect(resetLabel(minutes(167 * 60 + 47), NOW.getTime())).toBe(`6d 23h left · ${CLOCK(minutes(167 * 60 + 47))}`);
+    expect(resetLabel(minutes(167 * 60 + 47), NOW.getTime())).toBe(`6d 23h 47m left · ${CLOCK(minutes(167 * 60 + 47))}`);
+    // From the first day on, not the second: "1d 6h 5m" reads at a glance where "30h 5m" does not.
+    expect(resetRemaining(minutes(30 * 60 + 5), NOW.getTime())).toBe("1d 6h 5m");
+    expect(resetRemaining(minutes(2 * 24 * 60 + 5 * 60 + 30), NOW.getTime())).toBe("2d 5h 30m");
   });
 
   it("never counts backwards past zero", () => {
@@ -51,6 +54,6 @@ describe("resetRemaining", () => {
   it("is the time left with nothing else — what an upright card has room for", () => {
     expect(resetRemaining(minutes(42), NOW.getTime())).toBe("42m");
     expect(resetRemaining(minutes(185), NOW.getTime())).toBe("3h 5m");
-    expect(resetRemaining(minutes(167 * 60 + 47), NOW.getTime())).toBe("6d 23h");
+    expect(resetRemaining(minutes(167 * 60 + 47), NOW.getTime())).toBe("6d 23h 47m");
   });
 });

@@ -41,9 +41,9 @@ export function formatClock(ms: number): string {
 export function resetRemaining(resetsAt: number, now = Date.now()): string {
   const minutes = Math.max(0, Math.round((resetsAt - now) / 60000));
   const hours = Math.floor(minutes / 60);
-  // Past a couple of days, hours stop meaning anything — "167h left" is a number to be decoded,
-  // "6d 23h left" is a week that is nearly up.
-  if (hours >= 48) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  // Every unit that is not zero-by-construction, largest first: "2d 5h 30m", "3h 5m", "42m".
+  // Past a day, hours alone stop meaning anything — "167h" is a number to be decoded.
+  if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h ${minutes % 60}m`;
   return hours >= 1 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 }
 
