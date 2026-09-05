@@ -381,12 +381,18 @@ test("a second launch hands over to the running Hangar and leaves", async () => 
   try {
     await expect.poll(() => app.windows().length, "start-up is over: the splash is gone").toBe(1);
     const binary = join(process.cwd(), "node_modules", "electron", "dist", process.platform === "win32" ? "electron.exe" : "electron");
-    const second = spawn(binary, [".", "--lang=en-US"], { cwd: process.cwd(), env: { ...process.env, CLAUDE_HOME: home }, stdio: "ignore" });
-    const code = await new Promise<number | null>((resolve) => {
-      const cap = setTimeout(() => { second.kill(); resolve(-1); }, 20_000);
-      second.once("exit", (exitCode) => { clearTimeout(cap); resolve(exitCode); });
+    // Unsandboxed on Linux, as Playwright itself launches Electron there: the CI runner's
+    // chrome-sandbox helper is not setuid root, and Chromium aborts (SIGTRAP) rather than run without it.
+    const flags = process.platform === "linux" ? ["--no-sandbox"] : [];
+    const second = spawn(binary, [".", "--lang=en-US", ...flags], { cwd: process.cwd(), env: { ...process.env, CLAUDE_HOME: home }, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    second.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    const ended = await new Promise<{ code: number | null; signal: string | null }>((resolve) => {
+      const cap = setTimeout(() => { second.kill(); resolve({ code: -1, signal: "timed out" }); }, 20_000);
+      second.once("exit", (code, signal) => { clearTimeout(cap); resolve({ code, signal }); });
     });
-    expect(code, "the second instance left on its own, cleanly").toBe(0);
+    expect(ended, `the second instance left on its own, cleanly — stderr:\n${stderr.trim().split("\n").slice(-12).join("\n")}`)
+      .toEqual({ code: 0, signal: null });
     const windows = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().filter((w) => w.isVisible()).map((w) => `${w.getTitle()} ${w.webContents.getURL()}`));
     expect(windows, "the first still has its one window").toHaveLength(1);
