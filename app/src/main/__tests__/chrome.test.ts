@@ -36,7 +36,7 @@ vi.mock("electron", () => ({
 
 import { SURFACE } from "../../core/constants.js";
 import {
-  DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND, lookFor, resolveTheme, RESETS_THE_FRAME, surfaceFor, WindowChrome,
+  DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND, lookFor, native, nativeBusy, resolveTheme, RESETS_THE_FRAME, shell, SHELL_RETRY_MS, surfaceFor, WindowChrome, withNative, withShell,
 } from "../chrome.js";
 
 /** A window that can be shown, restored and closed, says whether it is gone, and records its accent. */
@@ -67,6 +67,8 @@ beforeEach(() => {
   theme.state.themeSource = "system";
   theme.state.shouldUseDarkColors = false;
   theme.listeners.clear();
+  shell.calls = 0;                                  // a test that failed mid-call must not gate the next
+  native.busy = 0;
 });
 
 describe("the page's colour for a theme", () => {
@@ -160,6 +162,42 @@ describe("a window's chrome", () => {
     expect(window.accents).toEqual([]);
     window.emit("closed");
     expect(theme.listeners.size).toBe(0);
+  });
+
+  it("waits its turn while the shell is being asked — a native call beside one killed the process", async () => {
+    const { chrome: c, window, corners } = chrome();
+    c.theme("dark");
+    corners.length = 0;
+    window.accents.length = 0;
+    let release!: () => void;
+    const asking = withShell(() => new Promise<void>((resolve) => { release = resolve; }));
+    expect(shell.calls).toBe(1);
+    c.flush(true);
+    expect(corners, "nothing native while the shell call is in flight").toEqual([]);
+    expect(window.accents).toEqual([]);
+    release();
+    await asking;
+    expect(shell.calls).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, SHELL_RETRY_MS + 20));
+    expect(corners.at(-1), "told once the shell has answered").toBe(DWMWCP_DONOTROUND);
+    expect(window.accents.at(-1)).toBe(SURFACE.dark);
+  });
+
+  it("steps aside inside one of our own native calls, and finishes once it has returned", async () => {
+    const { chrome: c, window, corners } = chrome();
+    c.theme("dark");
+    corners.length = 0;
+    window.accents.length = 0;
+    // The event that wants the frame told arrives inside a native call — as `restore` did inside SetWindowPos.
+    withNative(() => {
+      expect(nativeBusy()).toBe(true);
+      c.flush(true);
+      expect(corners, "nothing native nested in a native call").toEqual([]);
+    });
+    expect(native.busy).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, SHELL_RETRY_MS + 20));
+    expect(corners.at(-1), "told once the call has returned").toBe(DWMWCP_DONOTROUND);
+    expect(window.accents.at(-1)).toBe(SURFACE.dark);
   });
 
   it("still colours the border where there is no DWM binding", () => {

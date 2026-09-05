@@ -11,7 +11,7 @@ import type { BrowserWindow, Rectangle } from "electron";
 import { screen } from "electron";
 
 import type { DockConfig, DockEdge } from "../core/types.js";
-import { nativeHandle, type WindowChrome } from "./chrome.js";
+import { nativeBusy, nativeHandle, type WindowChrome, withNative, withShell } from "./chrome.js";
 
 const run = promisify(execFile);
 
@@ -418,7 +418,9 @@ export class Dock {
     // Windows moves an appbar out of the work area it just shrank — and does it after the call
     // returns, so the only reliable answer is to put the band back whenever something moves it.
     const reassert = (): void => {
-      if (this.placing || this.dragging || this.reserving || !this.reserved || !this.registered) return;
+      // `nativeBusy`: this event may have been raised from inside one of our own native calls, and a
+      // second one from here would be nested in it — which is the crash (see chrome.ts).
+      if (this.placing || this.dragging || this.reserving || nativeBusy() || !this.reserved || !this.registered) return;
       // A minimised band is not a band out of place; it comes back where it was on restore. Putting
       // it back while minimised un-minimises it from inside our own SetWindowPos, and the `restore`
       // that fires inside that call was what nested a second native call (see chrome.ts) and
@@ -454,13 +456,10 @@ export class Dock {
       }
       this.place(this.reserved);
     };
-    // On the next turn of the loop: `move`/`resize` are emitted from inside Windows messages, which
-    // can be inside one of our own native calls (chrome.ts explains the crash); the checks above
-    // are made when it runs, so our own placement — `placing` is over by then — finds the window on
-    // its reservation and does nothing.
-    const reassertLater = (): void => { setImmediate(reassert); };
-    window.on("move", reassertLater);
-    window.on("resize", reassertLater);
+    // In the event itself, not later: a resize from outside (another tool, a snap) is undone by the
+    // size pin a moment afterwards, so it has to be read the moment it happens to be noticed at all.
+    window.on("move", reassert);
+    window.on("resize", reassert);
 
     // Refusing the gesture beats undoing it. `reassert` above puts a dragged band back, but the
     // window has already moved by then, so the user sees it jump and return. These two events are
@@ -485,7 +484,7 @@ export class Dock {
    */
   private nativeRect(): Rectangle | null {
     if (process.platform !== "win32") return null;
-    const painted = loadWin32()?.frames(nativeHandle(this.window))?.painted;
+    const painted = withNative(() => loadWin32()?.frames(nativeHandle(this.window))?.painted);
     return painted ? bandOf(painted, this.lift) : null;
   }
 
@@ -506,13 +505,15 @@ export class Dock {
     // The painted frame and not the client area: the client is one pixel further in on three
     // sides, and placing by it would push the border that pixel OUT of the band — over the
     // desktop, and over the neighbouring monitor for a band docked against a shared edge.
-    const f = api.frames(hwnd);
-    api.setWindowPos(hwnd, f ? {
-      x: rect.x - (f.painted.x - f.outer.x),
-      y: rect.y - (f.painted.y - f.outer.y),
-      width: rect.width + (f.outer.width - f.painted.width),
-      height: rect.height + (f.outer.height - f.painted.height),
-    } : rect);
+    withNative(() => {
+      const f = api.frames(hwnd);
+      api.setWindowPos(hwnd, f ? {
+        x: rect.x - (f.painted.x - f.outer.x),
+        y: rect.y - (f.painted.y - f.outer.y),
+        width: rect.width + (f.outer.width - f.painted.width),
+        height: rect.height + (f.outer.height - f.painted.height),
+      } : rect);
+    });
   }
 
   /**
@@ -659,6 +660,9 @@ export class Dock {
   preview(thickness: number): void {
     const config = this.current;
     if (!config?.enabled) return;
+    // A drag can start again while the last one's reservation is still being asked for; this frame of
+    // it is dropped rather than placed beside a shell call in flight (see `shell` in chrome.ts).
+    if (nativeBusy()) return;
     const { display } = pickDisplay(config.device);
     const band = this.plan(bandOfThickness(this.workArea(display), config.edge, thickness), config.edge, display);
     this.dragging = true;
@@ -703,7 +707,9 @@ export class Dock {
     if (process.platform !== "win32" || !this.registered) return;
     const api = loadWin32();
     if (!api) return;
-    api.SHAppBarMessage(ABM.remove, api.make(this.hwnd, ABE.top));
+    // Not beside a shell call in flight (see `shell` in chrome.ts): the process is leaving anyway,
+    // and Windows reclaims the reservation of a window that is gone — measured, a forced kill leaks nothing.
+    if (!nativeBusy()) withNative(() => api.SHAppBarMessage(ABM.remove, api.make(this.hwnd, ABE.top)));
     this.registered = false;
     this.reserved = null;
     this.current = null;
@@ -729,7 +735,7 @@ export class Dock {
         const hwnd = this.hwnd;
         this.registered = false;                    // nothing may re-enter while the shell works
         this.reserved = null;
-        await api.SHAppBarMessageAsync(ABM.remove, api.make(hwnd, ABE.top));
+        await withShell(() => api.SHAppBarMessageAsync(ABM.remove, api.make(hwnd, ABE.top)));
       }
       this.restoreMinimum();
     } else {
@@ -791,7 +797,7 @@ export class Dock {
     const hwnd = nativeHandle(this.window);
 
     if (!this.registered) {
-      await api.SHAppBarMessageAsync(ABM.new, api.make(hwnd, ABE[edge]));
+      await withShell(() => api.SHAppBarMessageAsync(ABM.new, api.make(hwnd, ABE[edge])));
       this.registered = true;
       this.hwnd = hwnd;
     }
@@ -808,7 +814,7 @@ export class Dock {
     try {
       if (ask) {
         const query = api.make(hwnd, ABE[edge], physical);
-        await api.SHAppBarMessageAsync(ABM.queryPos, query);
+        await withShell(() => api.SHAppBarMessageAsync(ABM.queryPos, query));
         const offered = {
           x: query.rc.left, y: query.rc.top,
           width: query.rc.right - query.rc.left, height: query.rc.bottom - query.rc.top,
@@ -821,7 +827,7 @@ export class Dock {
       // Written down BEFORE the call, not after it: anything that puts the band back while the shell
       // is at work must put it where the band is going, not where it was.
       this.reserved = kept;
-      await api.SHAppBarMessageAsync(ABM.setPos, api.make(hwnd, ABE[edge], kept));
+      await withShell(() => api.SHAppBarMessageAsync(ABM.setPos, api.make(hwnd, ABE[edge], kept)));
     } finally {
       this.reserving = false;
     }
