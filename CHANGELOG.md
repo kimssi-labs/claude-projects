@@ -3,6 +3,24 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.12.0
+
+- **The grey ring around a band that comes back at start-up is gone.** v2.11.4 painted the band's
+  border in the page's colour, and it was right whenever you docked from Settings — but a band the
+  app restores when it starts is placed while the window is still hidden, and showing a window resets
+  the border colour Windows was given. So the band you actually live with wore a wallpaper-tinted grey
+  line on all four sides, top included, in both themes, and every test passed. The colour is now given
+  again every time the window appears, including after a hide or a minimise.
+- **One Hangar at a time.** Launching it again — the shortcut, or `claude --p` from another terminal
+  — brings the running window to the front and exits, instead of opening a second one to fight over
+  the same band and the same settings.
+- The weekly usage gauge is labelled **1w**, and the time until a window resets reads with every unit
+  from the first day on: `2d 5h 30m`, `3h 5m`, `42m`.
+- Under the hood, how the window's frame looks is now one small module with its own tests, asked one
+  question by the docking code and one by the shell. A change to where a band goes can no longer
+  reach how its edge is drawn — which is how the last three releases each moved a hairline.
+- Releases stay unsigned for now; see v2.11.4.
+
 ## v2.11.4
 
 - **No more pale hairline around a docked band.** Windows offers a "no border" value for a window's
