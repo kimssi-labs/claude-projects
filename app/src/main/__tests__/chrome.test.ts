@@ -47,7 +47,10 @@ class FakeWindow extends EventEmitter {
   setAccentColor(value: string | boolean | null): void { this.accents.push(value); }
 }
 
-/** A chrome over a fake window and a fake DWM; `corners` is every corner preference DWM was told. */
+/**
+ * A chrome over a fake window and a fake DWM, as on Windows (said explicitly: these tests run on the
+ * Linux runner too); `corners` is every corner preference DWM was told.
+ */
 function chrome(): { chrome: WindowChrome; window: FakeWindow; corners: number[] } {
   const corners: number[] = [];
   const window = new FakeWindow();
@@ -55,6 +58,7 @@ function chrome(): { chrome: WindowChrome; window: FakeWindow; corners: number[]
     window as unknown as Electron.BrowserWindow,
     { set: (_hwnd, attribute, value) => { if (attribute === DWMWA_WINDOW_CORNER_PREFERENCE) corners.push(value); } },
     () => 0x1234,
+    "win32",
   );
   return { chrome: instance, window, corners };
 }
@@ -94,7 +98,7 @@ describe("a window's chrome", () => {
   it("does not write the border colour to DWM itself — Electron would undo it on the next show or click elsewhere", () => {
     const told: number[] = [];
     const window = new FakeWindow();
-    const c = new WindowChrome(window as unknown as Electron.BrowserWindow, { set: (_h, attribute) => { told.push(attribute); } }, () => 1);
+    const c = new WindowChrome(window as unknown as Electron.BrowserWindow, { set: (_h, attribute) => { told.push(attribute); } }, () => 1, "win32");
     c.theme("dark");
     c.flush(true);
     expect(told.every((attribute) => attribute === DWMWA_WINDOW_CORNER_PREFERENCE)).toBe(true);
