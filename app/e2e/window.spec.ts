@@ -674,16 +674,19 @@ test("resizing a docked band keeps it on its edge", async () => {
     const rightEdge = before.x + before.width;
     samePixels(docked.x + docked.width, rightEdge, "docked flush with the right edge");
 
-    // Drag the OUTER edge inwards: the width changes, the position does not — which used to leave a
-    // strip of desktop between the band and the screen edge.
-    await app.evaluate(({ BrowserWindow }, rect) =>
-      BrowserWindow.getAllWindows()[0]?.setBounds(rect),
-    { x: docked.x, y: docked.y, width: Math.round(docked.width * 0.6), height: docked.height });
+    // Make the band thinner the way a user does, through the grip: the width changes, the position
+    // does not — which used to leave a strip of desktop between the band and the screen edge. (Not
+    // `setBounds`: a docked band's size is pinned, so that call changes nothing and proved nothing.)
+    const dockedWork = await workAreaOf(app, display.id);
+    await page.evaluate((thickness) => window.hangar.dragDock({ thickness, done: true }), Math.round(docked.width * 0.6));
 
-    await expect.poll(async () => {
-      const now = await bandBounds(app);
-      return Math.abs(now.x + now.width - rightEdge) <= 1;
-    }, { timeout: 8000 }).toBe(true);
+    // Polled through Electron, not the Win32 bindings: for a moment after the resize the app is
+    // inside its own shell call, and a koffi call from the test then kills the process (0xFFFF7003).
+    await expect.poll(async () => (await workAreaOf(app, display.id)).width, { message: "the reservation followed the resize", timeout: 8000 })
+      .toBeGreaterThan(dockedWork.width);
+    await page.waitForTimeout(800);                           // the shell has answered; the band is placed
+    const now = await bandBounds(app);
+    expect(Math.abs(now.x + now.width - rightEdge), "still flush with the right edge").toBeLessThanOrEqual(1);
 
     // And the size it settled on is what the setting now says.
     const settings = await settingsOf(page);

@@ -72,6 +72,54 @@ export function lookFor(flush: boolean, surface: string): FrameLook {
 /** The window events after which the frame is told again (fact 2 — the colour is Electron's to keep). */
 export const RESETS_THE_FRAME = ["show", "restore"] as const;
 
+/**
+ * How many calls to the shell are in flight on koffi's worker thread.
+ *
+ * While one is, no other koffi call may be made from the main thread — the process dies (exit
+ * 0xFFFF7003). Seen three times: a band put back on its edge during its own reservation, a test
+ * reading the window's frame during one, a drag preview landing on a resize's reservation. So every
+ * asker of the shell goes through `withShell`, and every other native call looks here first and
+ * waits its turn. Kept in this leaf module because both dock and chrome need it.
+ */
+export const shell = { calls: 0 };
+
+export async function withShell<T>(call: () => Promise<T>): Promise<T> {
+  shell.calls += 1;
+  try {
+    return await call();
+  } finally {
+    shell.calls -= 1;
+  }
+}
+
+/** How long a native call waits before looking again while the shell is being asked. */
+export const SHELL_RETRY_MS = 30;
+
+/**
+ * Whether one of our own synchronous native calls is on the stack right now.
+ *
+ * A native call can raise a Windows message, which Chromium turns into a window event, whose
+ * handler is JavaScript running INSIDE the native call. A second koffi call from there jumped to
+ * address 4 (dump: rip = 4 on koffi's own stack) — placing a minimised band restored it, and the
+ * `restore` handler re-coloured the frame. Every synchronous native call goes through `withNative`;
+ * every handler that would make one looks here first, and steps aside or comes back later.
+ */
+export const native = { busy: 0 };
+
+export function withNative<T>(call: () => T): T {
+  native.busy += 1;
+  try {
+    return call();
+  } finally {
+    native.busy -= 1;
+  }
+}
+
+/** Nothing native may go out right now — see `shell` and `native`. */
+export function nativeBusy(): boolean {
+  return shell.calls > 0 || native.busy > 0;
+}
+
 /** The one DWM call this needs, as something a test can stand in for. */
 export interface FrameSetter {
   set(hwnd: number, attribute: number, value: number): void;
@@ -149,10 +197,14 @@ export class WindowChrome {
 
   private apply(): void {
     if (this.window.isDestroyed()) return;
+    if (nativeBusy()) {                           // never beside or inside another native call
+      setTimeout(() => this.apply(), SHELL_RETRY_MS);
+      return;
+    }
     const look = lookFor(this.flushed, surfaceFor(this.mode));
     // Windows only: elsewhere there is no such border, and the accent call is not implemented — it
     // threw on Linux, from inside start-up, and the app never got a window (CI, Electron 43).
     if (this.platform === "win32") this.window.setAccentColor(look.accent);
-    this.frame?.set(this.handleOf(this.window), DWMWA_WINDOW_CORNER_PREFERENCE, look.corners);
+    if (this.frame) withNative(() => this.frame!.set(this.handleOf(this.window), DWMWA_WINDOW_CORNER_PREFERENCE, look.corners));
   }
 }
