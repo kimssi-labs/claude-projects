@@ -13,6 +13,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeTheme, Notification, screen, s
 import { wire } from "../bridge/build.js";
 import type { MainContext } from "../bridge/context.js";
 import { ConfigStore } from "../core/config.js";
+import { SURFACE } from "../core/constants.js";
 import { claudeHome } from "../core/paths.js";
 import { Store } from "../core/store.js";
 import { register as registerClipboard } from "../features/clipboard/main.js";
@@ -37,17 +38,26 @@ const SPLASH_PAINT_CAP_MS = 450;
 /** Electron's indeterminate value for the taskbar progress; -1 clears it. */
 const TASKBAR_BUSY = 2;
 const TASKBAR_IDLE = -1;
-/**
- * The page's own background (`--surface` in index.css), so the window is painted the instant it
- * appears — and so any sliver the page does not cover, at a fractional scale, is the same colour.
- */
-const WINDOW_BACKGROUND = { light: "#faf9f7", dark: "#141413" } as const;
+/** The page's own background, so the window is painted the instant it appears. */
+const WINDOW_BACKGROUND = SURFACE;
 
 /** Which palette the window is in, resolving "system" the way the page does. */
 function resolvedTheme(): "light" | "dark" {
   const mode = config.ui().theme;
   if (mode === "system") return nativeTheme.shouldUseDarkColors ? "dark" : "light";
   return mode;
+}
+
+/**
+ * Tell Chromium which side the app is on, so what IT draws agrees with the page.
+ *
+ * Native menus and dialogs, and — the reason this exists — the one pixel of frame Chromium paints
+ * around a docked band on a scaled display, which no attribute of ours reaches: measured #f3f3f3
+ * when Chromium thinks it is light, #202020 when dark. Against a dark band the former is a bright
+ * hairline. The setting's own values are exactly what `themeSource` takes.
+ */
+function followTheme(): void {
+  nativeTheme.themeSource = config.ui().theme;
 }
 
 /**
@@ -201,6 +211,8 @@ const settingsFeature = registerSettings(context, wiring, {
     if (patch.ui) {
       if (config.ui().monitor) metricsFeature.start();
       else metricsFeature.stop();
+      followTheme();
+      dockFeature.refreshChrome();                 // a band's border is drawn in the page's colour
     }
   },
 });
@@ -390,6 +402,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  followTheme();                                  // before any window: the splash is painted in it too
   openSplash();
   // Alone on the machine for its first frame: the app's renderer is a much heavier start.
   await splashReady(SPLASH_PAINT_CAP_MS);

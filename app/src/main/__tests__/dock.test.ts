@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { bandOfThickness, bandRect, bandThickness, keepThickness, OPEN_FACE, resizeAllowed } from "../dock.js";
+import { bandOf, bandOfThickness, bandRect, bandThickness, gridStep, keepThickness, OPEN_FACE, resizeAllowed, snapToGrid, windowFor } from "../dock.js";
 
 const AREA = { x: 0, y: 0, width: 2000, height: 1000 };
 
@@ -148,5 +148,81 @@ describe("a band on any edge of any monitor", () => {
       expect(bandOfThickness(area, "left", 200).height).toBe(area.height);
       expect(bandOfThickness(area, "right", 200).height).toBe(area.height);
     }
+  });
+});
+
+/**
+ * On a scaled display a window can only be drawn where a whole DIP is a whole pixel.
+ *
+ * Measured at 125 %: a band docked to the bottom of a monitor whose top is y = 706, at y = 1708
+ * (1002 px down, which is 801.6 DIP), was drawn from y = 1711 — the two rows above showed the
+ * desktop through the window, and two rows were painted past its bottom. Every edge has to land on
+ * the grid, and the only edge free to move is the open face; it moves inward.
+ */
+describe("the DIP grid", () => {
+  it("has the period of each common scale", () => {
+    expect(gridStep(1)).toBe(1);
+    expect(gridStep(1.25)).toBe(5);
+    expect(gridStep(1.5)).toBe(3);
+    expect(gridStep(1.75)).toBe(7);
+    expect(gridStep(2)).toBe(2);
+  });
+
+  const ORIGIN = { x: -1920, y: 706 };                     // the 125 % monitor, physical
+
+  it("leaves a band alone at 100 %", () => {
+    const band = { x: -1920, y: 1708, width: 1920, height: 138 };
+    expect(snapToGrid(band, "bottom", ORIGIN, 1)).toEqual(band);
+  });
+
+  it("moves a bottom band's top edge down onto the grid — the measured case", () => {
+    const band = { x: -1920, y: 1708, width: 1920, height: 138 };   // bottom edge 1846 is on the grid
+    const snapped = snapToGrid(band, "bottom", ORIGIN, 5);
+    expect(snapped).toEqual({ x: -1920, y: 1711, width: 1920, height: 135 });
+    expect((snapped.y - ORIGIN.y) % 5).toBe(0);
+    expect(snapped.y + snapped.height).toBe(band.y + band.height);  // still against the work area
+  });
+
+  it("shortens a top band so its open face is on the grid, and never moves its top", () => {
+    const band = { x: -1920, y: 706, width: 1920, height: 138 };
+    const snapped = snapToGrid(band, "top", ORIGIN, 5);
+    expect(snapped.y).toBe(706);
+    expect(snapped.height).toBe(135);
+    expect((snapped.y + snapped.height - ORIGIN.y) % 5).toBe(0);
+  });
+
+  it("does the same on the horizontal axis", () => {
+    const left = snapToGrid({ x: -1920, y: 706, width: 232, height: 1140 }, "left", ORIGIN, 5);
+    expect(left).toEqual({ x: -1920, y: 706, width: 230, height: 1140 });
+    const right = snapToGrid({ x: -232, y: 706, width: 232, height: 1140 }, "right", ORIGIN, 5);
+    expect(right).toEqual({ x: -230, y: 706, width: 230, height: 1140 });
+  });
+
+  it("only ever moves inward, and never to nothing", () => {
+    for (const edge of ["top", "bottom", "left", "right"] as const) {
+      const band = { x: -1920, y: 706, width: 1920, height: 1140 };
+      const snapped = snapToGrid(band, edge, ORIGIN, 5);
+      expect(bandThickness(snapped, edge)).toBeLessThanOrEqual(bandThickness(band, edge));
+    }
+    expect(snapToGrid({ x: 0, y: 0, width: 2, height: 2 }, "top", { x: 0, y: 0 }, 5).height).toBe(1);
+  });
+});
+
+/**
+ * At a fractional scale the window draws a whole DIP below where it is — two rows at 125 %, at
+ * every position measured. The window that shows a band therefore sits that far above it, the same
+ * size; the band is what the shell reserves and what is seen.
+ */
+describe("the window that shows a band", () => {
+  const band = { x: -1920, y: 1713, width: 1920, height: 133 };
+
+  it("is the band moved up by the lift, no taller", () => {
+    expect(windowFor(band, 2)).toEqual({ x: -1920, y: 1711, width: 1920, height: 133 });
+    expect(bandOf(windowFor(band, 2), 2)).toEqual(band);
+  });
+
+  it("is the band itself where nothing shifts", () => {
+    expect(windowFor(band, 0)).toBe(band);
+    expect(bandOf(band, 0)).toBe(band);
   });
 });

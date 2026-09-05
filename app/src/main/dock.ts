@@ -38,7 +38,19 @@ const DWMWA_BORDER_COLOR = 34;
 const DWMWCP_DEFAULT = 0;
 const DWMWCP_DONOTROUND = 1;
 const DWMWA_COLOR_DEFAULT = 0xffffffff;
-const DWMWA_COLOR_NONE = 0xfffffffe;
+/**
+ * A colour for the border DWM draws around the window, as a COLORREF (0x00BBGGRR).
+ *
+ * `DWMWA_COLOR_NONE` is documented as suppressing the border and does not: measured on Windows 11
+ * 26200, it draws #f3f3f3, which against a dark desktop is exactly the hairline this is meant to
+ * remove (DEFAULT draws #474747, and a real colour is honoured, so the attribute works — "none"
+ * simply is not none). The border is therefore painted in the page's own colour instead, and the
+ * one pixel of window that is not page becomes impossible to see.
+ */
+function colourRef(hex: string): number {
+  const n = Number.parseInt(hex.replace("#", ""), 16);
+  return (((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff)) >>> 0;
+}
 const SWP_NOZORDER = 0x0004;
 const SWP_NOACTIVATE = 0x0010;
 // Without this, Chromium sees WM_WINDOWPOSCHANGING and drags the window back inside the work
@@ -94,6 +106,71 @@ export function resizeAllowed(edge: DockEdge | undefined, grabbed: string | unde
 
 export function bandThickness(rect: Rectangle, edge: DockEdge): number {
   return edge === "left" || edge === "right" ? rect.width : rect.height;
+}
+
+/**
+ * How many physical pixels make a whole number of DIP at `scale` — the period of the DIP grid.
+ *
+ * 1 at 100 %; 5 at 125 % (four DIP); 3 at 150 %; 7 at 175 %; 2 at 200 %. Only positions that are a
+ * multiple of this from the monitor's origin are whole in both units.
+ */
+export function gridStep(scale: number): number {
+  for (let dip = 1; dip <= 64; dip += 1) {
+    const px = dip * scale;
+    if (Math.abs(px - Math.round(px)) < 1e-6) return Math.round(px);
+  }
+  return 1;                                        // an odd scale: give up on alignment rather than fail
+}
+
+/**
+ * The window that shows `band`: the same size, `lift` rows higher.
+ *
+ * At a fractional scale, everything a window draws lands a whole DIP below where the window is —
+ * measured at 125 % as two rows, at every position tried, on and off the DIP grid: a band docked to
+ * the bottom showed the desktop through its top two rows and painted its bottom two under the
+ * taskbar, border and page alike shifted down together. Zero at 100 %, and zero for a window whose
+ * top is the screen's own. So the window is placed those rows above the band it shows: the shifted
+ * drawing then covers the band exactly, and the rows the window does not draw sit over the work
+ * area, where nothing of ours is missing.
+ */
+export function windowFor(band: Rectangle, lift: number): Rectangle {
+  return lift ? { ...band, y: band.y - lift } : band;
+}
+
+/** The band a window shows, given how far down it draws. */
+export function bandOf(window: Rectangle, lift: number): Rectangle {
+  return lift ? { ...window, y: window.y + lift } : window;
+}
+
+/**
+ * `band` (physical) with its open face moved inward until it sits on the DIP grid of the monitor
+ * whose origin is `origin`.
+ *
+ * Electron pins the window's size in DIP and the shell places it in pixels; where the two are not
+ * both whole numbers each one's rounding undoes the other's — measured at 125 % as a band that grew
+ * back off its reservation by a pixel on the shell's next move. The three screen-facing edges sit
+ * on the monitor's own edges and are on the grid by construction; only the open face can be off
+ * it, so only the open face moves, and only inward: a band is never thicker than it was asked to
+ * be. At 100 % the step is one pixel and this is the identity.
+ */
+export function snapToGrid(band: Rectangle, edge: DockEdge, origin: { x: number; y: number }, step: number): Rectangle {
+  if (step <= 1) return band;
+  const down = (v: number, from: number): number => from + Math.floor((v - from) / step) * step;
+  const up = (v: number, from: number): number => from + Math.ceil((v - from) / step) * step;
+  if (edge === "top") {
+    const bottom = down(band.y + band.height, origin.y);
+    return { ...band, height: Math.max(1, bottom - band.y) };
+  }
+  if (edge === "bottom") {
+    const top = up(band.y, origin.y);
+    return { ...band, y: top, height: Math.max(1, band.y + band.height - top) };
+  }
+  if (edge === "left") {
+    const right = down(band.x + band.width, origin.x);
+    return { ...band, width: Math.max(1, right - band.x) };
+  }
+  const left = up(band.x, origin.x);
+  return { ...band, x: left, width: Math.max(1, band.x + band.width - left) };
 }
 
 /**
@@ -179,8 +256,11 @@ interface Win32Api {
    * that has to land on the reservation.
    */
   frames: (hwnd: number) => { outer: Rectangle; painted: Rectangle; client: Rectangle } | null;
-  /** Square corners and no border while docked; the window's usual look when not. */
-  setEdges: (hwnd: number, flush: boolean) => void;
+  /**
+   * Square corners while docked, and a border in `colour` rather than the system's; the window's
+   * usual look when not.
+   */
+  setEdges: (hwnd: number, flush: boolean, colour: number) => void;
   make: (hwnd: number, edge: number, rect?: Rectangle) => AppBarData;
 }
 
@@ -237,12 +317,12 @@ function loadWin32(): Win32Api | null {
           else resolve(Number(result));               // koffi fills `data` before calling back
         });
       }),
-      setEdges: (hwnd, flush) => {
+      setEdges: (hwnd, flush, colour) => {
         // Both attributes take a DWORD by pointer; koffi wants that as a one-element array.
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
           [flush ? DWMWCP_DONOTROUND : DWMWCP_DEFAULT], 4);
         DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR,
-          [flush ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT], 4);
+          [flush ? colour : DWMWA_COLOR_DEFAULT], 4);
       },
       setWindowPos: (hwnd, rect) =>
         void SetWindowPos(hwnd, 0, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING),
@@ -316,6 +396,15 @@ export class Dock {
   private reserving = false;
   /** The window's normal minimum, restored when the band is given up. */
   private readonly minimum: number[];
+  /** The colour the band's own border is drawn in — the page's, so it cannot be told from it. */
+  private borderColour = DWMWA_COLOR_DEFAULT;
+  /**
+   * How far below its own rectangle the window draws when it is not against the top of the screen
+   * — a property of the display's scale, measured (see `windowFor`). Two rows at 125 %, none at 100 %.
+   */
+  private inset = 0;
+  /** The lift the current band was placed with: `inset`, or zero for a band on the screen's top. */
+  private lift = 0;
   /** Set while we are the ones moving the window, so re-asserting the band cannot recurse. */
   private placing = false;
   /**
@@ -406,39 +495,84 @@ export class Dock {
   }
 
   /**
-   * Where the page is in physical pixels, or null off Windows (and if the binding did not load).
+   * The band's own rectangle in physical pixels, or null off Windows (and if the binding did not
+   * load).
    *
    * The only reading that can be compared with a reservation. Everything Electron reports is DIP,
-   * and from 43 `getBounds()` is not even the window rectangle any more. The client area, not the
-   * painted frame: the frame is a pixel bigger on three sides, and that pixel is not ours to draw.
+   * and from 43 `getBounds()` is not even the window rectangle any more. The painted frame, which
+   * is every pixel the window puts on the screen: the page is one pixel inside it on three sides,
+   * and that pixel is the border — painted in the page's colour, so it belongs to the band.
    */
   private nativeRect(): Rectangle | null {
     if (process.platform !== "win32") return null;
-    return loadWin32()?.frames(nativeHandle(this.window))?.client ?? null;
+    const painted = loadWin32()?.frames(nativeHandle(this.window))?.painted;
+    return painted ? bandOf(painted, this.lift) : null;
   }
 
-  /** Put the window exactly on `rect` (physical pixels), without anyone second-guessing it. */
-  private place(rect: Rectangle): void {
+  /**
+   * How many rows below itself the window draws, where it is now.
+   *
+   * Read back from the window rather than assumed: its bounds against its content bounds, in DIP,
+   * is one where the frame's room is kept and zero (or less) where it is not — at 100 %, and for a
+   * window whose top is the screen's. Whole pixels, rounded up: 1.25 DIP is two rows on screen.
+   * Only meaningful a moment after a placement — read at once, Electron may still answer for
+   * where the window was.
+   */
+  private topInset(): number {
+    if (this.window.isDestroyed()) return 0;
+    const bounds = this.window.getBounds();
+    const gap = bounds.height - this.window.getContentBounds().height;
+    if (gap <= 0) return 0;
+    return Math.ceil(gap * screen.getDisplayMatching(bounds).scaleFactor);
+  }
+
+  /** Put the WINDOW exactly on `rect` (physical), without anyone second-guessing it. */
+  private placeWindow(rect: Rectangle): void {
     const api = process.platform === "win32" ? loadWin32() : null;
+    if (!api) {
+      this.window.setBounds(rect);
+      return;
+    }
+    const hwnd = nativeHandle(this.window);
+    // `rect` is where the band has to APPEAR. SetWindowPos takes the window's own rectangle, which
+    // is bigger by the invisible resize border, so asking for the band exactly leaves the painted
+    // edge seven pixels inside it and the desktop showing through. Grow the request by that
+    // difference. Where the runtime paints to the outer edge the difference is zero and this is
+    // the old call.
+    //
+    // The painted frame and not the client area: the client is one pixel further in on three
+    // sides, and placing by it would push the border that pixel OUT of the band — over the
+    // desktop, and over the neighbouring monitor for a band docked against a shared edge.
+    const f = api.frames(hwnd);
+    api.setWindowPos(hwnd, f ? {
+      x: rect.x - (f.painted.x - f.outer.x),
+      y: rect.y - (f.painted.y - f.outer.y),
+      width: rect.width + (f.outer.width - f.painted.width),
+      height: rect.height + (f.outer.height - f.painted.height),
+    } : rect);
+  }
+
+  /**
+   * The colour the band's border is drawn in while docked — the page's own background.
+   *
+   * Applied at once when the window is already a band, so switching theme does not leave a light
+   * hairline around a dark band.
+   */
+  setBorderColour(hex: string): void {
+    this.borderColour = colourRef(hex);
+    if (this.isDocked && !this.window.isDestroyed()) {
+      loadWin32()?.setEdges(nativeHandle(this.window), true, this.borderColour);
+    }
+  }
+
+  /**
+   * Show the band `band` (physical pixels): the window goes `lift` rows above it, so that what it
+   * draws begins exactly at the band's top.
+   */
+  private place(band: Rectangle): void {
     this.placing = true;
     try {
-      if (!api) {
-        this.window.setBounds(rect);
-        return;
-      }
-      const hwnd = nativeHandle(this.window);
-      // `rect` is where the PAGE has to be. SetWindowPos takes the window's own rectangle, which is
-      // bigger: by the invisible resize border, and since Electron 43 by the 1 px system border the
-      // client area sits inside of on three sides — undrawn while docked, so a band placed by its
-      // painted frame still showed the desktop as a thin line. Grow the request by the whole
-      // difference. Where a runtime paints the page to the outer edge it is zero and this is the old call.
-      const f = api.frames(hwnd);
-      api.setWindowPos(hwnd, f ? {
-        x: rect.x - (f.client.x - f.outer.x),
-        y: rect.y - (f.client.y - f.outer.y),
-        width: rect.width + (f.outer.width - f.client.width),
-        height: rect.height + (f.outer.height - f.client.height),
-      } : rect);
+      this.placeWindow(windowFor(band, this.lift));
     } finally {
       this.placing = false;
     }
@@ -495,7 +629,8 @@ export class Dock {
     const { display, missing } = pickDisplay(config.device);
     // Measured against the undocked work area, so 20 % means the same thing every time it is asked
     // for — not 20 % of whatever is left after the last band.
-    const band = bandRect(this.workArea(display), config.edge, config.percent);
+    const asked = bandRect(this.workArea(display), config.edge, config.percent);
+    let band = this.plan(asked, config.edge, display);
     this.current = config;
 
     // A band IS the window at its full extent: there is nothing left to maximise into, and it may
@@ -513,8 +648,8 @@ export class Dock {
     // but the shell's do not: every time it moved the appbar, Windows clamped it back to that stale
     // size — a 1180 × 760 window flashing over the desktop and the band snapping to its old
     // thickness. The pin has to say what the band is about to be.
-    this.fixSize(band);
-    loadWin32()?.setEdges(nativeHandle(this.window), true);
+    this.fixSize(band.dip);
+    loadWin32()?.setEdges(nativeHandle(this.window), true, this.borderColour);
 
     // Move to the target monitor BEFORE reserving anything.
     //
@@ -524,7 +659,7 @@ export class Dock {
     // normal move first, while nothing is reserved and nothing will clamp it, teaches it the DPI.
     const currentDisplay = screen.getDisplayMatching(this.window.getBounds());
     if (currentDisplay.id !== display.id) {
-      this.window.setBounds(band);
+      this.window.setBounds(band.dip);
       await new Promise((resolve) => setTimeout(resolve, DPI_SETTLE_MS));
     }
 
@@ -534,19 +669,38 @@ export class Dock {
     // `this.reserved` is already the new one. Both bands span the same edge, so it reads that as
     // the user having dragged the thickness, and answers a request for 20 % by saving back 12 %.
     this.assertUntil = Date.now() + SETTLE_MS;
+    if (process.platform === "win32" && band.window.y !== screen.dipToScreenRect(null, display.bounds).y) {
+      // A band away from the top of the screen: put the window where it is going first and read,
+      // a moment later, how far below itself it draws THERE — the band the shell is told about is
+      // what the window shows, not where it is. Nothing is reserved yet, so nothing pushes it back;
+      // the placement after the reservation is the one that counts.
+      this.placing = true;
+      try {
+        this.placeWindow(band.window);
+      } finally {
+        this.placing = false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, DPI_SETTLE_MS));
+      const inset = this.topInset();
+      if (inset !== this.inset) {
+        this.inset = inset;
+        band = this.plan(asked, config.edge, display);
+      }
+    }
+    this.lift = band.lift;
     let note = missing ? `Saved monitor ${missing} is not connected — using ${display.label}.` : null;
-    if (process.platform === "win32") note = (await this.reserveWindows(band, config.edge)) ?? note;
-    else note = (await this.reserveX11(band, config.edge, display.bounds)) ?? note;
+    if (process.platform === "win32") note = (await this.reserveWindows(band.band, config.edge, display)) ?? note;
+    else note = (await this.reserveX11(band.dip, config.edge, display.bounds)) ?? note;
 
     // Set the bounds AFTER reserving: SETPOS can slide the band away from the taskbar, and the
     // window has to land where the reservation actually is, not where it was asked for.
     // Straight to the shell in physical pixels. Going through setBounds pushes the window out of
     // the work area the reservation just shrank, leaving the band empty and the window beside it.
     this.assertUntil = Date.now() + SETTLE_MS;
-    this.place(this.reserved ?? band);
+    this.place(this.reserved ?? band.band);
     const target = this.reserved && process.platform === "win32"
       ? screen.screenToDipRect(null, this.reserved)
-      : band;
+      : band.dip;
     // The band as it really is, in DIP because the caller measures it against a DIP work area to
     // learn the floor. Taken from Windows and converted, not from getBounds(), which since
     // Electron 43 reports the visible frame and would under-measure the band by the border.
@@ -574,10 +728,11 @@ export class Dock {
     const config = this.current;
     if (!config?.enabled) return;
     const { display } = pickDisplay(config.device);
-    const band = bandOfThickness(this.workArea(display), config.edge, thickness);
+    const band = this.plan(bandOfThickness(this.workArea(display), config.edge, thickness), config.edge, display);
     this.dragging = true;
-    this.fixSize(band);
-    this.place(process.platform === "win32" ? screen.dipToScreenRect(null, band) : band);
+    this.lift = band.lift;
+    this.fixSize(band.dip);
+    this.place(band.band);
   }
 
   async resizeTo(thickness: number): Promise<void> {
@@ -587,21 +742,22 @@ export class Dock {
     const { display } = pickDisplay(config.device);
     // Anchored to the edge, at exactly the thickness the drag ended on — not at a rounded
     // percentage of it, and not wherever the shell would rather put it.
-    const band = bandOfThickness(this.workArea(display), config.edge, thickness);
+    const band = this.plan(bandOfThickness(this.workArea(display), config.edge, thickness), config.edge, display);
     this.assertUntil = Date.now() + SETTLE_MS;
-    this.fixSize(band);
-    if (process.platform === "win32") await this.reserveWindows(band, config.edge, false);
-    else await this.reserveX11(band, config.edge, display.bounds);
+    this.lift = band.lift;
+    this.fixSize(band.dip);
+    if (process.platform === "win32") await this.reserveWindows(band.band, config.edge, display, false);
+    else await this.reserveX11(band.dip, config.edge, display.bounds);
     // Physical against physical where Windows can be asked, for the same reason `reassert` does it:
     // Electron's idea of the window's rectangle no longer is the window's rectangle.
     const native = this.reserved ? this.nativeRect() : null;
     const want = native ? this.reserved as Rectangle
       : this.reserved && process.platform === "win32" ? screen.screenToDipRect(null, this.reserved)
-        : band;
+        : band.dip;
     const now = native ?? this.window.getBounds();
     // Only if the shell put the reservation somewhere else — otherwise nothing moves at all.
     if (want.x !== now.x || want.y !== now.y || want.width !== now.width || want.height !== now.height) {
-      this.place(this.reserved ?? screen.dipToScreenRect(null, band));
+      this.place(this.reserved ?? band.band);
     }
   }
 
@@ -630,7 +786,7 @@ export class Dock {
     this.window.setMaximizable(true);
     this.window.setMovable(true);
     this.window.setResizable(true);
-    loadWin32()?.setEdges(nativeHandle(this.window), false);
+    loadWin32()?.setEdges(nativeHandle(this.window), false, this.borderColour);
   }
 
   /** Give the space back; safe to call when nothing was reserved. */
@@ -651,16 +807,56 @@ export class Dock {
     this.current = null;
   }
 
-  private async reserveWindows(band: Rectangle, edge: DockEdge, ask = true): Promise<string | null> {
+  /**
+   * `band` (DIP, as asked for) as what will actually be reserved and placed.
+   *
+   * Electron speaks DIP; the shell speaks physical pixels. On a scaled display the difference is the
+   * whole point: a 20 % band asked for in DIP reserves 16 % of the screen at 125 %. The window is
+   * deliberately NOT the reference: dipToScreenRect(window, …) scales by the display the WINDOW is
+   * on, so docking from a 100 % monitor onto a 125 % one used the wrong scale. The physical rectangle
+   * is then snapped so every edge is a whole pixel in both units (see `snapToGrid`), and handed back
+   * with its own DIP reading — the size the window is pinned to has to be THAT one: pinned to the
+   * band as asked for, the shell's next move grew the window back off the grid by the difference.
+   */
+  private plan(band: Rectangle, edge: DockEdge, display: Electron.Display): { window: Rectangle; band: Rectangle; dip: Rectangle; lift: number } {
+    if (process.platform !== "win32") return { window: band, band, dip: band, lift: 0 };
+    const monitor = screen.dipToScreenRect(null, display.bounds);
+    // The band is what is reserved and what is seen; the window that shows it sits `lift` rows above
+    // — except against the top of the screen, where the window draws where it is (measured), and
+    // where a lifted window would start above the monitor.
+    const snapped = snapToGrid(screen.dipToScreenRect(null, band), edge, monitor, gridStep(display.scaleFactor));
+    const lift = snapped.y === monitor.y ? 0 : this.inset;
+    return { window: windowFor(snapped, lift), band: snapped, dip: this.dipOf(snapped, display), lift };
+  }
+
+  /**
+   * A physical rectangle in DIP, with its SIZE divided by the scale factor rather than converted.
+   *
+   * Electron's own conversion is off by a pixel or two on this machine's 125 % monitor — it has the
+   * monitor at 1202 px tall where Windows has 1200, and the work area ending at 1848 where Windows
+   * ends it at 1846 — so a size that is a whole DIP in truth (135 px = 108 DIP) comes back as 109.
+   * The window's size is pinned to this, and a pin one DIP off is what un-snapped the band. The
+   * position only steers a cross-monitor move and may be approximate.
+   */
+  private dipOf(physical: Rectangle, display: Electron.Display): Rectangle {
+    const where = screen.screenToDipRect(null, physical);
+    return {
+      x: where.x, y: where.y,
+      width: Math.round(physical.width / display.scaleFactor),
+      height: Math.round(physical.height / display.scaleFactor),
+    };
+  }
+
+  /**
+   * Reserve `physical` (already planned) with the shell, and remember what it actually reserved.
+   *
+   * The shell corrects the position to the real work area — the one Electron's copy is off from —
+   * so the band is snapped again on the way out, and its size re-pinned if it changed.
+   */
+  private async reserveWindows(physical: Rectangle, edge: DockEdge, display: Electron.Display, ask = true): Promise<string | null> {
     const api = loadWin32();
     if (!api) return "Docking without reserving space — the native helper did not load.";
     const hwnd = nativeHandle(this.window);
-    // Electron speaks DIP; the shell speaks physical pixels. On a scaled display the difference is
-    // the whole point: a 20 % band asked for in DIP reserves 16 % of the screen at 125 %.
-    //
-    // The window is deliberately NOT the reference: dipToScreenRect(window, …) scales by the display
-    // the WINDOW is on, so docking from a 100 % monitor onto a 125 % one used the wrong scale.
-    const physical = screen.dipToScreenRect(null, band);
 
     if (!this.registered) {
       await api.SHAppBarMessageAsync(ABM.new, api.make(hwnd, ABE[edge]));
@@ -685,7 +881,10 @@ export class Dock {
           x: query.rc.left, y: query.rc.top,
           width: query.rc.right - query.rc.left, height: query.rc.bottom - query.rc.top,
         };
-        kept = keepThickness(offered, physical, edge);
+        // Anchored to the work area the shell knows, which is not quite the one Electron reports,
+        // then back onto the grid — the move can have taken it off.
+        const monitor = screen.dipToScreenRect(null, display.bounds);
+        kept = snapToGrid(keepThickness(offered, physical, edge), edge, monitor, gridStep(display.scaleFactor));
       }
       // Written down BEFORE the call, not after it: anything that puts the band back while the shell
       // is at work must put it where the band is going, not where it was.
@@ -694,6 +893,8 @@ export class Dock {
     } finally {
       this.reserving = false;
     }
+    // The pin was set for the plan; if the shell settled on a different band, it has to say so.
+    if (kept.width !== physical.width || kept.height !== physical.height) this.fixSize(this.dipOf(kept, display));
     return null;
   }
 
