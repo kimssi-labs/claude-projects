@@ -3,6 +3,29 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.11.4
+
+- **No more pale hairline around a docked band.** Windows offers a "no border" value for a window's
+  frame, and it does not mean none: it paints #f3f3f3, which is invisible against a light desktop
+  and a bright line around a dark band, most noticeably along the top. The band's border is now
+  painted in the page's own colour and follows the theme, so the one pixel of window that is not
+  page cannot be told from the page. On a scaled display there is a second pixel that Chromium draws
+  and no setting of ours reaches; the app now tells Chromium which theme it is in, and that pixel
+  follows too.
+- **A band on a 125 % display no longer shows two rows of desktop.** Everything such a window draws
+  lands a whole point below the window itself, unless the window is against the top of the screen —
+  so a band docked to the bottom left two transparent rows at its top and painted two rows under the
+  taskbar. The window is now placed that far above the band it reserves, and the band's open face is
+  kept on the display's own grid, where a whole point is a whole pixel.
+- The band is checked by what it looks like, not by where it is. A new test reads the reserved strip
+  back from the screen on all four edges of every monitor: the border must be the page's colour and
+  no edge pixel may be the desktop. A second one holds the modules apart, so a change to one feature
+  cannot start depending on another's insides — the two together are what stop this class of fault
+  coming back.
+- Releases stay unsigned for now. Windows may warn about an unknown publisher when you download an
+  installer by hand; updates from inside the app are unaffected and are still checked against their
+  published hash.
+
 ## v2.11.3
 
 - **No more hairline of desktop along a docked band.** The band was placed exactly right: Windows
