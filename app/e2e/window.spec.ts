@@ -115,14 +115,13 @@ async function nativeFrames(app: ElectronApplication): Promise<NativeFrames> {
     const all = BrowserWindow.getAllWindows();
     const win = all.find((w) => w.webContents.getURL().includes("index.html")) ?? all[0];
     if (!win) return null;
-    // Read the same way the app reads it: bounds against content bounds, scaled, rounded up — and,
-    // as in the app, none for a window whose top is the screen's: it draws where it is there
-    // (measured), whatever the two bounds say about each other.
+    // The same rule the app decides by (`insetFor`): the one DIP of frame room a fractional scale
+    // keeps, as whole rows, and none for a window whose top is the screen's — it draws where it is
+    // there (measured). Not read back from the window: the two bounds disagree about it over time.
     const liftOf = (paintedTop: number, monitorTop: number): number => {
       if (paintedTop === monitorTop) return 0;
-      const b = win.getBounds();
-      const gap = b.height - win.getContentBounds().height;
-      return gap > 0 ? Math.ceil(gap * screen.getDisplayMatching(b).scaleFactor) : 0;
+      const scale = screen.getDisplayMatching(win.getBounds()).scaleFactor;
+      return Number.isInteger(scale) ? 0 : Math.ceil(scale);
     };
     const fallback = (): NativeFrames => {
       const b = win.getBounds();
@@ -218,6 +217,39 @@ async function nativeWorkArea(app: ElectronApplication, displayId: string): Prom
     const centre = screen.dipToScreenPoint({ x: display.bounds.x + display.bounds.width / 2, y: display.bounds.y + display.bounds.height / 2 });
     return cache.__workAt(centre.x, centre.y);
   }, { koffiFrom: koffiPath, id: displayId });
+}
+
+/**
+ * Which of `points` (physical pixels) are the app's own to paint — the topmost window there is ours.
+ *
+ * A maximised window on a 125 % display paints one row past the work area it was given, onto a
+ * bottom band's top row (measured: white from the app maximised on that monitor, with the band's
+ * three other edges perfect). That pixel is legitimately someone else's — a window above ours in the
+ * z-order — and says nothing about a gap in the band. Off Windows every point is ours.
+ */
+async function ownedPoints(app: ElectronApplication, points: { x: number; y: number }[]): Promise<boolean[]> {
+  const koffiPath = join(process.cwd(), "node_modules", "koffi");
+  return app.evaluate(({ BrowserWindow }, { koffiFrom, points }) => {
+    const all = BrowserWindow.getAllWindows();
+    const win = all.find((w) => w.webContents.getURL().includes("index.html")) ?? all[0];
+    if (!win || process.platform !== "win32") return points.map(() => true);
+    const req = (typeof require === "function"
+      ? require
+      : (process as unknown as { mainModule?: { require: NodeRequire } }).mainModule?.require
+    ) as NodeRequire | undefined;
+    if (!req) return points.map(() => true);
+    const cache = globalThis as unknown as { __ownerAt?: (x: number, y: number) => number };
+    if (!cache.__ownerAt) {
+      const koffi = req(koffiFrom) as typeof import("koffi");
+      const POINT = koffi.struct("POINT_e2e_owner", { x: "long", y: "long" });
+      const user32 = koffi.load("user32.dll");
+      const WindowFromPoint = user32.func("__stdcall", "WindowFromPoint", "intptr", [POINT]);
+      const GetAncestor = user32.func("__stdcall", "GetAncestor", "intptr", ["intptr", "uint32"]);
+      cache.__ownerAt = (x, y) => Number(GetAncestor(WindowFromPoint({ x, y }), 2));   // 2 = GA_ROOT
+    }
+    const hwnd = Number(win.getNativeWindowHandle().readBigUInt64LE(0));
+    return points.map(([x, y]) => cache.__ownerAt!(x!, y!) === hwnd);
+  }, { koffiFrom: koffiPath, points: points.map((p) => [p.x, p.y]) });
 }
 
 /** The band's rectangle, in DIP — for the assertions that compare it with a DIP work area. */
@@ -753,6 +785,10 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
         const isBorder = (i: number) => i % 4 !== 0;
 
         const surface = await pageSurface(page);
+        // Only where the band is the topmost window: another window may lawfully paint one row over
+        // it (see `ownedPoints`), but never more than one edge's worth — the band is on its reservation.
+        const [ownsOuter, ownsInner] = await Promise.all([ownedPoints(app, outer), ownedPoints(app, inner)]);
+        expect(ownsOuter.filter((o) => !o).length, `${label}: at most one edge of the band is under another window`).toBeLessThanOrEqual(5);
         const [inside, ...rest] = await screenPixels(app, [centre, ...outer, ...inner]);
         test.skip(!inside || inside === "000000", "this desktop cannot be captured");
         const outerSeen = rest.slice(0, outer.length);
@@ -768,13 +804,13 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
 
         const where = (points: { x: number; y: number }[], seen: (string | null)[], keep: (c: string | null, i: number) => boolean) =>
           seen.map((c, i) => (keep(c, i) ? `${points[i]!.x},${points[i]!.y}=${c}` : null)).filter((s) => s !== null);
-        expect(where(outer, outerSeen, (c, i) => (isBorder(i) ? c === null || channelGap(c, surface) > BORDER_TOLERANCE : c === null || c === bare[i])),
+        expect(where(outer, outerSeen, (c, i) => ownsOuter[i]! && (isBorder(i) ? c === null || channelGap(c, surface) > BORDER_TOLERANCE : c === null || c === bare[i])),
           `${label}: the band's outermost pixels are its border in the page's colour (within ${BORDER_TOLERANCE} for a neighbour's shadow), or its content — never the desktop (page is ${surface}; band ${band.x},${band.y} ${band.width}x${band.height})`)
           .toEqual([]);
         // The second ring pixel is Chromium's own frame, which follows its theme and, in the dark one,
         // the machine's accent: measured #1a202f against a #141413 page on the 125 % display (28 in
         // blue). The desktop is a hundred or more away, a light frame on a dark page two hundred.
-        expect(where(inner, innerSeen, (c) => c === null || channelGap(c, surface) > 32), `${label}: Chromium's frame pixel is in the page's theme (page is ${surface})`)
+        expect(where(inner, innerSeen, (c, i) => ownsInner[i]! && (c === null || channelGap(c, surface) > 32)), `${label}: Chromium's frame pixel is in the page's theme (page is ${surface})`)
           .toEqual([]);
       }
     }

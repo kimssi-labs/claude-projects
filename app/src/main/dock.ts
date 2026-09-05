@@ -126,6 +126,20 @@ export function bandOf(window: Rectangle, lift: number): Rectangle {
 }
 
 /**
+ * How many rows below its own rectangle a window draws on a display of `scale`, when its top is not
+ * the screen's: the one DIP of frame room Chromium keeps at a fractional scale, as whole rows.
+ *
+ * Measured two at 125 % — at every position tried, on and off the DIP grid — and none at 100 %; other
+ * fractional scales are assumed to keep the same one DIP. Decided from the scale and NOT read back
+ * from the window: `getBounds()` against `getContentBounds()` said one DIP or none for the very same
+ * shifted window depending on when it was asked, and a band placed on the wrong answer showed
+ * whatever was behind it through its top two rows.
+ */
+export function insetFor(scale: number): number {
+  return Number.isInteger(scale) ? 0 : Math.ceil(scale);
+}
+
+/**
  * `band` (physical) with its open face moved inward until it sits on the DIP grid of the monitor
  * whose origin is `origin`.
  *
@@ -358,12 +372,7 @@ export class Dock {
   private reserving = false;
   /** The window's normal minimum, restored when the band is given up. */
   private readonly minimum: number[];
-  /**
-   * How far below its own rectangle the window draws when it is not against the top of the screen
-   * — a property of the display's scale, measured (see `windowFor`). Two rows at 125 %, none at 100 %.
-   */
-  private inset = 0;
-  /** The lift the current band was placed with: `inset`, or zero for a band on the screen's top. */
+  /** The lift the current band was placed with: `insetFor` its display, or zero on the screen's top. */
   private lift = 0;
   /** Set while we are the ones moving the window, so re-asserting the band cannot recurse. */
   private placing = false;
@@ -470,23 +479,6 @@ export class Dock {
     return painted ? bandOf(painted, this.lift) : null;
   }
 
-  /**
-   * How many rows below itself the window draws, where it is now.
-   *
-   * Read back from the window rather than assumed: its bounds against its content bounds, in DIP,
-   * is one where the frame's room is kept and zero (or less) where it is not — at 100 %, and for a
-   * window whose top is the screen's. Whole pixels, rounded up: 1.25 DIP is two rows on screen.
-   * Only meaningful a moment after a placement — read at once, Electron may still answer for
-   * where the window was.
-   */
-  private topInset(): number {
-    if (this.window.isDestroyed()) return 0;
-    const bounds = this.window.getBounds();
-    const gap = bounds.height - this.window.getContentBounds().height;
-    if (gap <= 0) return 0;
-    return Math.ceil(gap * screen.getDisplayMatching(bounds).scaleFactor);
-  }
-
   /** Put the WINDOW exactly on `rect` (physical), without anyone second-guessing it. */
   private placeWindow(rect: Rectangle): void {
     const api = process.platform === "win32" ? loadWin32() : null;
@@ -578,7 +570,7 @@ export class Dock {
     // Measured against the undocked work area, so 20 % means the same thing every time it is asked
     // for — not 20 % of whatever is left after the last band.
     const asked = bandRect(this.workArea(display), config.edge, config.percent);
-    let band = this.plan(asked, config.edge, display);
+    const band = this.plan(asked, config.edge, display);
     this.current = config;
 
     // A band IS the window at its full extent: there is nothing left to maximise into, and it may
@@ -617,24 +609,6 @@ export class Dock {
     // `this.reserved` is already the new one. Both bands span the same edge, so it reads that as
     // the user having dragged the thickness, and answers a request for 20 % by saving back 12 %.
     this.assertUntil = Date.now() + SETTLE_MS;
-    if (process.platform === "win32" && band.window.y !== screen.dipToScreenRect(null, display.bounds).y) {
-      // A band away from the top of the screen: put the window where it is going first and read,
-      // a moment later, how far below itself it draws THERE — the band the shell is told about is
-      // what the window shows, not where it is. Nothing is reserved yet, so nothing pushes it back;
-      // the placement after the reservation is the one that counts.
-      this.placing = true;
-      try {
-        this.placeWindow(band.window);
-      } finally {
-        this.placing = false;
-      }
-      await new Promise((resolve) => setTimeout(resolve, DPI_SETTLE_MS));
-      const inset = this.topInset();
-      if (inset !== this.inset) {
-        this.inset = inset;
-        band = this.plan(asked, config.edge, display);
-      }
-    }
     this.lift = band.lift;
     let note = missing ? `Saved monitor ${missing} is not connected — using ${display.label}.` : null;
     if (process.platform === "win32") note = (await this.reserveWindows(band.band, config.edge, display)) ?? note;
@@ -773,7 +747,7 @@ export class Dock {
     // — except against the top of the screen, where the window draws where it is (measured), and
     // where a lifted window would start above the monitor.
     const snapped = snapToGrid(screen.dipToScreenRect(null, band), edge, monitor, gridStep(display.scaleFactor));
-    const lift = snapped.y === monitor.y ? 0 : this.inset;
+    const lift = snapped.y === monitor.y ? 0 : insetFor(display.scaleFactor);
     return { window: windowFor(snapped, lift), band: snapped, dip: this.dipOf(snapped, display), lift };
   }
 
