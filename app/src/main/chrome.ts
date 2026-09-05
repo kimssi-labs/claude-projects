@@ -9,9 +9,12 @@
  * 1. DWM draws a 1 px border around a frameless window, top row included, and `DWMWA_COLOR_NONE`
  *    does not remove it — it paints #f3f3f3 (DEFAULT paints #474747). A real COLORREF is honoured,
  *    so a band's border is painted in the page's own background and cannot be told from it.
- * 2. Showing the window — the first show at start-up, a hide and show, a minimise and restore — hands
- *    the frame back to Chromium, which resets that colour. So the frame is told again on every
- *    `show` and `restore`, by this module's own listeners; nothing outside has to remember to.
+ * 2. Showing the window — the first show at start-up, a hide and show, a minimise and restore — and
+ *    every change of activation — another window clicked, this one clicked again — hands the frame
+ *    back to Chromium, which writes its own colour over the one DWM was given (measured: a band was
+ *    right while focused and grey the moment another window was chosen). So the frame is told again
+ *    on every `show`, `restore`, `focus` and `blur`, by this module's own listeners; nothing outside
+ *    has to remember to.
  * 3. On a scaled display there is a second ring pixel that Chromium draws and no attribute reaches;
  *    it follows Chromium's own light/dark, which `nativeTheme.themeSource` sets. The page's theme is
  *    therefore mirrored into Chromium, and the window's background is the page's colour too.
@@ -74,6 +77,9 @@ export function lookFor(flush: boolean, colour: number): FrameLook {
     : { corners: DWMWCP_DEFAULT, border: DWMWA_COLOR_DEFAULT };
 }
 
+/** The window events after which Chromium has written its own frame colour (fact 2 above). */
+export const RESETS_THE_FRAME = ["show", "restore", "focus", "blur"] as const;
+
 /** The one DWM call this needs, as something a test can stand in for. */
 export interface FrameSetter {
   set(hwnd: number, attribute: number, value: number): void;
@@ -123,8 +129,8 @@ export class WindowChrome {
     private readonly handleOf: (window: BrowserWindow) => number = nativeHandle,
   ) {
     const again = (): void => this.apply();
-    window.on("show", again);                     // fact 2: showing resets the colour
-    window.on("restore", again);
+    // Fact 2. Through the plain emitter: BrowserWindow's per-event overloads take one literal, not a list.
+    for (const event of RESETS_THE_FRAME) (window as NodeJS.EventEmitter).on(event, again);
     nativeTheme.on("updated", again);             // "system" follows the machine's own switch
     window.once("closed", () => nativeTheme.removeListener("updated", again));
   }
