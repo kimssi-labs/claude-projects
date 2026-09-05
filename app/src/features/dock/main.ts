@@ -188,6 +188,22 @@ export function register(ctx: MainContext, wire: Wire, deps: DockDeps): DockFeat
       window.on("maximize", () => {
         if (dock?.isDocked && !window.isDestroyed()) window.unmaximize();
       });
+      // Minimised, a band gives its edge back — the space is the point of minimising. Not an undock:
+      // the setting stays, and the band comes back with the window. Both on the next turn of the
+      // loop, as every native call that starts from a window event must (see chrome.ts).
+      let parked = false;
+      window.on("minimize", () => {
+        if (!dock?.isDocked) return;
+        parked = true;
+        setImmediate(() => { void dock?.release(); });
+      });
+      window.on("restore", () => {
+        if (!parked || !dock) return;
+        parked = false;
+        setImmediate(() => {
+          void dock?.apply(current()).then(emitState).catch((error: unknown) => console.error("[hangar] re-dock after restore:", error));
+        });
+      });
       // Plugging a monitor in or out is a different arrangement, with its own remembered dock.
       const rearranged = (): void => void reapplyForSetup();
       screen.on("display-added", rearranged);
