@@ -65,6 +65,18 @@ describe("feature boundaries", () => {
     expect(into).toEqual([]);
   });
 
+  /**
+   * The window's frame (main/chrome.ts) is a leaf: it knows the theme and the platform, and nothing
+   * of where a band goes or what a feature does. Dock may ask it; it may not ask dock. This is what
+   * lets the border be changed — or left alone — without a geometry change reaching it.
+   */
+  it("keeps the window's frame (main/chrome.ts) a leaf below dock and every feature", () => {
+    const text = readFileSync(join(SRC, "main", "chrome.ts"), "utf8");
+    const specs = [...text.matchAll(IMPORT)].map((m) => m[1]!);
+    expect(specs.filter((spec) => /features\/|\/dock\.js$|\/main\.js$/.test(spec))).toEqual([]);
+    expect(specs.filter((spec) => !/^(electron|node:|\.\.\/core\/)/.test(spec))).toEqual([]);
+  });
+
   it("lets the bridge registry import contracts only", () => {
     const text = readFileSync(join(SRC, "bridge", "registry.ts"), "utf8");
     const specs = [...text.matchAll(IMPORT)].map((m) => m[1]!);

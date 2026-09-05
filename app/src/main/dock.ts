@@ -11,6 +11,7 @@ import type { BrowserWindow, Rectangle } from "electron";
 import { screen } from "electron";
 
 import type { DockConfig, DockEdge } from "../core/types.js";
+import { nativeHandle, type WindowChrome } from "./chrome.js";
 
 const run = promisify(execFile);
 
@@ -33,24 +34,6 @@ const BAND_MINIMUM = 60;
  */
 /** The rectangle DWM actually paints, which is inside the window's own by the invisible border. */
 const DWMWA_EXTENDED_FRAME_BOUNDS = 9;
-const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
-const DWMWA_BORDER_COLOR = 34;
-const DWMWCP_DEFAULT = 0;
-const DWMWCP_DONOTROUND = 1;
-const DWMWA_COLOR_DEFAULT = 0xffffffff;
-/**
- * A colour for the border DWM draws around the window, as a COLORREF (0x00BBGGRR).
- *
- * `DWMWA_COLOR_NONE` is documented as suppressing the border and does not: measured on Windows 11
- * 26200, it draws #f3f3f3, which against a dark desktop is exactly the hairline this is meant to
- * remove (DEFAULT draws #474747, and a real colour is honoured, so the attribute works — "none"
- * simply is not none). The border is therefore painted in the page's own colour instead, and the
- * one pixel of window that is not page becomes impossible to see.
- */
-function colourRef(hex: string): number {
-  const n = Number.parseInt(hex.replace("#", ""), 16);
-  return (((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff)) >>> 0;
-}
 const SWP_NOZORDER = 0x0004;
 const SWP_NOACTIVATE = 0x0010;
 // Without this, Chromium sees WM_WINDOWPOSCHANGING and drags the window back inside the work
@@ -256,11 +239,6 @@ interface Win32Api {
    * that has to land on the reservation.
    */
   frames: (hwnd: number) => { outer: Rectangle; painted: Rectangle; client: Rectangle } | null;
-  /**
-   * Square corners while docked, and a border in `colour` rather than the system's; the window's
-   * usual look when not.
-   */
-  setEdges: (hwnd: number, flush: boolean, colour: number) => void;
   make: (hwnd: number, edge: number, rect?: Rectangle) => AppBarData;
 }
 
@@ -303,9 +281,6 @@ function loadWin32(): Win32Api | null {
     const ClientToScreen = user32.func("__stdcall", "ClientToScreen", "bool", [
       "intptr", koffi.inout(koffi.pointer(POINT)),
     ]);
-    const DwmSetWindowAttribute = dwmapi.func("__stdcall", "DwmSetWindowAttribute", "int32", [
-      "intptr", "uint32", koffi.pointer("uint32"), "uint32",
-    ]);
     const DwmGetWindowAttribute = dwmapi.func("__stdcall", "DwmGetWindowAttribute", "int32", [
       "intptr", "uint32", koffi.out(koffi.pointer(RECT)), "uint32",
     ]);
@@ -317,13 +292,6 @@ function loadWin32(): Win32Api | null {
           else resolve(Number(result));               // koffi fills `data` before calling back
         });
       }),
-      setEdges: (hwnd, flush, colour) => {
-        // Both attributes take a DWORD by pointer; koffi wants that as a one-element array.
-        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
-          [flush ? DWMWCP_DONOTROUND : DWMWCP_DEFAULT], 4);
-        DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR,
-          [flush ? colour : DWMWA_COLOR_DEFAULT], 4);
-      },
       setWindowPos: (hwnd, rect) =>
         void SetWindowPos(hwnd, 0, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING),
       frames: (hwnd) => {
@@ -366,12 +334,6 @@ function loadWin32(): Win32Api | null {
   }
 }
 
-/** The window handle as the number Win32 wants. */
-function nativeHandle(window: BrowserWindow): number {
-  const buffer = window.getNativeWindowHandle();
-  return buffer.length === 8 ? Number(buffer.readBigUInt64LE(0)) : buffer.readUInt32LE(0);
-}
-
 export class Dock {
   private registered = false;
   private current: DockConfig | null = null;
@@ -396,8 +358,6 @@ export class Dock {
   private reserving = false;
   /** The window's normal minimum, restored when the band is given up. */
   private readonly minimum: number[];
-  /** The colour the band's own border is drawn in — the page's, so it cannot be told from it. */
-  private borderColour = DWMWA_COLOR_DEFAULT;
   /**
    * How far below its own rectangle the window draws when it is not against the top of the screen
    * — a property of the display's scale, measured (see `windowFor`). Two rows at 125 %, none at 100 %.
@@ -436,7 +396,8 @@ export class Dock {
    */
   onUserResize: ((thickness: number) => void) | null = null;
 
-  constructor(private readonly window: BrowserWindow) {
+  /** `chrome` is the frame's look: told when the window is a band and when it is a window again. */
+  constructor(private readonly window: BrowserWindow, private readonly chrome: WindowChrome) {
     this.minimum = window.getMinimumSize();
     // NOT on a work-area change: that is usually our own band, and forgetting the undocked area
     // because we just docked is how a 12 % band became a 26 % one.
@@ -481,17 +442,6 @@ export class Dock {
     };
     window.on("move", reassert);
     window.on("resize", reassert);
-
-    // Showing the window — the first show at start-up, a hide and show, a minimise and restore —
-    // hands the frame back to Chromium, which resets the border colour DWM was given. Measured on
-    // v2.11.4: a band restored at start-up (applied while the window was still hidden) wore a
-    // wallpaper-tinted grey ring on all four sides, while the same band docked from Settings did
-    // not. So the colour is given again every time the window appears.
-    const recolour = (): void => {
-      if (this.isDocked && !window.isDestroyed()) loadWin32()?.setEdges(nativeHandle(window), true, this.borderColour);
-    };
-    window.on("show", recolour);
-    window.on("restore", recolour);
 
     // Refusing the gesture beats undoing it. `reassert` above puts a dragged band back, but the
     // window has already moved by then, so the user sees it jump and return. These two events are
@@ -561,19 +511,6 @@ export class Dock {
       width: rect.width + (f.outer.width - f.painted.width),
       height: rect.height + (f.outer.height - f.painted.height),
     } : rect);
-  }
-
-  /**
-   * The colour the band's border is drawn in while docked — the page's own background.
-   *
-   * Applied at once when the window is already a band, so switching theme does not leave a light
-   * hairline around a dark band.
-   */
-  setBorderColour(hex: string): void {
-    this.borderColour = colourRef(hex);
-    if (this.isDocked && !this.window.isDestroyed()) {
-      loadWin32()?.setEdges(nativeHandle(this.window), true, this.borderColour);
-    }
   }
 
   /**
@@ -660,7 +597,7 @@ export class Dock {
     // size — a 1180 × 760 window flashing over the desktop and the band snapping to its old
     // thickness. The pin has to say what the band is about to be.
     this.fixSize(band.dip);
-    loadWin32()?.setEdges(nativeHandle(this.window), true, this.borderColour);
+    this.chrome.flush(true);                        // a band's frame: square, border in the page's colour
 
     // Move to the target monitor BEFORE reserving anything.
     //
@@ -797,7 +734,7 @@ export class Dock {
     this.window.setMaximizable(true);
     this.window.setMovable(true);
     this.window.setResizable(true);
-    loadWin32()?.setEdges(nativeHandle(this.window), false, this.borderColour);
+    this.chrome.flush(false);
   }
 
   /** Give the space back; safe to call when nothing was reserved. */
