@@ -652,6 +652,10 @@ function channelGap(a: string, b: string): number {
  * A desktop that cannot be captured skips instead of failing.
  */
 test("every monitor, every edge: a band's edges are the page's colour", async () => {
+  // Four edges on every monitor, each docked, left to settle past the re-assertion window, captured,
+  // released, and captured again bare: minutes on a two-monitor desk, and the shared 60 s budget is
+  // for a test that clicks something. Measured at ~50 s for two monitors; this leaves room for a third.
+  test.setTimeout(4 * 60_000);
   const { app, page } = await launch(fixture());
   try {
     for (const display of await monitors(page)) {
