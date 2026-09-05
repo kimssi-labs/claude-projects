@@ -894,9 +894,10 @@ test("a band restored at start-up wears the page's colour, and keeps it through 
  * jumped to address 4 from koffi's own call stack. Re-asserting the band while it was minimised
  * un-minimised it from inside our own SetWindowPos, and the `restore` that fired inside that call
  * re-applied the frame — a second native call nested in the first. Now nothing native runs inside a
- * window event, and a minimised band is left alone until it comes back.
+ * window event. And a minimised band gives its edge back — the space is the point of minimising —
+ * without becoming undocked: it takes the edge again when it is restored.
  */
-test("a docked band survives being minimised and restored", async () => {
+test("a docked band survives being minimised and restored, giving its edge back in between", async () => {
   const { app, page } = await launch(fixture({ theme: "dark" }, { enabled: true, edge: "right", percent: 15 }));
   try {
     const primary = (await monitors(page)).find((d) => d.primary);
@@ -908,10 +909,13 @@ test("a docked band survives being minimised and restored", async () => {
     for (let cycle = 0; cycle < 3; cycle += 1) {
       await app.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes("index.html"))?.minimize());
-      await page.waitForTimeout(600);
+      await expect.poll(async () => (await workAreaOf(app, primary!.id)).width, { message: `cycle ${cycle}: the edge is given back while minimised`, timeout: 5000 })
+        .toBeGreaterThan(docked.width);
       await app.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes("index.html"))?.restore());
-      await page.waitForTimeout(900);
+      await expect.poll(async () => (await workAreaOf(app, primary!.id)).width, { message: `cycle ${cycle}: the edge is taken again on restore`, timeout: 8000 })
+        .toBe(docked.width);
+      await page.waitForTimeout(700);
     }
     expect(await app.evaluate(() => 1), "the app is still alive").toBe(1);
     // Back on its edge, with the reservation as it was.
