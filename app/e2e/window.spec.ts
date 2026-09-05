@@ -620,6 +620,16 @@ test("resizing a docked band keeps it on its edge", async () => {
   }
 });
 
+/**
+ * The page's background as "rrggbb", from the page's own stylesheet — not from a pixel of the band,
+ * which on a small screen a narrow band's middle can put on a button (measured on the CI runner's
+ * 1024 × 768: a 123 px left band whose centre was a blue control).
+ */
+const pageSurface = (page: Page) => page.evaluate(() => {
+  const channels = getComputedStyle(document.body).backgroundColor.match(/\d+/g) ?? [];
+  return channels.slice(0, 3).map((v) => Number(v).toString(16).padStart(2, "0")).join("");
+});
+
 /** How far apart two "rrggbb" colours are, as the largest difference in one channel. */
 function channelGap(a: string, b: string): number {
   let worst = 0;
@@ -689,6 +699,7 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
         // has there — but never the desktop's, which is what a gap shows.
         const isBorder = (i: number) => i % 4 !== 0;
 
+        const surface = await pageSurface(page);
         const [inside, ...rest] = await screenPixels(app, [centre, ...outer, ...inner]);
         test.skip(!inside || inside === "000000", "this desktop cannot be captured");
         const outerSeen = rest.slice(0, outer.length);
@@ -704,11 +715,10 @@ test("every monitor, every edge: a band's edges are the page's colour", async ()
 
         const where = (points: { x: number; y: number }[], seen: (string | null)[], keep: (c: string | null, i: number) => boolean) =>
           seen.map((c, i) => (keep(c, i) ? `${points[i]!.x},${points[i]!.y}=${c}` : null)).filter((s) => s !== null);
-        // The page's own colour is read from the middle of the band, which nothing else covers.
-        expect(where(outer, outerSeen, (c, i) => (isBorder(i) ? c !== inside : c === null || c === bare[i])),
-          `${label}: the band's outermost pixels are its border in the page's colour, or its content — never the desktop (page is ${inside}; band ${band.x},${band.y} ${band.width}x${band.height})`)
+        expect(where(outer, outerSeen, (c, i) => (isBorder(i) ? c !== surface : c === null || c === bare[i])),
+          `${label}: the band's outermost pixels are its border in the page's colour, or its content — never the desktop (page is ${surface}; band ${band.x},${band.y} ${band.width}x${band.height})`)
           .toEqual([]);
-        expect(where(inner, innerSeen, (c) => c === null || channelGap(c, inside!) > 24), `${label}: Chromium's frame pixel is in the page's theme (page is ${inside})`)
+        expect(where(inner, innerSeen, (c) => c === null || channelGap(c, surface) > 24), `${label}: Chromium's frame pixel is in the page's theme (page is ${surface})`)
           .toEqual([]);
       }
     }
