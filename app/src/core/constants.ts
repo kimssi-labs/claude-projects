@@ -8,6 +8,13 @@ import type { DockEdge, LayoutMode, PermissionMode, ShellChoice, ThemeMode } fro
 
 export const DOCK_EDGES: DockEdge[] = ["left", "top", "right", "bottom"];
 export const DOCK_PERCENT = { min: 5, max: 60, default: 20 } as const;
+/**
+ * The page's own background (`--surface` in index.css), as the machine side needs it.
+ *
+ * Twice: the window is given it so it is painted the instant it appears, and a docked band's frame
+ * border is drawn in it, so the one pixel of window that is not page cannot be seen.
+ */
+export const SURFACE = { light: "#faf9f7", dark: "#141413" } as const;
 export const SHELL_CHOICES: ShellChoice[] = ["auto", "pwsh", "powershell", "cmd", "bash", "custom", "none"];
 export const PERMISSION_MODES: PermissionMode[] = ["default", "bypass", "accept", "plan", "auto"];
 /** Which axis an edge measures, so a floor learned on one edge applies to its opposite. */

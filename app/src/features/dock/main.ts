@@ -10,12 +10,12 @@
  * It borrows the window from the shell and hands back to the shell the one thing that is the
  * shell's: giving an undocked window a window's shape (`placeFloating`).
  */
-import { screen, type BrowserWindow } from "electron";
+import { nativeTheme, screen, type BrowserWindow } from "electron";
 
 import type { Wire } from "../../bridge/build.js";
 import type { MainContext } from "../../bridge/context.js";
 import { percentFloor } from "../../core/config.js";
-import { DOCK_PERCENT } from "../../core/constants.js";
+import { DOCK_PERCENT, SURFACE } from "../../core/constants.js";
 import type { DockConfig } from "../../core/types.js";
 import { bandRect, bandThickness, Dock, displayKey, pickDisplay, setupKey } from "../../main/dock.js";
 import type { ActionResult, SettingsPayload } from "../../main/ipc.js";
@@ -62,6 +62,8 @@ export interface DockFeature {
   /** Remember this band for the current arrangement of monitors, without applying it. */
   save(config: DockConfig): void;
   slice(): DockSlice;
+  /** The theme changed: the band's border is drawn in the page's colour and has to follow it. */
+  refreshChrome(): void;
   /** Give the reservation back synchronously — on close and on the way out. */
   releaseSync(): void;
   /**
@@ -77,6 +79,12 @@ export function register(ctx: MainContext, wire: Wire, deps: DockDeps): DockFeat
   let clearingStruts = false;
 
   const current = (): DockConfig => ctx.config.dock(null, setupKey());
+  /** The page's background right now, resolving "system" the way the page does. */
+  const surface = (): string => {
+    const mode = ctx.config.ui().theme;
+    if (mode === "system") return nativeTheme.shouldUseDarkColors ? SURFACE.dark : SURFACE.light;
+    return SURFACE[mode];
+  };
   const state = (): DockState => ({ docked: dock?.isDocked === true, edge: current().edge });
   const emitState = (): void => wire.emit(dockContract.onDockState, state());
 
@@ -182,6 +190,9 @@ export function register(ctx: MainContext, wire: Wire, deps: DockDeps): DockFeat
   return {
     attach(window) {
       dock = new Dock(window);
+      dock.setBorderColour(surface());
+      // The machine's own light/dark setting can change under a window following it.
+      nativeTheme.on("updated", () => dock?.setBorderColour(surface()));
       // setMaximizable(false) stops the caption button and the system menu, not the API or every
       // window-manager gesture. While docked the band already is the full state, so undo it.
       window.on("maximize", () => {
@@ -243,6 +254,7 @@ export function register(ctx: MainContext, wire: Wire, deps: DockDeps): DockFeat
 
     isDocked: () => dock?.isDocked === true,
     undockForMaximize: async () => { if (dock?.isDocked) await undock(); },
+    refreshChrome: () => dock?.setBorderColour(surface()),
     // With the arrangement key: without it the per-arrangement entry keeps the old edge and size
     // and wins on the next read, so changing the dock in Settings looked like it did nothing.
     save: (wanted) => ctx.config.saveDock(wanted, setupKey()),
