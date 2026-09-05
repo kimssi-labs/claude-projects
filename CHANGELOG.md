@@ -3,6 +3,17 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.12.1
+
+- **The band's border stays the page's colour when you click elsewhere.** v2.12.0 gave the border
+  its colour again whenever the window was shown, and that held until another window was chosen:
+  Chromium also writes its own frame colour on every change of focus, so the band was right while it
+  had the focus and wore a grey line the moment it lost it — which, for a band, is most of the time.
+  The colour is now given again on focus and on blur as well.
+- On a 125 % display, a band docked to the bottom could — now and then — show two rows of whatever
+  was behind it along its top. How far such a window draws below itself was read back from the window,
+  and the window did not always answer the same; it is now decided from the display's scale.
+
 ## v2.12.0
 
 - **The grey ring around a band that comes back at start-up is gone.** v2.11.4 painted the band's
