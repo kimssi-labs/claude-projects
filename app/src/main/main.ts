@@ -14,7 +14,7 @@ import { wire } from "../bridge/build.js";
 import type { MainContext } from "../bridge/context.js";
 import { ConfigStore } from "../core/config.js";
 import { SURFACE } from "../core/constants.js";
-import { claudeHome } from "../core/paths.js";
+import { CLAUDE_HOME_ENV, claudeHome } from "../core/paths.js";
 import { Store } from "../core/store.js";
 import { register as registerClipboard } from "../features/clipboard/main.js";
 import { register as registerDock } from "../features/dock/main.js";
@@ -218,6 +218,8 @@ const settingsFeature = registerSettings(context, wiring, {
 });
 let window: BrowserWindow | null = null;
 let splash: BrowserWindow | null = null;
+/** Start-up is over and the window is on screen — before that a second launch has nothing to raise. */
+let shown = false;
 /** The step named before the loading page had parsed, so it is not lost. */
 let pendingStep = "Starting…";
 
@@ -401,7 +403,8 @@ function registerIpc(): void {
   ipcMain.handle(CHANNEL.quit, () => app.quit());
 }
 
-app.whenReady().then(async () => {
+/** Start-up, once the platform is ready: splash, scan, window, monitor. */
+async function start(): Promise<void> {
   followTheme();                                  // before any window: the splash is painted in it too
   openSplash();
   // Alone on the machine for its first frame: the app's renderer is a much heavier start.
@@ -420,11 +423,33 @@ app.whenReady().then(async () => {
   closeSplash();
   window?.show();
   window?.focus();
+  shown = true;
   console.log(`[hangar] window ready — ${found} projects from ${claudeHome()}`);
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
-});
+}
+
+// A different Claude home is a different Hangar — its own browser profile and its own instance lock
+// below — so the test suite and a developer's build run beside the installed app, not instead of it.
+if (process.env[CLAUDE_HOME_ENV]) app.setPath("userData", join(claudeHome(), "cache", "hangar-profile"));
+
+// One Hangar at a time. A second launch — the shortcut again, `claude --p` from another terminal —
+// hands over to the running one and leaves: two would fight over the same band and the same
+// settings file, and there is nothing a second window could show that the first does not.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    // Not during start-up: showing the window then puts it beside the splash, and it is about to
+    // appear anyway.
+    if (!shown || !window || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  });
+  void app.whenReady().then(start);
+}
 
 process.on("uncaughtException", (error) => {
   console.error("[hangar] fatal:", error);
