@@ -419,6 +419,11 @@ export class Dock {
     // returns, so the only reliable answer is to put the band back whenever something moves it.
     const reassert = (): void => {
       if (this.placing || this.dragging || this.reserving || !this.reserved || !this.registered) return;
+      // A minimised band is not a band out of place; it comes back where it was on restore. Putting
+      // it back while minimised un-minimises it from inside our own SetWindowPos, and the `restore`
+      // that fires inside that call was what nested a second native call (see chrome.ts) and
+      // crashed the process (exit 0xC0000005, minimise then restore, 100 %).
+      if (this.window.isMinimized()) return;
       // Asked of Windows, and compared against the reservation in the physical pixels both are
       // expressed in. Electron 43 answers getBounds() with the DWM visible frame instead of the
       // window rectangle, so it is short by the invisible resize border — seven or eight pixels a
@@ -449,8 +454,13 @@ export class Dock {
       }
       this.place(this.reserved);
     };
-    window.on("move", reassert);
-    window.on("resize", reassert);
+    // On the next turn of the loop: `move`/`resize` are emitted from inside Windows messages, which
+    // can be inside one of our own native calls (chrome.ts explains the crash); the checks above
+    // are made when it runs, so our own placement — `placing` is over by then — finds the window on
+    // its reservation and does nothing.
+    const reassertLater = (): void => { setImmediate(reassert); };
+    window.on("move", reassertLater);
+    window.on("resize", reassertLater);
 
     // Refusing the gesture beats undoing it. `reassert` above puts a dragged band back, but the
     // window has already moved by then, so the user sees it jump and return. These two events are

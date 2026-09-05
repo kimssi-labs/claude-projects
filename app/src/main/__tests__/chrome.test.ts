@@ -104,7 +104,7 @@ describe("a window's chrome", () => {
     expect(told.every((attribute) => attribute === DWMWA_WINDOW_CORNER_PREFERENCE)).toBe(true);
   });
 
-  it("tells the frame again after a show or restore, in case Chromium redrew it", () => {
+  it("tells the frame again after a show or restore — on the next turn, never inside the event", async () => {
     const { chrome: c, window, corners } = chrome();
     c.theme("dark");
     c.flush(true);
@@ -113,6 +113,9 @@ describe("a window's chrome", () => {
       corners.length = 0;
       window.accents.length = 0;
       window.emit(event);
+      // The event may be inside one of our own native calls; a nested native call crashed the process.
+      expect(corners, `nothing native inside the ${event} event itself`).toEqual([]);
+      await new Promise((resolve) => setImmediate(resolve));
       expect(corners, `corners after ${event}`).toEqual([DWMWCP_DONOTROUND]);
       expect(window.accents, `accent after ${event}`).toEqual([SURFACE.dark]);
     }
@@ -126,12 +129,13 @@ describe("a window's chrome", () => {
     expect(corners.at(-1)).toBe(DWMWCP_DEFAULT);
   });
 
-  it("follows the machine's own switch while the theme is 'system'", () => {
+  it("follows the machine's own switch while the theme is 'system'", async () => {
     const { chrome: c, window } = chrome();
     c.theme("system");
     c.flush(true);
     expect(window.accents.at(-1)).toBe(SURFACE.light);
     theme.flip(true);
+    await new Promise((resolve) => setImmediate(resolve));            // the switch is an event too
     expect(window.accents.at(-1), "re-coloured on the machine's switch").toBe(SURFACE.dark);
   });
 
@@ -143,7 +147,7 @@ describe("a window's chrome", () => {
     expect(window.accents.at(-1)).toBe(SURFACE.dark);
   });
 
-  it("leaves a destroyed window alone, and stops listening to the machine once it is closed", () => {
+  it("leaves a destroyed window alone, and stops listening to the machine once it is closed", async () => {
     const { chrome: c, window, corners } = chrome();
     c.flush(true);
     window.destroyed = true;
@@ -151,6 +155,7 @@ describe("a window's chrome", () => {
     window.accents.length = 0;
     window.emit("show");
     c.theme("dark");
+    await new Promise((resolve) => setImmediate(resolve));
     expect(corners).toEqual([]);
     expect(window.accents).toEqual([]);
     window.emit("closed");

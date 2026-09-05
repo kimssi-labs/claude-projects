@@ -889,6 +889,42 @@ test("a band restored at start-up wears the page's colour, and keeps it through 
 });
 
 /**
+ * Minimising the band and restoring it killed the process — every time, exit 0xC0000005, in v2.12.1
+ * and the build after it, and by the same WER signature since 2026-09-01. The dump: the process had
+ * jumped to address 4 from koffi's own call stack. Re-asserting the band while it was minimised
+ * un-minimised it from inside our own SetWindowPos, and the `restore` that fired inside that call
+ * re-applied the frame — a second native call nested in the first. Now nothing native runs inside a
+ * window event, and a minimised band is left alone until it comes back.
+ */
+test("a docked band survives being minimised and restored", async () => {
+  const { app, page } = await launch(fixture({ theme: "dark" }, { enabled: true, edge: "right", percent: 15 }));
+  try {
+    const primary = (await monitors(page)).find((d) => d.primary);
+    expect(primary, "a primary display").toBeTruthy();
+    const reserved = await settled(async () => (await workAreaOf(app, primary!.id)).width < primary!.bounds.width);
+    test.skip(!reserved, "this desktop cannot reserve space");
+    await page.waitForTimeout(1700);                          // past the settle window
+    const docked = await workAreaOf(app, primary!.id);
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes("index.html"))?.minimize());
+      await page.waitForTimeout(600);
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes("index.html"))?.restore());
+      await page.waitForTimeout(900);
+    }
+    expect(await app.evaluate(() => 1), "the app is still alive").toBe(1);
+    // Back on its edge, with the reservation as it was.
+    expect(await workAreaOf(app, primary!.id), "the reservation is unchanged").toEqual(docked);
+    const { painted, work } = await nativeFrames(app);
+    expect(painted.x, "the band is back on its edge").toBe(work.x + work.width);
+  } finally {
+    await page.evaluate(() => window.hangar.releaseDock()).catch(() => undefined);
+    await app.close();
+  }
+});
+
+/**
  * The one side of a band you may resize is a strip in the page, not the window frame. It has to be
  * there — a real strip with a size, since a 0 × 0 element cannot be grabbed — and dragging it has to
  * change the band. The strip lost its size once when its component moved to a folder the stylesheet

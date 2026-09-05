@@ -122,7 +122,12 @@ export class WindowChrome {
     private readonly handleOf: (window: BrowserWindow) => number = nativeHandle,
     private readonly platform: NodeJS.Platform = process.platform,
   ) {
-    const again = (): void => this.apply();
+    // On the next turn of the loop, never in the event itself. A window event arrives from inside a
+    // Windows message, and that message may have been sent by one of our own native calls — placing a
+    // minimised band restores it, which is `restore`. A second koffi call nested inside the first
+    // jumped to address 4 and took the process down (dump: rip = 4, on koffi's own stack). A fresh
+    // turn is outside every native call.
+    const again = (): void => { setImmediate(() => this.apply()); };
     // Through the plain emitter: BrowserWindow's per-event overloads take one literal, not a list.
     for (const event of RESETS_THE_FRAME) (window as NodeJS.EventEmitter).on(event, again);
     nativeTheme.on("updated", again);             // "system" follows the machine's own switch
