@@ -3,6 +3,23 @@
 Every release is built from the tag by CI, which uses the matching section below as the release
 notes. Add the section **before** tagging.
 
+## v2.12.2
+
+- **Minimising a band gives its edge back.** The space a docked band takes is released while the
+  window is minimised — that is the point of minimising — and taken again when the window comes back.
+  The band stays docked; nothing changes in the settings.
+- **Minimising a band no longer crashes the app.** Restoring a minimised band killed the process
+  every time, in every version since the band existed. The band was being put back on its edge while
+  minimised, which un-minimised it from inside that very call, and the code that then redrew the frame
+  ran inside the first native call — which is not allowed. Nothing native runs from inside a window
+  event any more, and a minimised band is left alone until it is restored.
+- **The band's border no longer flickers when you click elsewhere.** v2.12.1 painted the border
+  again after every focus change, one frame after Windows had repainted it grey — visible as a flash.
+  The colour is now handed to Electron as the window's accent colour, which it keeps through focus
+  changes and shows without any repainting of ours.
+- On a 125 % display the two rows a bottom band sits above are now decided from the display's scale
+  instead of read back from the window, which answered inconsistently.
+
 ## v2.12.1
 
 - **The band's border stays the page's colour when you click elsewhere.** v2.12.0 gave the border
