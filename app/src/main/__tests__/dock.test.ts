@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { bandOf, bandOfThickness, bandRect, bandThickness, gridStep, keepThickness, OPEN_FACE, resizeAllowed, snapToGrid, windowFor } from "../dock.js";
+import { bandOf, bandOfThickness, bandRect, bandThickness, gridStep, insetFor, keepThickness, OPEN_FACE, resizeAllowed, snapToGrid, windowFor } from "../dock.js";
 
 const AREA = { x: 0, y: 0, width: 2000, height: 1000 };
 
@@ -224,5 +224,16 @@ describe("the window that shows a band", () => {
   it("is the band itself where nothing shifts", () => {
     expect(windowFor(band, 0)).toBe(band);
     expect(bandOf(band, 0)).toBe(band);
+  });
+
+  it("lifts by the one DIP of frame room a fractional scale keeps, as whole rows — decided, not measured", () => {
+    // Measured: two rows at 125 %, none at 100 %. Reading it back from the window said one DIP or
+    // none for the same shifted window depending on when it was asked, and one band shipped with
+    // its top two rows showing what was behind it.
+    expect(insetFor(1)).toBe(0);
+    expect(insetFor(1.25)).toBe(2);
+    expect(insetFor(2)).toBe(0);
+    expect(insetFor(1.5)).toBe(2);
+    expect(insetFor(1.75)).toBe(2);
   });
 });
